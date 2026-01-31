@@ -1,0 +1,88 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cocoindex-code"
+version = "0.1.0"
+description = "MCP server for indexing and querying codebases using CocoIndex"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+keywords = ["mcp", "codebase", "indexing", "vector-search", "cocoindex"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    "mcp>=1.0.0",
+    "cocoindex>=1.0.0a1",
+    "sentence-transformers>=2.2.0",
+    "sqlite-vec>=0.1.0",
+    "pydantic>=2.0.0",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+cocoindex-code = "cocoindex_code:main"
+
+[project.urls]
+Homepage = "https://github.com/cocoindex-io/cocoindex-code"
+Repository = "https://github.com/cocoindex-io/cocoindex-code"
+Issues = "https://github.com/cocoindex-io/cocoindex-code/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cocoindex_code"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/README.md",
+    "/LICENSE",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+]
+
+[tool.uv]
+prerelease = "explicit"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
