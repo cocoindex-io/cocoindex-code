@@ -1,42 +1,13 @@
-"""End-to-end tests for indexing and querying."""
+"""Tests for cocoindex-code: config discovery and end-to-end indexing/querying."""
 
-import json
-import os
-import subprocess
-import sys
+import shutil
 from pathlib import Path
 
 import pytest
 
-# === Subprocess scripts ===
-
-INDEXER_SCRIPT = """
-import os
-os.environ["COCOINDEX_CODE_ROOT_PATH"] = os.environ["TEST_CODEBASE_PATH"]
-
+from cocoindex_code.config import _discover_codebase_root
 from cocoindex_code.indexer import app
-app.update(report_to_stdout=False)
-"""
-
-QUERY_SCRIPT_TEMPLATE = """
-import os
-import json
-os.environ["COCOINDEX_CODE_ROOT_PATH"] = os.environ["TEST_CODEBASE_PATH"]
-
 from cocoindex_code.query import query_codebase
-
-results = query_codebase(query={query!r}, limit={limit})
-
-output = [
-    {{
-        "file_path": r.file_path,
-        "content": r.content,
-        "score": r.score,
-    }}
-    for r in results
-]
-print(json.dumps(output))
-"""
 
 # === Sample codebase files ===
 
@@ -131,47 +102,25 @@ def create_login_session(user_id: int) -> str:
 # === Helper functions ===
 
 
-def run_index(codebase_path: Path) -> None:
-    """Run the indexer in a subprocess."""
-    result = subprocess.run(
-        [sys.executable, "-c", INDEXER_SCRIPT],
-        env={**os.environ, "TEST_CODEBASE_PATH": str(codebase_path)},
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Indexer failed: {result.stderr}")
+def clear_codebase(codebase: Path) -> None:
+    """Remove all files from the codebase (except .cocoindex_code)."""
+    for item in codebase.iterdir():
+        if item.name != ".cocoindex_code":
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
 
 
-def run_query(codebase_path: Path, query: str, limit: int = 5) -> list[dict]:
-    """Run a query in a subprocess and return results."""
-    script = QUERY_SCRIPT_TEMPLATE.format(query=query, limit=limit)
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        env={**os.environ, "TEST_CODEBASE_PATH": str(codebase_path)},
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Query failed: {result.stderr}")
+def setup_base_codebase(codebase: Path) -> None:
+    """Set up the base codebase files."""
+    clear_codebase(codebase)
+    (codebase / "main.py").write_text(SAMPLE_MAIN_PY)
+    (codebase / "utils.py").write_text(SAMPLE_UTILS_PY)
 
-    return json.loads(result.stdout.strip())
-
-
-# === Fixtures ===
-
-
-@pytest.fixture
-def isolated_codebase(tmp_path: Path) -> Path:
-    """Create an isolated codebase for testing."""
-    (tmp_path / "main.py").write_text(SAMPLE_MAIN_PY)
-    (tmp_path / "utils.py").write_text(SAMPLE_UTILS_PY)
-
-    lib_dir = tmp_path / "lib"
-    lib_dir.mkdir()
+    lib_dir = codebase / "lib"
+    lib_dir.mkdir(exist_ok=True)
     (lib_dir / "database.py").write_text(SAMPLE_DATABASE_PY)
-
-    return tmp_path
 
 
 # === Tests ===
@@ -180,76 +129,129 @@ def isolated_codebase(tmp_path: Path) -> Path:
 class TestEndToEnd:
     """End-to-end tests for the complete index-query workflow."""
 
-    def test_index_and_query_codebase(self, isolated_codebase: Path) -> None:
+    def test_index_and_query_codebase(self, test_codebase_root: Path) -> None:
         """Should index a codebase and return relevant query results."""
-        run_index(isolated_codebase)
+        setup_base_codebase(test_codebase_root)
+        app.update(report_to_stdout=False)
 
         # Verify index was created
-        index_dir = isolated_codebase / ".cocoindex_code"
+        index_dir = test_codebase_root / ".cocoindex_code"
         assert index_dir.exists()
         assert (index_dir / "target_sqlite.db").exists()
 
         # Query for Fibonacci
-        results = run_query(isolated_codebase, "fibonacci calculation")
+        results = query_codebase("fibonacci calculation")
         assert len(results) > 0
-        assert "main.py" in results[0]["file_path"]
-        assert "fibonacci" in results[0]["content"].lower()
+        assert "main.py" in results[0].file_path
+        assert "fibonacci" in results[0].content.lower()
 
         # Query for database connection
-        results = run_query(isolated_codebase, "database connection")
+        results = query_codebase("database connection")
         assert len(results) > 0
-        assert "database.py" in results[0]["file_path"]
+        assert "database.py" in results[0].file_path
 
-    def test_incremental_update_add_file(self, isolated_codebase: Path) -> None:
+    def test_incremental_update_add_file(self, test_codebase_root: Path) -> None:
         """Should reflect newly added files after re-indexing."""
-        run_index(isolated_codebase)
+        setup_base_codebase(test_codebase_root)
+        app.update(report_to_stdout=False)
 
         # Query for ML content - should not find it
-        results = run_query(isolated_codebase, "machine learning neural network")
+        results = query_codebase("machine learning neural network")
         has_ml = any(
-            "neural" in r["content"].lower() or "machine learning" in r["content"].lower()
+            "neural" in r.content.lower() or "machine learning" in r.content.lower()
             for r in results
         )
-        assert not has_ml or results[0]["score"] < 0.5
+        assert not has_ml or results[0].score < 0.5
 
         # Add a new ML file
-        (isolated_codebase / "ml_model.py").write_text(SAMPLE_ML_MODEL_PY)
+        (test_codebase_root / "ml_model.py").write_text(SAMPLE_ML_MODEL_PY)
 
         # Re-index and query again
-        run_index(isolated_codebase)
-        results = run_query(isolated_codebase, "neural network machine learning")
+        app.update(report_to_stdout=False)
+        results = query_codebase("neural network machine learning")
 
         assert len(results) > 0
-        assert "ml_model.py" in results[0]["file_path"]
+        assert "ml_model.py" in results[0].file_path
 
-    def test_incremental_update_modify_file(self, isolated_codebase: Path) -> None:
+    def test_incremental_update_modify_file(self, test_codebase_root: Path) -> None:
         """Should reflect file modifications after re-indexing."""
-        run_index(isolated_codebase)
+        setup_base_codebase(test_codebase_root)
+        app.update(report_to_stdout=False)
 
         # Modify utils.py to add authentication
-        (isolated_codebase / "utils.py").write_text(SAMPLE_UTILS_AUTH_PY)
+        (test_codebase_root / "utils.py").write_text(SAMPLE_UTILS_AUTH_PY)
 
         # Re-index and query for authentication
-        run_index(isolated_codebase)
-        results = run_query(isolated_codebase, "user authentication login")
+        app.update(report_to_stdout=False)
+        results = query_codebase("user authentication login")
 
         assert len(results) > 0
-        assert "utils.py" in results[0]["file_path"]
-        content_lower = results[0]["content"].lower()
+        assert "utils.py" in results[0].file_path
+        content_lower = results[0].content.lower()
         assert "authenticate" in content_lower or "login" in content_lower
 
-    def test_incremental_update_delete_file(self, isolated_codebase: Path) -> None:
+    def test_incremental_update_delete_file(self, test_codebase_root: Path) -> None:
         """Should no longer return results from deleted files after re-indexing."""
-        run_index(isolated_codebase)
+        setup_base_codebase(test_codebase_root)
+        app.update(report_to_stdout=False)
 
         # Query for database - should find it
-        results = run_query(isolated_codebase, "database connection execute query")
-        assert any("database.py" in r["file_path"] for r in results)
+        results = query_codebase("database connection execute query")
+        assert any("database.py" in r.file_path for r in results)
 
         # Delete the database file
-        (isolated_codebase / "lib" / "database.py").unlink()
+        (test_codebase_root / "lib" / "database.py").unlink()
 
         # Re-index and query again - should no longer find database.py
-        run_index(isolated_codebase)
-        results = run_query(isolated_codebase, "database connection execute query")
-        assert not any("database.py" in r["file_path"] for r in results)
+        app.update(report_to_stdout=False)
+        results = query_codebase("database connection execute query")
+        assert not any("database.py" in r.file_path for r in results)
+
+
+class TestCodebaseRootDiscovery:
+    """Tests for codebase root discovery logic - stateless, no global config needed."""
+
+    def test_prefers_cocoindex_code_over_git(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Should prefer .cocoindex_code directory over .git when both exist."""
+        # Create both markers in parent
+        parent = tmp_path / "project"
+        parent.mkdir()
+        (parent / ".cocoindex_code").mkdir()
+        (parent / ".git").mkdir()
+
+        # Run from a subdirectory
+        subdir = parent / "src" / "lib"
+        subdir.mkdir(parents=True)
+
+        monkeypatch.chdir(subdir)
+        result = _discover_codebase_root()
+        assert result == parent
+
+    def test_finds_git_in_parent_hierarchy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Should find .git in parent when deeply nested."""
+        # Create .git at root level
+        (tmp_path / ".git").mkdir()
+
+        # Create deep nesting
+        deep_dir = tmp_path / "a" / "b" / "c" / "d" / "e"
+        deep_dir.mkdir(parents=True)
+
+        monkeypatch.chdir(deep_dir)
+        result = _discover_codebase_root()
+        assert result == tmp_path
+
+    def test_falls_back_to_cwd_when_no_markers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Should fall back to cwd when no .git or .cocoindex_code found."""
+        # Create empty directory with no markers
+        empty_dir = tmp_path / "standalone"
+        empty_dir.mkdir()
+
+        monkeypatch.chdir(empty_dir)
+        result = _discover_codebase_root()
+        assert result == empty_dir
