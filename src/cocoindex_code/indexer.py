@@ -1,14 +1,12 @@
 """CocoIndex app for indexing codebases."""
 
-from collections.abc import Iterator
-
 import cocoindex as coco
 from cocoindex.connectors import localfs, sqlite
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
 from cocoindex.resources.file import PatternFilePathMatcher
 from cocoindex.resources.id import IdGenerator
 
-from .shared import CodeChunk, config, embedder
+from .shared import SQLITE_DB, CodeChunk, config, embedder
 
 # File patterns for supported languages
 INCLUDED_PATTERNS = [
@@ -53,29 +51,8 @@ CHUNK_SIZE = 1000
 MIN_CHUNK_SIZE = 300
 CHUNK_OVERLAP = 200
 
-# Context key for SQLite database (connection managed in lifespan)
-SQLITE_DB = coco.ContextKey[sqlite.SqliteDatabase]("sqlite_db")
-
 # Chunking splitter (stateless, can be module-level)
 splitter = RecursiveSplitter()
-
-
-@coco.lifespan
-def coco_lifespan(builder: coco.EnvironmentBuilder) -> Iterator[None]:
-    """Set up database connection."""
-    # Ensure index directory exists
-    config.index_dir.mkdir(parents=True, exist_ok=True)
-
-    # Set CocoIndex state database path
-    builder.settings.db_path = config.cocoindex_db_path
-
-    # Connect to SQLite with vector extension
-    conn = sqlite.connect(str(config.target_sqlite_db_path), load_vec="auto")
-    builder.provide(SQLITE_DB, sqlite.register_db("index_db", conn))
-
-    yield
-
-    conn.close()
 
 
 @coco.function(memo=True)
