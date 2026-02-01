@@ -23,11 +23,9 @@ import os
 import json
 os.environ["COCOINDEX_CODE_ROOT_PATH"] = os.environ["TEST_CODEBASE_PATH"]
 
-from cocoindex_code.query import CodebaseQuerier, QueryParams
+from cocoindex_code.query import query_codebase
 
-querier = CodebaseQuerier()
-results = querier.query(QueryParams(query={query!r}, limit={limit}))
-querier.close()
+results = query_codebase(query={query!r}, limit={limit})
 
 output = [
     {{

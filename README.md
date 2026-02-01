@@ -29,7 +29,7 @@ Add to your Claude Code MCP configuration (`.claude/mcp_config.json`):
 ```json
 {
   "mcpServers": {
-    "codebase": {
+    "cocoindex-code": {
       "command": "cocoindex-code",
       "env": {
         "COCOINDEX_CODE_ROOT_PATH": "/path/to/your/codebase"
@@ -44,7 +44,7 @@ Or without explicit path (auto-discovers from current directory):
 ```json
 {
   "mcpServers": {
-    "codebase": {
+    "cocoindex-code": {
       "command": "cocoindex-code"
     }
   }
@@ -70,27 +70,26 @@ If `COCOINDEX_CODE_ROOT_PATH` is not set, the codebase root is discovered by:
 
 ## MCP Tools
 
-### `update_index`
-
-Updates the codebase index to reflect the latest content. Run this before querying if you've made changes.
-
-```
-update_index()
-```
-
 ### `query`
 
 Search the codebase using semantic similarity.
 
 ```
 query(
-    query: str,        # Natural language query or code snippet
-    limit: int = 10,   # Maximum results (1-100)
-    offset: int = 0    # Pagination offset
+    query: str,               # Natural language query or code snippet
+    limit: int = 10,          # Maximum results (1-100)
+    offset: int = 0,          # Pagination offset
+    refresh_index: bool = True  # Refresh index before querying
 )
 ```
 
+The `refresh_index` parameter controls whether the index is refreshed before searching:
+
+- `True` (default): Refreshes the index to include any recent changes
+- `False`: Skip refresh for faster consecutive queries
+
 Returns matching code chunks with:
+
 - File path
 - Language
 - Code content
@@ -104,8 +103,8 @@ The index is stored in `.cocoindex_code/` under your codebase root:
 ```
 your-project/
 ├── .cocoindex_code/
-│   ├── index.db        # Vector index (SQLite + sqlite-vec)
-│   └── cocoindex.db    # CocoIndex state
+│   ├── target_sqlite.db  # Vector index (SQLite + sqlite-vec)
+│   └── cocoindex.db/     # CocoIndex state
 ├── src/
 │   └── ...
 ```
@@ -121,6 +120,7 @@ Add `.cocoindex_code/` to your `.gitignore`.
 - **Go**: `.go`
 
 Common generated directories are automatically excluded:
+
 - `__pycache__/`
 - `node_modules/`
 - `target/`
@@ -130,16 +130,39 @@ Common generated directories are automatically excluded:
 
 ## Development
 
-```bash
-# Clone the repository
-git clone https://github.com/cocoindex-io/cocoindex-code.git
-cd cocoindex-code
+### Local Testing with Claude Code
 
-# Install in development mode
-pip install -e ".[dev]"
+To test locally without installing the package, use the Claude Code CLI:
+
+```bash
+claude mcp add cocoindex-code \
+  -- uv run --project /path/to/cocoindex-code cocoindex-code
+```
+
+Or add to `.mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "cocoindex-code": {
+      "command": "uv",
+      "args": ["run", "--project", "/path/to/cocoindex-code", "cocoindex-code"]
+    }
+  }
+}
+```
+
+### Running Tests
+
+```bash
+# Install dev dependencies
+uv sync --group dev
 
 # Run tests
-pytest
+uv run pytest tests/ -v
+
+# Run pre-commit hooks
+uv run pre-commit run --all-files
 ```
 
 ## License

@@ -1,36 +1,45 @@
 """MCP server for codebase indexing and querying."""
 
+import threading
+
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from .indexer import app as indexer_app
-from .query import CodebaseQuerier, QueryParams
-from .shared import config
+from .query import query_codebase
 
 # Initialize MCP server
-mcp = FastMCP("cocoindex-code")
+mcp = FastMCP(
+    "cocoindex-code",
+    instructions="""
+This server provides semantic code search for the codebase.
 
-# Lazy-initialized querier (created on first query)
-_querier: CodebaseQuerier | None = None
+Use the `query` tool when you need to:
+- Find code related to a concept or functionality
+- Search for implementations of specific features
+- Discover how something is done in the codebase
+- Find similar code patterns
+
+The `query` tool has a `refresh_index` parameter (default: True) that refreshes
+the index before searching. Set it to False for consecutive queries to avoid
+redundant refreshes.
+
+The search uses vector embeddings for semantic similarity, so you can describe
+what you're looking for in natural language rather than exact text matches.
+""".strip(),
+)
+
+# Lock to prevent concurrent index updates
+_index_lock = threading.Lock()
 
 
-def _get_querier() -> CodebaseQuerier:
-    """Get or create the querier instance."""
-    global _querier
-    if _querier is None:
-        _querier = CodebaseQuerier()
-    return _querier
+def _refresh_index() -> None:
+    """Refresh the index. Uses lock to prevent concurrent updates."""
+    with _index_lock:
+        indexer_app.update(report_to_stdout=False)
 
 
 # === Pydantic Models for Tool Inputs/Outputs ===
-
-
-class UpdateIndexResult(BaseModel):
-    """Result from update_index tool."""
-
-    success: bool
-    message: str
-    codebase_root: str
 
 
 class CodeChunkResult(BaseModel):
@@ -58,49 +67,12 @@ class QueryResultModel(BaseModel):
 
 
 @mcp.tool(
-    name="update_index",
-    description=(
-        "Update the codebase index to reflect the latest content. "
-        "This will scan the codebase directory and update the vector index "
-        "with any new or modified files. Unchanged files are skipped for efficiency. "
-        "Run this before querying if you've made changes to the codebase."
-    ),
-)
-def update_index() -> UpdateIndexResult:
-    """Update the codebase index."""
-    global _querier
-
-    try:
-        # Close existing querier to release database lock
-        if _querier is not None:
-            _querier.close()
-            _querier = None
-
-        # Run the indexer app update
-        indexer_app.update(report_to_stdout=False)
-
-        return UpdateIndexResult(
-            success=True,
-            message="Index updated successfully",
-            codebase_root=str(config.codebase_root_path),
-        )
-    except Exception as e:
-        return UpdateIndexResult(
-            success=False,
-            message=f"Failed to update index: {e!s}",
-            codebase_root=str(config.codebase_root_path),
-        )
-
-
-@mcp.tool(
     name="query",
     description=(
         "Search the codebase using semantic similarity. "
         "Returns relevant code chunks with file locations and similarity scores. "
-        "Use natural language queries or code snippets to find related code. "
-        "Supports pagination via limit and offset parameters."
+        "Use natural language queries or code snippets to find related code."
     ),
-    annotations={"readOnlyHint": True},  # type: ignore[arg-type]
 )
 def query(
     query: str = Field(description="Natural language query or code snippet to search for"),
@@ -115,18 +87,21 @@ def query(
         ge=0,
         description="Number of results to skip for pagination",
     ),
+    refresh_index: bool = Field(
+        default=True,
+        description=(
+            "Whether to refresh the index before querying. "
+            "Set to False for consecutive queries to skip redundant refreshes."
+        ),
+    ),
 ) -> QueryResultModel:
     """Query the codebase index."""
     try:
-        querier = _get_querier()
+        # Refresh index if requested
+        if refresh_index:
+            _refresh_index()
 
-        results = querier.query(
-            QueryParams(
-                query=query,
-                limit=limit,
-                offset=offset,
-            )
-        )
+        results = query_codebase(query=query, limit=limit, offset=offset)
 
         return QueryResultModel(
             success=True,
@@ -159,6 +134,8 @@ def query(
 
 def main() -> None:
     """Entry point for the MCP server."""
+    # Refresh index in background so startup isn't blocked
+    threading.Thread(target=_refresh_index, daemon=True).start()
     mcp.run(transport="stdio")
 
 
