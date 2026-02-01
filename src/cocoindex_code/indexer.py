@@ -1,8 +1,11 @@
 """CocoIndex app for indexing codebases."""
 
+import asyncio
+
 import cocoindex as coco
 from cocoindex.connectors import localfs, sqlite
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
+from cocoindex.resources.chunk import Chunk
 from cocoindex.resources.file import PatternFilePathMatcher
 from cocoindex.resources.id import IdGenerator
 
@@ -56,7 +59,26 @@ splitter = RecursiveSplitter()
 
 
 @coco.function(memo=True)
-def process_file(
+async def process_chunk(
+    id: int, file_path: str, chunk: Chunk, language: str, table: sqlite.TableTarget
+) -> None:
+    """Process a single chunk: embed and store."""
+    chunk_embedding = await embedder.embed_async(chunk.text)
+    table.declare_row(
+        row=CodeChunk(  # type: ignore[arg-type]
+            id=id,
+            file_path=file_path,
+            language=language,
+            content=chunk.text,
+            start_line=chunk.start.line,
+            end_line=chunk.end.line,
+            embedding=chunk_embedding,
+        )
+    )
+
+
+@coco.function(memo=True)
+async def process_file(
     file: localfs.File,
     table: sqlite.TableTarget,
 ) -> None:
@@ -72,7 +94,6 @@ def process_file(
         return
 
     # Get relative path and detect language
-    rel_path = str(file.file_path.path)
     language = detect_code_language(filename=file.file_path.path.name) or "text"
 
     # Split into chunks
@@ -84,24 +105,15 @@ def process_file(
         language=language,
     )
 
-    # Generate IDs and embeddings for each chunk
     id_gen = IdGenerator()
-    for chunk in chunks:
-        chunk_id = id_gen.next_id(chunk.text)
-        chunk_embedding = embedder.embed(chunk.text)
-
-        # Declare row in the table
-        table.declare_row(
-            row=CodeChunk(  # type: ignore[arg-type]
-                id=chunk_id,
-                file_path=rel_path,
-                language=language,
-                content=chunk.text,
-                start_line=chunk.start.line,
-                end_line=chunk.end.line,
-                embedding=chunk_embedding,
+    await asyncio.gather(
+        *(
+            process_chunk(
+                id_gen.next_id(chunk.text), str(file.file_path.path), chunk, language, table
             )
+            for chunk in chunks
         )
+    )
 
 
 @coco.function

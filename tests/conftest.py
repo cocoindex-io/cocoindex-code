@@ -16,6 +16,10 @@ import pytest
 # Create test directory and set it BEFORE any module imports
 _TEST_DIR = Path(tempfile.mkdtemp(prefix="cocoindex_test_"))
 os.environ["COCOINDEX_CODE_ROOT_PATH"] = str(_TEST_DIR)
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
+# Set PyTorch to single thread to avoid potential failure on testing environment
+# torch.set_num_threads(1)
 
 
 @pytest.fixture(scope="session")
