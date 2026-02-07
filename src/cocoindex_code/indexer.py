@@ -3,6 +3,7 @@
 import asyncio
 
 import cocoindex as coco
+import cocoindex.asyncio as coco_aio
 from cocoindex.connectors import localfs, sqlite
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
 from cocoindex.resources.chunk import Chunk
@@ -58,12 +59,19 @@ CHUNK_OVERLAP = 200
 splitter = RecursiveSplitter()
 
 
-@coco.function(memo=True)
+@coco_aio.function
 async def process_chunk(
-    id: int, file_path: str, chunk: Chunk, language: str, table: sqlite.TableTarget
+    file_path: str,
+    chunk: Chunk,
+    language: str,
+    id_gen: IdGenerator,
+    table: sqlite.TableTarget,
 ) -> None:
     """Process a single chunk: embed and store."""
-    chunk_embedding = await embedder.embed_async(chunk.text)
+    id, chunk_embedding = await asyncio.gather(
+        id_gen.next_id(chunk.text),
+        embedder.embed(chunk.text),
+    )
     table.declare_row(
         row=CodeChunk(  # type: ignore[arg-type]
             id=id,
@@ -77,7 +85,7 @@ async def process_chunk(
     )
 
 
-@coco.function(memo=True)
+@coco_aio.function(memo=True)
 async def process_file(
     file: localfs.File,
     table: sqlite.TableTarget,
@@ -108,25 +116,23 @@ async def process_file(
     id_gen = IdGenerator()
     await asyncio.gather(
         *(
-            process_chunk(
-                id_gen.next_id(chunk.text), str(file.file_path.path), chunk, language, table
-            )
+            process_chunk(str(file.file_path.path), chunk, language, id_gen, table)
             for chunk in chunks
         )
     )
 
 
-@coco.function
-def app_main() -> None:
+@coco_aio.function
+async def app_main() -> None:
     """Main indexing function - walks files and processes each."""
-    db = coco.use_context(SQLITE_DB)
+    db = coco_aio.use_context(SQLITE_DB)
 
     # Declare the table target for storing embeddings
-    table = coco.mount_run(
-        coco.component_subpath("setup", "table"),
+    table = await coco_aio.mount_run(
+        coco_aio.component_subpath("setup", "table"),
         db.declare_table_target,
         table_name="code_chunks",
-        table_schema=sqlite.TableSchema(
+        table_schema=await sqlite.TableSchema.from_class(
             CodeChunk,
             primary_key=["id"],
         ),
@@ -144,8 +150,8 @@ def app_main() -> None:
 
     # Process each file
     for f in files:
-        coco.mount(
-            coco.component_subpath("process", str(f.file_path.path)),
+        coco_aio.mount(
+            coco_aio.component_subpath("process", str(f.file_path.path)),
             process_file,
             f,
             table,
@@ -153,7 +159,7 @@ def app_main() -> None:
 
 
 # Create the app
-app = coco.App(
-    coco.AppConfig(name="CocoIndexCode"),
+app = coco_aio.App(
+    coco_aio.AppConfig(name="CocoIndexCode"),
     app_main,
 )

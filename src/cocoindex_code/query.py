@@ -6,7 +6,7 @@ from .schema import QueryResult
 from .shared import SQLITE_DB, config, embedder
 
 
-def query_codebase(
+async def query_codebase(
     query: str,
     limit: int = 10,
     offset: int = 0,
@@ -26,7 +26,7 @@ def query_codebase(
     db = coco.default_env().get_context(SQLITE_DB)
 
     # Generate query embedding
-    query_embedding = embedder.embed(query)
+    query_embedding = await embedder.embed(query)
 
     # Convert to bytes for sqlite-vec (float32)
     embedding_bytes = query_embedding.astype("float32").tobytes()

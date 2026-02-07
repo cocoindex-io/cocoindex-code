@@ -23,7 +23,7 @@ classifiers = [
 
 dependencies = [
     "mcp>=1.0.0",
-    "cocoindex>=1.0.0a1",
+    "cocoindex==1.0.0a10",
     "sentence-transformers>=2.2.0",
     "sqlite-vec>=0.1.0",
     "pydantic>=2.0.0",
@@ -51,11 +51,7 @@ Issues = "https://github.com/cocoindex-io/cocoindex-code/issues"
 packages = ["src/cocoindex_code"]
 
 [tool.hatch.build.targets.sdist]
-include = [
-    "/src",
-    "/README.md",
-    "/LICENSE",
-]
+include = ["/src", "/README.md", "/LICENSE"]
 
 [dependency-groups]
 dev = [

@@ -2,12 +2,23 @@
 
 import shutil
 from pathlib import Path
+from typing import  Iterator
 
+import cocoindex as coco
 import pytest
 
 from cocoindex_code.config import _discover_codebase_root
 from cocoindex_code.indexer import app
 from cocoindex_code.query import query_codebase
+
+pytest_plugins = ("pytest_asyncio",)
+
+
+@pytest.fixture(scope="module")
+def coco_runtime() -> Iterator[None]:
+    """Set up CocoIndex runtime context shared across all tests in this module."""
+    with coco.runtime():
+        yield
 
 # === Sample codebase files ===
 
@@ -129,10 +140,13 @@ def setup_base_codebase(codebase: Path) -> None:
 class TestEndToEnd:
     """End-to-end tests for the complete index-query workflow."""
 
-    def test_index_and_query_codebase(self, test_codebase_root: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_index_and_query_codebase(
+        self, test_codebase_root: Path, coco_runtime: None
+    ) -> None:
         """Should index a codebase and return relevant query results."""
         setup_base_codebase(test_codebase_root)
-        app.update(report_to_stdout=False)
+        await app.update(report_to_stdout=False)
 
         # Verify index was created
         index_dir = test_codebase_root / ".cocoindex_code"
@@ -140,23 +154,26 @@ class TestEndToEnd:
         assert (index_dir / "target_sqlite.db").exists()
 
         # Query for Fibonacci
-        results = query_codebase("fibonacci calculation")
+        results = await query_codebase("fibonacci calculation")
         assert len(results) > 0
         assert "main.py" in results[0].file_path
         assert "fibonacci" in results[0].content.lower()
 
         # Query for database connection
-        results = query_codebase("database connection")
+        results = await query_codebase("database connection")
         assert len(results) > 0
         assert "database.py" in results[0].file_path
 
-    def test_incremental_update_add_file(self, test_codebase_root: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_incremental_update_add_file(
+        self, test_codebase_root: Path, coco_runtime: None
+    ) -> None:
         """Should reflect newly added files after re-indexing."""
         setup_base_codebase(test_codebase_root)
-        app.update(report_to_stdout=False)
+        await app.update(report_to_stdout=False)
 
         # Query for ML content - should not find it
-        results = query_codebase("machine learning neural network")
+        results = await query_codebase("machine learning neural network")
         has_ml = any(
             "neural" in r.content.lower() or "machine learning" in r.content.lower()
             for r in results
@@ -167,44 +184,50 @@ class TestEndToEnd:
         (test_codebase_root / "ml_model.py").write_text(SAMPLE_ML_MODEL_PY)
 
         # Re-index and query again
-        app.update(report_to_stdout=False)
-        results = query_codebase("neural network machine learning")
+        await app.update(report_to_stdout=False)
+        results = await query_codebase("neural network machine learning")
 
         assert len(results) > 0
         assert "ml_model.py" in results[0].file_path
 
-    def test_incremental_update_modify_file(self, test_codebase_root: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_incremental_update_modify_file(
+        self, test_codebase_root: Path, coco_runtime: None
+    ) -> None:
         """Should reflect file modifications after re-indexing."""
         setup_base_codebase(test_codebase_root)
-        app.update(report_to_stdout=False)
+        await app.update(report_to_stdout=False)
 
         # Modify utils.py to add authentication
         (test_codebase_root / "utils.py").write_text(SAMPLE_UTILS_AUTH_PY)
 
         # Re-index and query for authentication
-        app.update(report_to_stdout=False)
-        results = query_codebase("user authentication login")
+        await app.update(report_to_stdout=False)
+        results = await query_codebase("user authentication login")
 
         assert len(results) > 0
         assert "utils.py" in results[0].file_path
         content_lower = results[0].content.lower()
         assert "authenticate" in content_lower or "login" in content_lower
 
-    def test_incremental_update_delete_file(self, test_codebase_root: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_incremental_update_delete_file(
+        self, test_codebase_root: Path, coco_runtime: None
+    ) -> None:
         """Should no longer return results from deleted files after re-indexing."""
         setup_base_codebase(test_codebase_root)
-        app.update(report_to_stdout=False)
+        await app.update(report_to_stdout=False)
 
         # Query for database - should find it
-        results = query_codebase("database connection execute query")
+        results = await query_codebase("database connection execute query")
         assert any("database.py" in r.file_path for r in results)
 
         # Delete the database file
         (test_codebase_root / "lib" / "database.py").unlink()
 
         # Re-index and query again - should no longer find database.py
-        app.update(report_to_stdout=False)
-        results = query_codebase("database connection execute query")
+        await app.update(report_to_stdout=False)
+        results = await query_codebase("database connection execute query")
         assert not any("database.py" in r.file_path for r in results)
 
 

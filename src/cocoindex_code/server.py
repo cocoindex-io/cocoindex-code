@@ -1,6 +1,6 @@
 """MCP server for codebase indexing and querying."""
 
-import threading
+import asyncio
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -13,6 +13,7 @@ mcp = FastMCP(
     "cocoindex-code",
     instructions="""
 This server provides semantic code search for the codebase.
+This allows you to quickly and cheaply search for code related to a concept or functionality across the entire codebase.
 
 Use the `query` tool when you need to:
 - Find code related to a concept or functionality
@@ -30,13 +31,13 @@ what you're looking for in natural language rather than exact text matches.
 )
 
 # Lock to prevent concurrent index updates
-_index_lock = threading.Lock()
+_index_lock = asyncio.Lock()
 
 
-def _refresh_index() -> None:
+async def _refresh_index() -> None:
     """Refresh the index. Uses lock to prevent concurrent updates."""
-    with _index_lock:
-        indexer_app.update(report_to_stdout=False)
+    async with _index_lock:
+        await indexer_app.update(report_to_stdout=False)
 
 
 # === Pydantic Models for Tool Inputs/Outputs ===
@@ -74,7 +75,7 @@ class QueryResultModel(BaseModel):
         "Use natural language queries or code snippets to find related code."
     ),
 )
-def query(
+async def query(
     query: str = Field(description="Natural language query or code snippet to search for"),
     limit: int = Field(
         default=10,
@@ -99,9 +100,9 @@ def query(
     try:
         # Refresh index if requested
         if refresh_index:
-            _refresh_index()
+            await _refresh_index()
 
-        results = query_codebase(query=query, limit=limit, offset=offset)
+        results = await query_codebase(query=query, limit=limit, offset=offset)
 
         return QueryResultModel(
             success=True,
@@ -132,12 +133,12 @@ def query(
         )
 
 
-def main() -> None:
+async def main() -> None:
     """Entry point for the MCP server."""
     # Refresh index in background so startup isn't blocked
-    threading.Thread(target=_refresh_index, daemon=True).start()
-    mcp.run(transport="stdio")
+    asyncio.create_task(_refresh_index())
+    await mcp.run_stdio_async()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
