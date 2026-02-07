@@ -133,12 +133,17 @@ async def query(
         )
 
 
-async def main() -> None:
-    """Entry point for the MCP server."""
+async def _async_main() -> None:
+    """Async entry point for the MCP server."""
     # Refresh index in background so startup isn't blocked
     asyncio.create_task(_refresh_index())
     await mcp.run_stdio_async()
 
 
+def main() -> None:
+    """Entry point for the MCP server."""
+    asyncio.run(_async_main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
