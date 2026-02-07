@@ -2,9 +2,7 @@
 
 import shutil
 from pathlib import Path
-from typing import  Iterator
 
-import cocoindex as coco
 import pytest
 
 from cocoindex_code.config import _discover_codebase_root
@@ -12,13 +10,6 @@ from cocoindex_code.indexer import app
 from cocoindex_code.query import query_codebase
 
 pytest_plugins = ("pytest_asyncio",)
-
-
-@pytest.fixture(scope="module")
-def coco_runtime() -> Iterator[None]:
-    """Set up CocoIndex runtime context shared across all tests in this module."""
-    with coco.runtime():
-        yield
 
 # === Sample codebase files ===
 
@@ -140,7 +131,7 @@ def setup_base_codebase(codebase: Path) -> None:
 class TestEndToEnd:
     """End-to-end tests for the complete index-query workflow."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_index_and_query_codebase(
         self, test_codebase_root: Path, coco_runtime: None
     ) -> None:
@@ -164,7 +155,7 @@ class TestEndToEnd:
         assert len(results) > 0
         assert "database.py" in results[0].file_path
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_incremental_update_add_file(
         self, test_codebase_root: Path, coco_runtime: None
     ) -> None:
@@ -190,7 +181,7 @@ class TestEndToEnd:
         assert len(results) > 0
         assert "ml_model.py" in results[0].file_path
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_incremental_update_modify_file(
         self, test_codebase_root: Path, coco_runtime: None
     ) -> None:
@@ -210,7 +201,7 @@ class TestEndToEnd:
         content_lower = results[0].content.lower()
         assert "authenticate" in content_lower or "login" in content_lower
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_incremental_update_delete_file(
         self, test_codebase_root: Path, coco_runtime: None
     ) -> None:
