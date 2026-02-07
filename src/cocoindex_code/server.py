@@ -13,7 +13,8 @@ mcp = FastMCP(
     "cocoindex-code",
     instructions="""
 This server provides semantic code search for the codebase.
-This allows you to quickly and cheaply search for code related to a concept or functionality across the entire codebase.
+This allows you to quickly and cheaply search for code related to a concept or functionality
+across the entire codebase.
 
 Use the `query` tool when you need to:
 - Find code related to a concept or functionality

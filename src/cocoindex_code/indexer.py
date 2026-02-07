@@ -2,7 +2,6 @@
 
 import asyncio
 
-import cocoindex as coco
 import cocoindex.asyncio as coco_aio
 from cocoindex.connectors import localfs, sqlite
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
