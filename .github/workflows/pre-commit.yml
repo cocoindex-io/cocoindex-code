@@ -14,6 +14,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ['3.11', '3.14t']
+        exclude:
+          # pywin32 doesn't have wheels for Python 3.14t (free-threaded) on Windows yet
+          - os: windows-latest
+            python-version: '3.14t'
     steps:
       - uses: actions/checkout@v4
 
