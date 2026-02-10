@@ -22,6 +22,14 @@ Uses a local SentenceTransformers model (`sentence-transformers/all-MiniLM-L6-v2
 claude mcp add cocoindex-code -- uvx cocoindex-code
 ```
 
+### Ollama (Local)
+
+```bash
+claude mcp add cocoindex-code \
+  -e COCOINDEX_CODE_EMBEDDING_MODEL=ollama/nomic-embed-text \
+  -- uvx cocoindex-code
+```
+
 ### OpenAI
 
 ```bash
@@ -89,14 +97,6 @@ claude mcp add cocoindex-code \
   -- uvx cocoindex-code
 ```
 
-### Ollama (Local)
-
-```bash
-claude mcp add cocoindex-code \
-  -e COCOINDEX_CODE_EMBEDDING_MODEL=ollama/nomic-embed-text \
-  -- uvx cocoindex-code
-```
-
 Set `OLLAMA_API_BASE` if your Ollama server is not at `http://localhost:11434`.
 
 ### Nebius
@@ -111,6 +111,23 @@ claude mcp add cocoindex-code \
 ### Other Providers
 
 Any model supported by LiteLLM works — see the [full list of embedding providers](https://docs.litellm.ai/docs/embedding/supported_embedding).
+
+### Setup `.gitignore`
+
+Add the index directory to your `.gitignore` so it isn't committed:
+
+```bash
+echo .cocoindex_code >> .gitignore
+```
+
+### Uninstall
+
+Remove the MCP server and delete the local index:
+
+```bash
+claude mcp remove cocoindex-code
+rm -rf .cocoindex_code
+```
 
 ## Configuration
 
