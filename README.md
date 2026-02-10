@@ -6,7 +6,7 @@ An MCP (Model Context Protocol) server for indexing and querying codebases using
 
 - **Semantic Code Search**: Find relevant code using natural language queries
 - **Incremental Indexing**: Only re-indexes changed files for fast updates
-- **Multi-Language Support**: Python, JavaScript/TypeScript, Rust, Go
+- **Multi-Language Support**: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++, C#, SQL, Shell
 - **Flexible Embeddings**: Local SentenceTransformers (default) or 100+ cloud providers via [LiteLLM](https://docs.litellm.ai/docs/embedding/supported_embedding)
 - **SQLite Storage**: Portable, no external database required
 
@@ -230,6 +230,14 @@ Add `.cocoindex_code/` to your `.gitignore`.
 - **TypeScript**: `.ts`, `.tsx`
 - **Rust**: `.rs`
 - **Go**: `.go`
+- **Java**: `.java`
+- **C**: `.c`, `.h`
+- **C++**: `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx`, `.hh`
+- **C#**: `.cs`
+- **SQL**: `.sql`
+- **Shell**: `.sh`, `.bash`, `.zsh`
+- **Markdown**: `.md`, `.mdx`
+- **Plain Text**: `.txt`, `.rst`
 
 Common generated directories are automatically excluded:
 
@@ -237,8 +245,7 @@ Common generated directories are automatically excluded:
 - `node_modules/`
 - `target/`
 - `dist/`
-- `build/`
-- `.git/`
+- `vendor/` (Go vendored dependencies, matched by domain-based child paths)
 
 ## Development
 

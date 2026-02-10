@@ -23,30 +23,34 @@ INCLUDED_PATTERNS = [
     "*.cjs",  # JavaScript CommonJS
     "*.rs",  # Rust
     "*.go",  # Go
+    "*.java",  # Java
+    "*.c",  # C
+    "*.h",  # C/C++ headers
+    "*.cpp",  # C++
+    "*.hpp",  # C++ headers
+    "*.cc",  # C++
+    "*.cxx",  # C++
+    "*.hxx",  # C++ headers
+    "*.hh",  # C++ headers
+    "*.cs",  # C#
+    "*.sql",  # SQL
+    "*.sh",  # Shell
+    "*.bash",  # Bash
+    "*.zsh",  # Zsh
+    "*.md",  # Markdown
+    "*.mdx",  # MDX
+    "*.txt",  # Plain text
+    "*.rst",  # reStructuredText
 ]
 
 EXCLUDED_PATTERNS = [
-    ".*/**",  # Hidden directories
-    "**/__pycache__/**",  # Python cache
-    "**/node_modules/**",  # Node.js dependencies
-    "**/target/**",  # Rust/Maven build output
-    "**/dist/**",  # Distribution directories
-    "**/build/**",  # Build directories
-    "**/vendor/**",  # Go vendor directory
-    "**/.git/**",  # Git directory
-    "**/.cocoindex_code/**",  # Our own index directory
-    "*.min.js",  # Minified JavaScript
-    "*.min.css",  # Minified CSS
-    "*.lock",  # Lock files
-    "**/package-lock.json",  # NPM lock
-    "**/yarn.lock",  # Yarn lock
-    "**/Cargo.lock",  # Cargo lock
-    "**/go.sum",  # Go sum
-    "**/*.pyc",  # Python bytecode
-    "**/*.pyo",  # Python optimized bytecode
-    "**/*.so",  # Shared objects
-    "**/*.dylib",  # macOS dynamic libraries
-    "**/*.dll",  # Windows dynamic libraries
+    ".*",  # Hidden directories
+    "__pycache__",  # Python cache
+    "node_modules",  # Node.js dependencies
+    "target",  # Rust/Maven build output
+    "dist",  # Distribution directories
+    "vendor/*.*/*",  # Go vendor directory (domain-based paths)
+    ".cocoindex_code",  # Our own index directory
 ]
 
 # Chunking configuration
