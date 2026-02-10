@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "cocoindex-code"
-version = "0.1.0"
+dynamic = ["version"]
 description = "MCP server for indexing and querying codebases using CocoIndex"
 readme = "README.md"
 license = "MIT"
@@ -47,6 +47,9 @@ cocoindex-code = "cocoindex_code:main"
 Homepage = "https://github.com/cocoindex-io/cocoindex-code"
 Repository = "https://github.com/cocoindex-io/cocoindex-code"
 Issues = "https://github.com/cocoindex-io/cocoindex-code/issues"
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cocoindex_code"]
