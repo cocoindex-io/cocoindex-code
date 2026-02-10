@@ -23,7 +23,7 @@ classifiers = [
 
 dependencies = [
     "mcp>=1.0.0",
-    "cocoindex==1.0.0a10",
+    "cocoindex[litellm]>=1.0.0a12",
     "sentence-transformers>=2.2.0",
     "sqlite-vec>=0.1.0",
     "pydantic>=2.0.0",

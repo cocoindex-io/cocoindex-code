@@ -62,9 +62,10 @@ class Config:
             root = _discover_codebase_root()
 
         # Get embedding model
+        # Prefix "sbert/" for SentenceTransformers models, otherwise LiteLLM.
         embedding_model = os.environ.get(
             "COCOINDEX_CODE_EMBEDDING_MODEL",
-            "sentence-transformers/all-MiniLM-L6-v2",
+            "sbert/sentence-transformers/all-MiniLM-L6-v2",
         )
 
         # Index directory is always under the root

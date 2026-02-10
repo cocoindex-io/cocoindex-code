@@ -1,21 +1,36 @@
 """Shared resources for CocoIndex Code."""
 
+from __future__ import annotations
+
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import cocoindex as coco
 from cocoindex.connectors import sqlite
-from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 from numpy.typing import NDArray
 
+if TYPE_CHECKING:
+    from cocoindex.ops.litellm import LiteLLMEmbedder
+    from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
+
 from .config import Config
+
+SBERT_PREFIX = "sbert/"
 
 # Load configuration at module level
 config = Config.from_env()
 
-# Initialize embedder at module level
-embedder = SentenceTransformerEmbedder(config.embedding_model)
+# Initialize embedder at module level based on model prefix
+embedder: SentenceTransformerEmbedder | LiteLLMEmbedder
+if config.embedding_model.startswith(SBERT_PREFIX):
+    from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
+
+    embedder = SentenceTransformerEmbedder(config.embedding_model[len(SBERT_PREFIX) :])
+else:
+    from cocoindex.ops.litellm import LiteLLMEmbedder
+
+    embedder = LiteLLMEmbedder(config.embedding_model)
 
 # Context key for SQLite database (connection managed in lifespan)
 SQLITE_DB = coco.ContextKey[sqlite.SqliteDatabase]("sqlite_db")
