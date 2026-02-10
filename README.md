@@ -22,7 +22,12 @@ Uses a local SentenceTransformers model (`sentence-transformers/all-MiniLM-L6-v2
 claude mcp add cocoindex-code -- uvx cocoindex-code
 ```
 
-### Ollama (Local)
+### With a Cloud or Custom Embedding Model
+
+Set `COCOINDEX_CODE_EMBEDDING_MODEL` to any [LiteLLM-supported model](https://docs.litellm.ai/docs/embedding/supported_embedding), along with the provider's API key:
+
+<details>
+<summary>Ollama (Local)</summary>
 
 ```bash
 claude mcp add cocoindex-code \
@@ -30,7 +35,12 @@ claude mcp add cocoindex-code \
   -- uvx cocoindex-code
 ```
 
-### OpenAI
+Set `OLLAMA_API_BASE` if your Ollama server is not at `http://localhost:11434`.
+
+</details>
+
+<details>
+<summary>OpenAI</summary>
 
 ```bash
 claude mcp add cocoindex-code \
@@ -39,7 +49,10 @@ claude mcp add cocoindex-code \
   -- uvx cocoindex-code
 ```
 
-### Azure OpenAI
+</details>
+
+<details>
+<summary>Azure OpenAI</summary>
 
 ```bash
 claude mcp add cocoindex-code \
@@ -50,7 +63,10 @@ claude mcp add cocoindex-code \
   -- uvx cocoindex-code
 ```
 
-### Gemini
+</details>
+
+<details>
+<summary>Gemini</summary>
 
 ```bash
 claude mcp add cocoindex-code \
@@ -59,7 +75,10 @@ claude mcp add cocoindex-code \
   -- uvx cocoindex-code
 ```
 
-### Mistral
+</details>
+
+<details>
+<summary>Mistral</summary>
 
 ```bash
 claude mcp add cocoindex-code \
@@ -68,7 +87,10 @@ claude mcp add cocoindex-code \
   -- uvx cocoindex-code
 ```
 
-### Voyage (Code-Optimized)
+</details>
+
+<details>
+<summary>Voyage (Code-Optimized)</summary>
 
 ```bash
 claude mcp add cocoindex-code \
@@ -77,7 +99,10 @@ claude mcp add cocoindex-code \
   -- uvx cocoindex-code
 ```
 
-### Cohere
+</details>
+
+<details>
+<summary>Cohere</summary>
 
 ```bash
 claude mcp add cocoindex-code \
@@ -86,7 +111,10 @@ claude mcp add cocoindex-code \
   -- uvx cocoindex-code
 ```
 
-### AWS Bedrock
+</details>
+
+<details>
+<summary>AWS Bedrock</summary>
 
 ```bash
 claude mcp add cocoindex-code \
@@ -97,9 +125,10 @@ claude mcp add cocoindex-code \
   -- uvx cocoindex-code
 ```
 
-Set `OLLAMA_API_BASE` if your Ollama server is not at `http://localhost:11434`.
+</details>
 
-### Nebius
+<details>
+<summary>Nebius</summary>
 
 ```bash
 claude mcp add cocoindex-code \
@@ -108,7 +137,7 @@ claude mcp add cocoindex-code \
   -- uvx cocoindex-code
 ```
 
-### Other Providers
+</details>
 
 Any model supported by LiteLLM works — see the [full list of embedding providers](https://docs.litellm.ai/docs/embedding/supported_embedding).
 
