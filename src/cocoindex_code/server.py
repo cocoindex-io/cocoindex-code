@@ -11,24 +11,16 @@ from .query import query_codebase
 # Initialize MCP server
 mcp = FastMCP(
     "cocoindex-code",
-    instructions="""
-This server provides semantic code search for the codebase.
-This allows you to quickly and cheaply search for code related to a concept or functionality
-across the entire codebase.
-
-Use the `search` tool when you need to:
-- Find code related to a concept or functionality
-- Search for implementations of specific features
-- Discover how something is done in the codebase
-- Find similar code patterns
-
-The `search` tool has a `refresh_index` parameter (default: True) that refreshes
-the index before searching. Set it to False for consecutive queries to avoid
-redundant refreshes.
-
-The search uses vector embeddings for semantic similarity, so you can describe
-what you're looking for in natural language rather than exact text matches.
-""".strip(),
+    instructions=(
+        "Code search and codebase understanding tools."
+        "\n"
+        "Use when you need to find code, understand how something works,"
+        " locate implementations, or explore an unfamiliar codebase."
+        "\n"
+        "Provides semantic search that understands meaning --"
+        " unlike grep or text matching,"
+        " it finds relevant code even when exact keywords are unknown."
+    ),
 )
 
 # Lock to prevent concurrent index updates
@@ -71,13 +63,28 @@ class SearchResultModel(BaseModel):
 @mcp.tool(
     name="search",
     description=(
-        "Search the codebase using semantic similarity. "
-        "Returns relevant code chunks with file locations and similarity scores. "
-        "Use natural language queries or code snippets to find related code."
+        "Semantic code search across the entire codebase"
+        " -- finds code by meaning, not just text matching."
+        " Use this instead of grep/glob when you need to find implementations,"
+        " understand how features work,"
+        " or locate related code without knowing exact names or keywords."
+        " Accepts natural language queries"
+        " (e.g., 'authentication logic', 'database connection handling')"
+        " or code snippets."
+        " Returns matching code chunks with file paths,"
+        " line numbers, and relevance scores."
     ),
 )
 async def search(
-    query: str = Field(description="Natural language query or code snippet to search for"),
+    query: str = Field(
+        description=(
+            "Natural language query or code snippet to search for."
+            " Examples: 'error handling middleware',"
+            " 'how are users authenticated',"
+            " 'database connection pool',"
+            " or paste a code snippet to find similar code."
+        )
+    ),
     limit: int = Field(
         default=10,
         ge=1,
@@ -92,8 +99,9 @@ async def search(
     refresh_index: bool = Field(
         default=True,
         description=(
-            "Whether to refresh the index before querying. "
-            "Set to False for consecutive queries to skip redundant refreshes."
+            "Whether to incrementally update the index before searching."
+            " Set to False for faster consecutive queries"
+            " when the codebase hasn't changed."
         ),
     ),
 ) -> SearchResultModel:
