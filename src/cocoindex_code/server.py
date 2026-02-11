@@ -1,12 +1,15 @@
 """MCP server for codebase indexing and querying."""
 
+import argparse
 import asyncio
+import sqlite3
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from .indexer import app as indexer_app
 from .query import query_codebase
+from .shared import config
 
 # Initialize MCP server
 mcp = FastMCP(
@@ -142,16 +145,63 @@ async def search(
         )
 
 
-async def _async_main() -> None:
+async def _async_serve() -> None:
     """Async entry point for the MCP server."""
     # Refresh index in background so startup isn't blocked
     asyncio.create_task(_refresh_index())
     await mcp.run_stdio_async()
 
 
+async def _async_index() -> None:
+    """Async entry point for the index command."""
+    await indexer_app.update(report_to_stdout=True)
+    _print_index_stats()
+
+
+def _print_index_stats() -> None:
+    """Print index statistics from the database."""
+    db_path = config.target_sqlite_db_path
+    if not db_path.exists():
+        print("No index database found.")
+        return
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        total_chunks = conn.execute("SELECT COUNT(*) FROM code_chunks").fetchone()[0]
+        total_files = conn.execute("SELECT COUNT(DISTINCT file_path) FROM code_chunks").fetchone()[
+            0
+        ]
+        langs = conn.execute(
+            "SELECT language, COUNT(*) as cnt FROM code_chunks GROUP BY language ORDER BY cnt DESC"
+        ).fetchall()
+
+        print("\nIndex stats:")
+        print(f"  Chunks: {total_chunks}")
+        print(f"  Files:  {total_files}")
+        if langs:
+            print("  Languages:")
+            for lang, count in langs:
+                print(f"    {lang}: {count} chunks")
+    finally:
+        conn.close()
+
+
 def main() -> None:
-    """Entry point for the MCP server."""
-    asyncio.run(_async_main())
+    """Entry point for the cocoindex-code CLI."""
+    parser = argparse.ArgumentParser(
+        prog="cocoindex-code",
+        description="MCP server for codebase indexing and querying.",
+    )
+    subparsers = parser.add_subparsers(dest="command")
+    subparsers.add_parser("serve", help="Run the MCP server (default)")
+    subparsers.add_parser("index", help="Build/refresh the index and report stats")
+
+    args = parser.parse_args()
+
+    if args.command == "index":
+        asyncio.run(_async_index())
+    else:
+        asyncio.run(_async_serve())
 
 
 if __name__ == "__main__":

@@ -13,44 +13,45 @@ from .shared import SQLITE_DB, CodeChunk, config, embedder
 
 # File patterns for supported languages
 INCLUDED_PATTERNS = [
-    "*.py",  # Python
-    "*.pyi",  # Python stubs
-    "*.js",  # JavaScript
-    "*.jsx",  # JavaScript React
-    "*.ts",  # TypeScript
-    "*.tsx",  # TypeScript React
-    "*.mjs",  # JavaScript ES modules
-    "*.cjs",  # JavaScript CommonJS
-    "*.rs",  # Rust
-    "*.go",  # Go
-    "*.java",  # Java
-    "*.c",  # C
-    "*.h",  # C/C++ headers
-    "*.cpp",  # C++
-    "*.hpp",  # C++ headers
-    "*.cc",  # C++
-    "*.cxx",  # C++
-    "*.hxx",  # C++ headers
-    "*.hh",  # C++ headers
-    "*.cs",  # C#
-    "*.sql",  # SQL
-    "*.sh",  # Shell
-    "*.bash",  # Bash
-    "*.zsh",  # Zsh
-    "*.md",  # Markdown
-    "*.mdx",  # MDX
-    "*.txt",  # Plain text
-    "*.rst",  # reStructuredText
+    "**/*.py",  # Python
+    "**/*.pyi",  # Python stubs
+    "**/*.js",  # JavaScript
+    "**/*.jsx",  # JavaScript React
+    "**/*.ts",  # TypeScript
+    "**/*.tsx",  # TypeScript React
+    "**/*.mjs",  # JavaScript ES modules
+    "**/*.cjs",  # JavaScript CommonJS
+    "**/*.rs",  # Rust
+    "**/*.go",  # Go
+    "**/*.java",  # Java
+    "**/*.c",  # C
+    "**/*.h",  # C/C++ headers
+    "**/*.cpp",  # C++
+    "**/*.hpp",  # C++ headers
+    "**/*.cc",  # C++
+    "**/*.cxx",  # C++
+    "**/*.hxx",  # C++ headers
+    "**/*.hh",  # C++ headers
+    "**/*.cs",  # C#
+    "**/*.sql",  # SQL
+    "**/*.sh",  # Shell
+    "**/*.bash",  # Bash
+    "**/*.zsh",  # Zsh
+    "**/*.md",  # Markdown
+    "**/*.mdx",  # MDX
+    "**/*.txt",  # Plain text
+    "**/*.rst",  # reStructuredText
 ]
 
 EXCLUDED_PATTERNS = [
-    ".*",  # Hidden directories
-    "__pycache__",  # Python cache
-    "node_modules",  # Node.js dependencies
-    "target",  # Rust/Maven build output
-    "dist",  # Distribution directories
-    "vendor/*.*/*",  # Go vendor directory (domain-based paths)
-    ".cocoindex_code",  # Our own index directory
+    "**/.*",  # Hidden directories
+    "**/__pycache__",  # Python cache
+    "**/node_modules",  # Node.js dependencies
+    "**/target",  # Rust/Maven build output
+    "**/build/assets",  # Build asserts directories
+    "**/dist",  # Distribution directories
+    "**/vendor/*.*/*",  # Go vendor directory (domain-based paths)
+    "**/.cocoindex_code",  # Our own index directory
 ]
 
 # Chunking configuration
