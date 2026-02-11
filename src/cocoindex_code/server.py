@@ -16,13 +16,13 @@ This server provides semantic code search for the codebase.
 This allows you to quickly and cheaply search for code related to a concept or functionality
 across the entire codebase.
 
-Use the `query` tool when you need to:
+Use the `search` tool when you need to:
 - Find code related to a concept or functionality
 - Search for implementations of specific features
 - Discover how something is done in the codebase
 - Find similar code patterns
 
-The `query` tool has a `refresh_index` parameter (default: True) that refreshes
+The `search` tool has a `refresh_index` parameter (default: True) that refreshes
 the index before searching. Set it to False for consecutive queries to avoid
 redundant refreshes.
 
@@ -55,8 +55,8 @@ class CodeChunkResult(BaseModel):
     score: float = Field(description="Similarity score (0-1, higher is better)")
 
 
-class QueryResultModel(BaseModel):
-    """Result from query tool."""
+class SearchResultModel(BaseModel):
+    """Result from search tool."""
 
     success: bool
     results: list[CodeChunkResult] = Field(default_factory=list)
@@ -69,14 +69,14 @@ class QueryResultModel(BaseModel):
 
 
 @mcp.tool(
-    name="query",
+    name="search",
     description=(
         "Search the codebase using semantic similarity. "
         "Returns relevant code chunks with file locations and similarity scores. "
         "Use natural language queries or code snippets to find related code."
     ),
 )
-async def query(
+async def search(
     query: str = Field(description="Natural language query or code snippet to search for"),
     limit: int = Field(
         default=10,
@@ -96,7 +96,7 @@ async def query(
             "Set to False for consecutive queries to skip redundant refreshes."
         ),
     ),
-) -> QueryResultModel:
+) -> SearchResultModel:
     """Query the codebase index."""
     try:
         # Refresh index if requested
@@ -105,7 +105,7 @@ async def query(
 
         results = await query_codebase(query=query, limit=limit, offset=offset)
 
-        return QueryResultModel(
+        return SearchResultModel(
             success=True,
             results=[
                 CodeChunkResult(
@@ -123,12 +123,12 @@ async def query(
         )
     except RuntimeError as e:
         # Index doesn't exist
-        return QueryResultModel(
+        return SearchResultModel(
             success=False,
             message=str(e),
         )
     except Exception as e:
-        return QueryResultModel(
+        return SearchResultModel(
             success=False,
             message=f"Query failed: {e!s}",
         )
