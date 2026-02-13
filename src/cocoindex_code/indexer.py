@@ -1,7 +1,5 @@
 """CocoIndex app for indexing codebases."""
 
-import asyncio
-
 import cocoindex.asyncio as coco_aio
 from cocoindex.connectors import localfs, sqlite
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
@@ -63,36 +61,10 @@ CHUNK_OVERLAP = 200
 splitter = RecursiveSplitter()
 
 
-@coco_aio.function
-async def process_chunk(
-    file_path: str,
-    chunk: Chunk,
-    language: str,
-    id_gen: IdGenerator,
-    table: sqlite.TableTarget,
-) -> None:
-    """Process a single chunk: embed and store."""
-    id, chunk_embedding = await asyncio.gather(
-        id_gen.next_id(chunk.text),
-        embedder.embed(chunk.text),
-    )
-    table.declare_row(
-        row=CodeChunk(  # type: ignore[arg-type]
-            id=id,
-            file_path=file_path,
-            language=language,
-            content=chunk.text,
-            start_line=chunk.start.line,
-            end_line=chunk.end.line,
-            embedding=chunk_embedding,
-        )
-    )
-
-
 @coco_aio.function(memo=True)
 async def process_file(
     file: localfs.File,
-    table: sqlite.TableTarget,
+    table: sqlite.TableTarget[CodeChunk],
 ) -> None:
     """Process a single file: chunk, embed, and store."""
     # Read file content
@@ -118,12 +90,23 @@ async def process_file(
     )
 
     id_gen = IdGenerator()
-    await asyncio.gather(
-        *(
-            process_chunk(str(file.file_path.path), chunk, language, id_gen, table)
-            for chunk in chunks
+
+    async def process(
+        chunk: Chunk,
+    ) -> None:
+        table.declare_row(
+            row=CodeChunk(
+                id=await id_gen.next_id(chunk.text),
+                file_path=str(file.file_path.path),
+                language=language,
+                content=chunk.text,
+                start_line=chunk.start.line,
+                end_line=chunk.end.line,
+                embedding=await embedder.embed(chunk.text),
+            )
         )
-    )
+
+    await coco_aio.map(process, chunks)
 
 
 @coco_aio.function
@@ -132,15 +115,13 @@ async def app_main() -> None:
     db = coco_aio.use_context(SQLITE_DB)
 
     # Declare the table target for storing embeddings
-    table = await coco_aio.mount_run(
-        coco_aio.component_subpath("setup", "table"),
-        db.declare_table_target,
+    table = await db.mount_table_target(
         table_name="code_chunks",
         table_schema=await sqlite.TableSchema.from_class(
             CodeChunk,
             primary_key=["id"],
         ),
-    ).result()
+    )
 
     # Walk source directory
     files = localfs.walk_dir(
@@ -153,13 +134,8 @@ async def app_main() -> None:
     )
 
     # Process each file
-    for f in files:
-        coco_aio.mount(
-            coco_aio.component_subpath("process", str(f.file_path.path)),
-            process_file,
-            f,
-            table,
-        )
+    with coco_aio.component_subpath(coco_aio.Symbol("process_file")):
+        await coco_aio.mount_each(process_file, files.items(), table)
 
 
 # Create the app
