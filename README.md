@@ -295,4 +295,4 @@ uv run pre-commit run --all-files
 
 ## License
 
-MIT
+Apache-2.0
