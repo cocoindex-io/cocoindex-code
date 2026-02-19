@@ -3,7 +3,7 @@
 <h1 align="center">light weight MCP for code that just works </h1>
 
 
-A super light-weight, effective embedded MCP that understand and searches your codebase that just works! Using [CocoIndex](https://github.com/cocoindex-io/cocoindex) - an Rust-based ultra performant data transformation engine. No blackbox. Works for Claude, Codex, Cursor - any coding agent. 
+A super light-weight, effective embedded MCP that understand and searches your codebase that just works! Using [CocoIndex](https://github.com/cocoindex-io/cocoindex) - an Rust-based ultra performant data transformation engine. No blackbox. Works for Claude, Codex, Cursor - any coding agent.
 
 - Instant token saving by 70%.
 - **1 min setup** - Just claude/codex mcp add works!
@@ -40,10 +40,10 @@ codex mcp add cocoindex-code \
 ```
 
 ## Features
-- **Semantic Code Search**: Find relevant code using natural language queries when grep doesn't work well, and save tokens immediately. 
+- **Semantic Code Search**: Find relevant code using natural language queries when grep doesn't work well, and save tokens immediately.
 - **Ultra Performant to code changes**:⚡ Built on top of ultra performant [Rust indexing engine](https://github.com/cocoindex-io/cocoindex/edit/main/README.md). Only re-indexes changed files for fast updates.
 - **Multi-Language Support**: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++, C#, SQL, Shell
-- **Embedded**: Portable and just works, no database setup required! 
+- **Embedded**: Portable and just works, no database setup required!
 - **Flexible Embeddings**: By default, no API key required with Local SentenceTransformers - totally free!  You can customize 100+ cloud providers.
 
 
@@ -242,7 +242,7 @@ Common generated directories are automatically excluded:
 - `vendor/` (Go vendored dependencies, matched by domain-based child paths)
 
 ## Large codebase / Enterprise
-[CocoIndex](https://github.com/cocoindex-io/cocoindex) is an ultra effecient indexing engine that also works on large codebase at scale on XXX G for enterprises. In enterprise scenarios it is a lot more effecient to do index share with teammates when there are large repo or many repos. We also have advanced features like branch dedupe etc designed for enterprise users.  
+[CocoIndex](https://github.com/cocoindex-io/cocoindex) is an ultra effecient indexing engine that also works on large codebase at scale on XXX G for enterprises. In enterprise scenarios it is a lot more effecient to do index share with teammates when there are large repo or many repos. We also have advanced features like branch dedupe etc designed for enterprise users.
 
 If you need help with remote setup, please email our maintainer linghua@cocoindex.io, happy to help!!
 
