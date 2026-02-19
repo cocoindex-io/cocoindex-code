@@ -1,37 +1,72 @@
-# CocoIndex Code
+<h1 align="center">CocoIndex Code </h1>
 
-An MCP (Model Context Protocol) server for indexing and querying codebases using [CocoIndex](https://cocoindex.io).
+<h1 align="center">light weight MCP for code that just works </h1>
 
-## Features
 
-- **Semantic Code Search**: Find relevant code using natural language queries
-- **Incremental Indexing**: Only re-indexes changed files for fast updates
-- **Multi-Language Support**: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++, C#, SQL, Shell
-- **Flexible Embeddings**: Local SentenceTransformers (default) or 100+ cloud providers via [LiteLLM](https://docs.litellm.ai/docs/embedding/supported_embedding)
-- **SQLite Storage**: Portable, no external database required
+A super light-weight, effective embedded MCP that understand and searches your codebase that just works! Using [CocoIndex](https://github.com/cocoindex-io/cocoindex) - an Rust-based ultra performant data transformation engine. No blackbox. Works for Claude, Codex, Cursor - any coding agent. 
 
-## Prerequisites
+- Instant token saving by 70%.
+- **1 min setup** - Just claude/codex mcp add works!
 
-Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/) (which provides `uvx`):
+<div align="center">
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+[![GitHub](https://img.shields.io/github/stars/cocoindex-io/cocoindex?color=5B5BD6)](https://github.com/cocoindex-io/cocoindex)
+[![Documentation](https://img.shields.io/badge/Documentation-394e79?logo=readthedocs&logoColor=00B9FF)](https://cocoindex.io/docs/getting_started/quickstart)
+[![License](https://img.shields.io/badge/license-Apache%202.0-5B5BD6?logoColor=white)](https://opensource.org/licenses/Apache-2.0)
+[![PyPI version](https://img.shields.io/pypi/v/cocoindex?color=5B5BD6)](https://pypi.org/project/cocoindex/)
+<!--[![PyPI - Downloads](https://img.shields.io/pypi/dm/cocoindex)](https://pypistats.org/packages/cocoindex) -->
+[![PyPI Downloads](https://static.pepy.tech/badge/cocoindex/month)](https://pepy.tech/projects/cocoindex)
+[![CI](https://github.com/cocoindex-io/cocoindex/actions/workflows/CI.yml/badge.svg?event=push&color=5B5BD6)](https://github.com/cocoindex-io/cocoindex/actions/workflows/CI.yml)
+[![release](https://github.com/cocoindex-io/cocoindex/actions/workflows/release.yml/badge.svg?event=push&color=5B5BD6)](https://github.com/cocoindex-io/cocoindex/actions/workflows/release.yml)
+[![Link Check](https://github.com/cocoindex-io/cocoindex/actions/workflows/links.yml/badge.svg)](https://github.com/cocoindex-io/cocoindex/actions/workflows/links.yml)
+[![prek](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/j178/prek/master/docs/assets/badge-v0.json)](https://github.com/j178/prek)
+[![Discord](https://img.shields.io/discord/1314801574169673738?logo=discord&color=5B5BD6&logoColor=white)](https://discord.com/invite/zpA9S2DR7s)
 
-## Usage with Claude Code
+🌟 Please help star [CocoIndex](https://github.com/cocoindex-io/cocoindex) if you like this project!
+</div>
 
-No installation needed — `uvx` runs it directly.
+## Get Started - zero config, let's go!!
 
-### Default (Local Embeddings)
-
-Uses a local SentenceTransformers model (`sentence-transformers/all-MiniLM-L6-v2`). No API key required:
-
+### Claude
 ```bash
 claude mcp add cocoindex-code \
   -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a13" cocoindex-code@latest
 ```
 
-### With a Cloud or Custom Embedding Model
+### Codex
+```bash
+codex mcp add cocoindex-code \
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a13" cocoindex-code@latest
+```
+
+## Features
+- **Semantic Code Search**: Find relevant code using natural language queries when grep doesn't work well, and save tokens immediately. 
+- **Ultra Performant to code changes**:⚡ Built on top of ultra performant [Rust indexing engine](https://github.com/cocoindex-io/cocoindex/edit/main/README.md). Only re-indexes changed files for fast updates.
+- **Multi-Language Support**: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++, C#, SQL, Shell
+- **Embedded**: Portable and just works, no database setup required! 
+- **Flexible Embeddings**: By default, no API key required with Local SentenceTransformers - totally free!  You can customize 100+ cloud providers.
+
+
+## Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `COCOINDEX_CODE_ROOT_PATH` | Root path of the codebase | Auto-discovered (see below) |
+| `COCOINDEX_CODE_EMBEDDING_MODEL` | Embedding model (see below) | `sbert/sentence-transformers/all-MiniLM-L6-v2` |
+
+
+### Root Path Discovery
+
+If `COCOINDEX_CODE_ROOT_PATH` is not set, the codebase root is discovered by:
+
+1. Finding the nearest parent directory containing `.cocoindex_code/`
+2. Finding the nearest parent directory containing `.git/`
+3. Falling back to the current working directory
+
+### Embedding model
+By default - this project use a local SentenceTransformers model (`sentence-transformers/all-MiniLM-L6-v2`). No API key required and completely free!
+
+Use a code specific embedding model can achieve better semantic understanding for your results, this project supports all models on Ollama and 100+ cloud providers.
 
 Set `COCOINDEX_CODE_EMBEDDING_MODEL` to any [LiteLLM-supported model](https://docs.litellm.ai/docs/embedding/supported_embedding), along with the provider's API key:
 
@@ -150,44 +185,8 @@ claude mcp add cocoindex-code \
 
 Any model supported by LiteLLM works — see the [full list of embedding providers](https://docs.litellm.ai/docs/embedding/supported_embedding).
 
-### Setup `.gitignore`
 
-Add the index directory to your `.gitignore` so it isn't committed:
 
-```bash
-echo .cocoindex_code >> .gitignore
-```
-
-### Uninstall
-
-Remove the MCP server and delete the local index:
-
-```bash
-claude mcp remove cocoindex-code
-rm -rf .cocoindex_code
-```
-
-## Configuration
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `COCOINDEX_CODE_ROOT_PATH` | Root path of the codebase | Auto-discovered (see below) |
-| `COCOINDEX_CODE_EMBEDDING_MODEL` | Embedding model (see below) | `sbert/sentence-transformers/all-MiniLM-L6-v2` |
-
-### Embedding Model
-
-The `COCOINDEX_CODE_EMBEDDING_MODEL` variable uses a prefix to select the embedding backend:
-
-- **`sbert/`** prefix — uses [SentenceTransformers](https://www.sbert.net/) (runs locally, no API key needed). Example: `sbert/sentence-transformers/all-MiniLM-L6-v2`
-- **Otherwise** — uses [LiteLLM](https://docs.litellm.ai/docs/embedding/supported_embedding) (supports 100+ providers). Example: `text-embedding-3-small`
-
-### Root Path Discovery
-
-If `COCOINDEX_CODE_ROOT_PATH` is not set, the codebase root is discovered by:
-
-1. Finding the nearest parent directory containing `.cocoindex_code/`
-2. Finding the nearest parent directory containing `.git/`
-3. Falling back to the current working directory
 
 ## MCP Tools
 
@@ -217,22 +216,8 @@ Returns matching code chunks with:
 - Line numbers (start/end)
 - Similarity score
 
-## Index Storage
 
-The index is stored in `.cocoindex_code/` under your codebase root:
-
-```
-your-project/
-├── .cocoindex_code/
-│   ├── target_sqlite.db  # Vector index (SQLite + sqlite-vec)
-│   └── cocoindex.db/     # CocoIndex state
-├── src/
-│   └── ...
-```
-
-Add `.cocoindex_code/` to your `.gitignore`.
-
-## Supported File Types
+## Supported Languages
 
 - **Python**: `.py`, `.pyi`
 - **JavaScript**: `.js`, `.jsx`, `.mjs`, `.cjs`
@@ -256,42 +241,10 @@ Common generated directories are automatically excluded:
 - `dist/`
 - `vendor/` (Go vendored dependencies, matched by domain-based child paths)
 
-## Development
+## Large codebase / Enterprise
+[CocoIndex](https://github.com/cocoindex-io/cocoindex) is an ultra effecient indexing engine that also works on large codebase at scale on XXX G for enterprises. In enterprise scenarios it is a lot more effecient to do index share with teammates when there are large repo or many repos. We also have advanced features like branch dedupe etc designed for enterprise users.  
 
-### Local Testing with Claude Code
-
-To test locally without installing the package, use the Claude Code CLI:
-
-```bash
-claude mcp add cocoindex-code \
-  -- uv run --project /path/to/cocoindex-code cocoindex-code
-```
-
-Or add to `.mcp.json` in your project root:
-
-```json
-{
-  "mcpServers": {
-    "cocoindex-code": {
-      "command": "uv",
-      "args": ["run", "--project", "/path/to/cocoindex-code", "cocoindex-code"]
-    }
-  }
-}
-```
-
-### Running Tests
-
-```bash
-# Install dev dependencies
-uv sync --group dev
-
-# Run tests
-uv run pytest tests/ -v
-
-# Run pre-commit hooks
-uv run pre-commit run --all-files
-```
+If you need help with remote setup, please email our maintainer linghua@cocoindex.io, happy to help!!
 
 ## License
 
