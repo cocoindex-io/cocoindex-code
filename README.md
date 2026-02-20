@@ -27,6 +27,12 @@ A super light-weight, effective embedded MCP that understand and searches your c
 
 ## Get Started - zero config, let's go!!
 
+Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/) if you don't have it. 
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
 ### Claude
 ```bash
 claude mcp add cocoindex-code \
