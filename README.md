@@ -1,4 +1,6 @@
-<h1 align="center">CocoIndex Code </h1>
+<p align="center">
+  <img width="2310" height="558" alt="emoji (28)" src="https://github.com/user-attachments/assets/447d9c6b-0623-4464-ac0e-cd40b288679f" />
+</p>
 
 <h1 align="center">light weight MCP for code that just works </h1>
 
