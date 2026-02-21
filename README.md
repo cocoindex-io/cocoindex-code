@@ -2,7 +2,7 @@
   <img width="2310" height="558" alt="emoji (28)" src="https://github.com/user-attachments/assets/447d9c6b-0623-4464-ac0e-cd40b288679f" />
 </p>
 
-<h1 align="center">light weight MCP for code that just works </h1> 
+<h1 align="center">light weight MCP for code that just works </h1>
 
 
 A super light-weight, effective embedded MCP **(AST-based)** that understand and searches your codebase that just works! Using [CocoIndex](https://github.com/cocoindex-io/cocoindex) - an Rust-based ultra performant data transformation engine. No blackbox. Works for Claude, Codex, Cursor - any coding agent.
