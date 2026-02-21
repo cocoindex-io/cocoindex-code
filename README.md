@@ -49,7 +49,7 @@ codex mcp add cocoindex-code \
 
 ### OpenCode
 ```bash
-opencode mcp add 
+opencode mcp add
 ```
 Enter MCP server name: `cocoindex-code`
 Select MCP server type: `local`
