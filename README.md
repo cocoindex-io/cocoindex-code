@@ -5,7 +5,7 @@
 <h1 align="center">light weight MCP for code that just works </h1>
 
 
-A super light-weight, effective embedded MCP that understand and searches your codebase that just works! Using [CocoIndex](https://github.com/cocoindex-io/cocoindex) - an Rust-based ultra performant data transformation engine. No blackbox. Works for Claude, Codex, Cursor - any coding agent.
+A super light-weight, effective embedded MCP (AST-based) that understand and searches your codebase that just works! Using [CocoIndex](https://github.com/cocoindex-io/cocoindex) - an Rust-based ultra performant data transformation engine. No blackbox. Works for Claude, Codex, Cursor - any coding agent.
 
 - Instant token saving by 70%.
 - **1 min setup** - Just claude/codex mcp add works!
@@ -45,6 +45,33 @@ claude mcp add cocoindex-code \
 ```bash
 codex mcp add cocoindex-code \
   -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a16" cocoindex-code@latest
+```
+
+### OpenCode
+```bash
+opencode mcp add 
+```
+Enter MCP server name: `cocoindex-code`
+Select MCP server type: `local`
+Enter command to run: `uvx --prerelease=explicit --with cocoindex>=1.0.0a16 cocoindex-code@latest`
+
+Or use opencode.json:
+```
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "cocoindex-code": {
+      "type": "local",
+      "command": [
+        "uvx",
+        "--prerelease=explicit",
+        "--with",
+        "cocoindex>=1.0.0a16",
+        "cocoindex-code@latest"
+      ]
+    }
+  }
+}
 ```
 
 ## Features
