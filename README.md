@@ -254,19 +254,36 @@ Returns matching code chunks with:
 
 ## Supported Languages
 
-- **Python**: `.py`, `.pyi`
-- **JavaScript**: `.js`, `.jsx`, `.mjs`, `.cjs`
-- **TypeScript**: `.ts`, `.tsx`
-- **Rust**: `.rs`
-- **Go**: `.go`
-- **Java**: `.java`
-- **C**: `.c`, `.h`
-- **C++**: `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx`, `.hh`
-- **C#**: `.cs`
-- **SQL**: `.sql`
-- **Shell**: `.sh`, `.bash`, `.zsh`
-- **Markdown**: `.md`, `.mdx`
-- **Plain Text**: `.txt`, `.rst`
+| Language | Aliases | File Extensions |
+|----------|---------|-----------------|
+| c | | `.c` |
+| cpp | c++ | `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp` |
+| csharp | csharp, cs | `.cs` |
+| css | | `.css`, `.scss` |
+| dtd | | `.dtd` |
+| fortran | f, f90, f95, f03 | `.f`, `.f90`, `.f95`, `.f03` |
+| go | golang | `.go` |
+| html | | `.html`, `.htm` |
+| java | | `.java` |
+| javascript | js | `.js` |
+| json | | `.json` |
+| kotlin | | `.kt`, `.kts` |
+| markdown | md | `.md`, `.mdx` |
+| pascal | pas, dpr, delphi | `.pas`, `.dpr` |
+| php | | `.php` |
+| python | | `.py` |
+| r | | `.r` |
+| ruby | | `.rb` |
+| rust | rs | `.rs` |
+| scala | | `.scala` |
+| solidity | | `.sol` |
+| sql | | `.sql` |
+| swift | | `.swift` |
+| toml | | `.toml` |
+| tsx | | `.tsx` |
+| typescript | ts | `.ts` |
+| xml | | `.xml` |
+| yaml | | `.yaml`, `.yml` |
 
 Common generated directories are automatically excluded:
 
