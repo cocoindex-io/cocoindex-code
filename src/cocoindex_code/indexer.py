@@ -63,13 +63,13 @@ splitter = RecursiveSplitter()
 
 @coco_aio.function(memo=True)
 async def process_file(
-    file: localfs.File,
+    file: localfs.AsyncFile,
     table: sqlite.TableTarget[CodeChunk],
 ) -> None:
     """Process a single file: chunk, embed, and store."""
     # Read file content
     try:
-        content = file.read_text()
+        content = await file.read_text()
     except UnicodeDecodeError:
         # Skip binary files
         return
