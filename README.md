@@ -1,14 +1,3 @@
-<!-- Keep these links. Translations will automatically update with the README. -->
-[Deutsch](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=de) |
-[English](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=en) |
-[Español](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=es) |
-[français](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=fr) |
-[日本語](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=ja) |
-[한국어](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=ko) |
-[Português](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=pt) |
-[Русский](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=ru) |
-[中文](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=zh)
-
 <p align="center">
   <img width="2310" height="558" alt="emoji (28)" src="https://github.com/user-attachments/assets/447d9c6b-0623-4464-ac0e-cd40b288679f" />
 </p>
@@ -34,7 +23,19 @@ A super light-weight, effective embedded MCP **(AST-based)** that understand and
 
 
 🌟 Please help star [CocoIndex](https://github.com/cocoindex-io/cocoindex) if you like this project!
+
+[Deutsch](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=de) |
+[English](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=en) |
+[Español](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=es) |
+[français](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=fr) |
+[日本語](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=ja) |
+[한국어](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=ko) |
+[Português](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=pt) |
+[Русский](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=ru) |
+[中文](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=zh)
+
 </div>
+
 
 ## Get Started - zero config, let's go!!
 
