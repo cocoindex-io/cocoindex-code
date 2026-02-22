@@ -1,6 +1,7 @@
 <p align="center">
-  <img width="2310" height="558" alt="emoji (28)" src="https://github.com/user-attachments/assets/447d9c6b-0623-4464-ac0e-cd40b288679f" />
+<img width="2428" height="486" alt="emoji (30)" src="https://github.com/user-attachments/assets/d05961b4-0b7b-42ea-834a-59c3c01717ca" />
 </p>
+
 
 <h1 align="center">light weight MCP for code that just works </h1>
 
