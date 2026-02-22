@@ -49,13 +49,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ### Claude
 ```bash
 claude mcp add cocoindex-code \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a16" cocoindex-code@latest
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
 ```
 
 ### Codex
 ```bash
 codex mcp add cocoindex-code \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a16" cocoindex-code@latest
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
 ```
 
 ### OpenCode
@@ -122,7 +122,7 @@ Set `COCOINDEX_CODE_EMBEDDING_MODEL` to any [LiteLLM-supported model](https://do
 ```bash
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=ollama/nomic-embed-text \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a16" cocoindex-code@latest
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
 ```
 
 Set `OLLAMA_API_BASE` if your Ollama server is not at `http://localhost:11434`.
@@ -136,7 +136,7 @@ Set `OLLAMA_API_BASE` if your Ollama server is not at `http://localhost:11434`.
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=text-embedding-3-small \
   -e OPENAI_API_KEY=your-api-key \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a16" cocoindex-code@latest
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
 ```
 
 </details>
@@ -150,7 +150,7 @@ claude mcp add cocoindex-code \
   -e AZURE_API_KEY=your-api-key \
   -e AZURE_API_BASE=https://your-resource.openai.azure.com \
   -e AZURE_API_VERSION=2024-06-01 \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a16" cocoindex-code@latest
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
 ```
 
 </details>
@@ -162,7 +162,7 @@ claude mcp add cocoindex-code \
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=gemini/text-embedding-004 \
   -e GEMINI_API_KEY=your-api-key \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a16" cocoindex-code@latest
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
 ```
 
 </details>
@@ -174,7 +174,7 @@ claude mcp add cocoindex-code \
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=mistral/mistral-embed \
   -e MISTRAL_API_KEY=your-api-key \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a16" cocoindex-code@latest
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
 ```
 
 </details>
@@ -186,7 +186,7 @@ claude mcp add cocoindex-code \
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=voyage/voyage-code-3 \
   -e VOYAGE_API_KEY=your-api-key \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a16" cocoindex-code@latest
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
 ```
 
 </details>
@@ -198,7 +198,7 @@ claude mcp add cocoindex-code \
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=cohere/embed-english-v3.0 \
   -e COHERE_API_KEY=your-api-key \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a16" cocoindex-code@latest
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
 ```
 
 </details>
@@ -212,7 +212,7 @@ claude mcp add cocoindex-code \
   -e AWS_ACCESS_KEY_ID=your-access-key \
   -e AWS_SECRET_ACCESS_KEY=your-secret-key \
   -e AWS_REGION_NAME=us-east-1 \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a16" cocoindex-code@latest
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
 ```
 
 </details>
@@ -224,7 +224,7 @@ claude mcp add cocoindex-code \
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=nebius/BAAI/bge-en-icl \
   -e NEBIUS_API_KEY=your-api-key \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a16" cocoindex-code@latest
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
 ```
 
 </details>
