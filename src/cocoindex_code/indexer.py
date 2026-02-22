@@ -39,6 +39,7 @@ INCLUDED_PATTERNS = [
     "**/*.mdx",  # MDX
     "**/*.txt",  # Plain text
     "**/*.rst",  # reStructuredText
+    "**/*.php",  # PHP
 ]
 
 EXCLUDED_PATTERNS = [
