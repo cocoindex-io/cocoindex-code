@@ -39,6 +39,7 @@ INCLUDED_PATTERNS = [
     "**/*.mdx",  # MDX
     "**/*.txt",  # Plain text
     "**/*.rst",  # reStructuredText
+    "**/*.php",  # PHP
 ]
 
 EXCLUDED_PATTERNS = [
@@ -49,6 +50,7 @@ EXCLUDED_PATTERNS = [
     "**/build/assets",  # Build asserts directories
     "**/dist",  # Distribution directories
     "**/vendor/*.*/*",  # Go vendor directory (domain-based paths)
+    "**/vendor/*",  # PHP vendor directory
     "**/.cocoindex_code",  # Our own index directory
 ]
 
