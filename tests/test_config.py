@@ -5,8 +5,6 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from cocoindex_code.config import Config, _detect_device
 
 
@@ -21,9 +19,10 @@ class TestDetectDevice:
                 assert _detect_device() == "cuda"
 
     def test_returns_cpu_when_cuda_unavailable(self) -> None:
-        os.environ.pop("COCOINDEX_CODE_DEVICE", None)
-        with patch("torch.cuda.is_available", return_value=False):
-            assert _detect_device() == "cpu"
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("COCOINDEX_CODE_DEVICE", None)
+            with patch("torch.cuda.is_available", return_value=False):
+                assert _detect_device() == "cpu"
 
     def test_env_var_overrides_auto_detection(self) -> None:
         with patch.dict(os.environ, {"COCOINDEX_CODE_DEVICE": "cpu"}):
@@ -31,9 +30,10 @@ class TestDetectDevice:
                 assert _detect_device() == "cpu"
 
     def test_returns_cpu_when_torch_missing(self) -> None:
-        os.environ.pop("COCOINDEX_CODE_DEVICE", None)
-        with patch.dict("sys.modules", {"torch": None}):
-            assert _detect_device() == "cpu"
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("COCOINDEX_CODE_DEVICE", None)
+            with patch.dict("sys.modules", {"torch": None}):
+                assert _detect_device() == "cpu"
 
 
 class TestConfigTrustRemoteCode:

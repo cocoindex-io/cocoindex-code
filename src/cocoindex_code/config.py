@@ -36,11 +36,24 @@ def _find_root_with_marker(start: Path, markers: list[str]) -> Path | None:
 
 
 def _discover_codebase_root() -> Path:
-    """Discover the codebase root by looking for common project markers."""
+    """Discover the codebase root directory.
+
+    Discovery order:
+    1. Find nearest parent with `.cocoindex_code` directory (re-anchor to previously-indexed tree)
+    2. Find nearest parent with any common project root marker
+    3. Fall back to current working directory
+    """
+    cwd = Path.cwd()
+
+    # First, look for existing .cocoindex_code directory
+    root = _find_root_with_marker(cwd, [".cocoindex_code"])
+    if root is not None:
+        return root
+
+    # Then, look for common project root markers
     markers = [".git", "pyproject.toml", "package.json", "Cargo.toml", "go.mod"]
-    start = Path.cwd()
-    root = _find_root_with_marker(start, markers)
-    return root if root is not None else start
+    root = _find_root_with_marker(cwd, markers)
+    return root if root is not None else cwd
 
 
 @dataclass
