@@ -80,3 +80,13 @@ class TestLocalEmbedderMemoKey:
         e1 = LocalEmbedder("model", device="cpu")
         e2 = LocalEmbedder("model", device="cuda")
         assert e1.__coco_memo_key__() != e2.__coco_memo_key__()
+
+    def test_different_trust_remote_code_have_different_keys(self) -> None:
+        e1 = LocalEmbedder("model", device="cpu", trust_remote_code=False)
+        e2 = LocalEmbedder("model", device="cpu", trust_remote_code=True)
+        assert e1.__coco_memo_key__() != e2.__coco_memo_key__()
+
+    def test_different_normalize_have_different_keys(self) -> None:
+        e1 = LocalEmbedder("model", device="cpu", normalize_embeddings=True)
+        e2 = LocalEmbedder("model", device="cpu", normalize_embeddings=False)
+        assert e1.__coco_memo_key__() != e2.__coco_memo_key__()

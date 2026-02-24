@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 import threading
-import typing
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cocoindex as coco
 import cocoindex.asyncio as coco_aio
@@ -11,7 +10,7 @@ import numpy as np
 from cocoindex.resources import schema as _schema
 from numpy.typing import NDArray
 
-if typing.TYPE_CHECKING:
+if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
 
@@ -76,7 +75,7 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
             texts,
             convert_to_numpy=True,
             normalize_embeddings=self._normalize_embeddings,
-        )
+        )  # type: ignore[assignment]
         return list(embeddings)
 
     @coco_aio.function(runner=coco.GPU, memo=True)
