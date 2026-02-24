@@ -1,46 +1,46 @@
-"""Configuration for CocoIndex Code MCP server."""
+"""Configuration management for cocoindex-code."""
+from __future__ import annotations
 
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
+_JINA_PREFIX = "jinaai/"
+_SBERT_PREFIX = "sbert/"
+_DEFAULT_MODEL = "sbert/jinaai/jina-embeddings-v2-base-code"
 
-def _find_root_with_marker(start_dir: Path, marker: str) -> Path | None:
-    """Find the nearest parent directory containing the given marker directory."""
-    current = start_dir.resolve()
-    while current != current.parent:
-        if (current / marker).is_dir():
+
+def _detect_device() -> str:
+    """Return best available compute device, respecting env var override."""
+    override = os.environ.get("COCOINDEX_CODE_DEVICE")
+    if override:
+        return override
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except (ImportError, ModuleNotFoundError):
+        return "cpu"
+
+
+def _find_root_with_marker(start: Path, markers: list[str]) -> Path | None:
+    """Walk up from start, return first directory containing any marker."""
+    current = start
+    while True:
+        if any((current / m).exists() for m in markers):
             return current
-        current = current.parent
-    # Check root directory too
-    if (current / marker).is_dir():
-        return current
-    return None
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
 
 
 def _discover_codebase_root() -> Path:
-    """
-    Discover the codebase root directory.
-
-    Discovery order:
-    1. Find nearest parent with `.cocoindex_code` directory
-    2. Find nearest parent with `.git` directory
-    3. Fall back to current working directory
-    """
-    cwd = Path.cwd()
-
-    # First, look for existing .cocoindex_code directory
-    root = _find_root_with_marker(cwd, ".cocoindex_code")
-    if root is not None:
-        return root
-
-    # Then, look for .git directory
-    root = _find_root_with_marker(cwd, ".git")
-    if root is not None:
-        return root
-
-    # Fall back to current working directory
-    return cwd
+    """Discover the codebase root by looking for common project markers."""
+    markers = [".git", "pyproject.toml", "package.json", "Cargo.toml", "go.mod"]
+    start = Path.cwd()
+    root = _find_root_with_marker(start, markers)
+    return root if root is not None else start
 
 
 @dataclass
@@ -50,9 +50,11 @@ class Config:
     codebase_root_path: Path
     embedding_model: str
     index_dir: Path
+    device: str
+    trust_remote_code: bool
 
     @classmethod
-    def from_env(cls) -> "Config":
+    def from_env(cls) -> Config:
         """Load configuration from environment variables."""
         # Get root path from env or discover it
         root_path_str = os.environ.get("COCOINDEX_CODE_ROOT_PATH")
@@ -65,16 +67,29 @@ class Config:
         # Prefix "sbert/" for SentenceTransformers models, otherwise LiteLLM.
         embedding_model = os.environ.get(
             "COCOINDEX_CODE_EMBEDDING_MODEL",
-            "sbert/sentence-transformers/all-MiniLM-L6-v2",
+            _DEFAULT_MODEL,
         )
 
         # Index directory is always under the root
         index_dir = root / ".cocoindex_code"
 
+        # Device: auto-detect CUDA or use env override
+        device = _detect_device()
+
+        # trust_remote_code: required for Jina models (custom pooling code)
+        model_path = (
+            embedding_model[len(_SBERT_PREFIX):]
+            if embedding_model.startswith(_SBERT_PREFIX)
+            else embedding_model
+        )
+        trust_remote_code = model_path.startswith(_JINA_PREFIX)
+
         return cls(
             codebase_root_path=root,
             embedding_model=embedding_model,
             index_dir=index_dir,
+            device=device,
+            trust_remote_code=trust_remote_code,
         )
 
     @property
