@@ -1,7 +1,7 @@
-"""Shared resources for CocoIndex Code."""
-
+"""Shared singletons: config, embedder, and CocoIndex lifecycle."""
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated
@@ -12,9 +12,12 @@ from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     from cocoindex.ops.litellm import LiteLLMEmbedder
-    from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
+
+    from .embedder import LocalEmbedder
 
 from .config import Config
+
+logger = logging.getLogger(__name__)
 
 SBERT_PREFIX = "sbert/"
 
@@ -22,15 +25,26 @@ SBERT_PREFIX = "sbert/"
 config = Config.from_env()
 
 # Initialize embedder at module level based on model prefix
-embedder: SentenceTransformerEmbedder | LiteLLMEmbedder
+embedder: LocalEmbedder | LiteLLMEmbedder
 if config.embedding_model.startswith(SBERT_PREFIX):
-    from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
+    from .embedder import LocalEmbedder
 
-    embedder = SentenceTransformerEmbedder(config.embedding_model[len(SBERT_PREFIX) :])
+    embedder = LocalEmbedder(
+        config.embedding_model[len(SBERT_PREFIX):],
+        device=config.device,
+        trust_remote_code=config.trust_remote_code,
+    )
+    logger.info(
+        "Embedding model: %s | device: %s | trust_remote_code: %s",
+        config.embedding_model,
+        config.device,
+        config.trust_remote_code,
+    )
 else:
     from cocoindex.ops.litellm import LiteLLMEmbedder
 
     embedder = LiteLLMEmbedder(config.embedding_model)
+    logger.info("Embedding model (LiteLLM): %s", config.embedding_model)
 
 # Context key for SQLite database (connection managed in lifespan)
 SQLITE_DB = coco.ContextKey[sqlite.SqliteDatabase]("sqlite_db")
