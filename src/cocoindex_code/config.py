@@ -101,7 +101,17 @@ class Config:
         )
 
         # Batch size for local embedding model
-        batch_size = int(os.environ.get("COCOINDEX_CODE_BATCH_SIZE", "16"))
+        _raw_batch_size = os.environ.get("COCOINDEX_CODE_BATCH_SIZE", "16")
+        try:
+            batch_size = int(_raw_batch_size)
+        except ValueError:
+            raise ValueError(
+                f"COCOINDEX_CODE_BATCH_SIZE must be a positive integer, got: {_raw_batch_size!r}"
+            ) from None
+        if batch_size <= 0:
+            raise ValueError(
+                f"COCOINDEX_CODE_BATCH_SIZE must be a positive integer, got: {batch_size}"
+            )
 
         return cls(
             codebase_root_path=root,
@@ -123,5 +133,5 @@ class Config:
         return self.index_dir / "cocoindex.db"
 
 
-# Module-level singleton — imported by shared.py and embedder.py
+# Module-level singleton — imported directly by all modules that need configuration
 config: Config = Config.from_env()
