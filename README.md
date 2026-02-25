@@ -99,6 +99,7 @@ Or use opencode.json:
 |----------|-------------|---------|
 | `COCOINDEX_CODE_ROOT_PATH` | Root path of the codebase | Auto-discovered (see below) |
 | `COCOINDEX_CODE_EMBEDDING_MODEL` | Embedding model (see below) | `sbert/sentence-transformers/all-MiniLM-L6-v2` |
+| `COCOINDEX_CODE_BATCH_SIZE` | Max batch size for local embedding model | `16` |
 
 
 ### Root Path Discovery
@@ -231,8 +232,18 @@ claude mcp add cocoindex-code \
 
 Any model supported by LiteLLM works — see the [full list of embedding providers](https://docs.litellm.ai/docs/embedding/supported_embedding).
 
+### GPU-optimised local model
 
+If you have a GPU, [`nomic-ai/CodeRankEmbed`](https://huggingface.co/nomic-ai/CodeRankEmbed) delivers significantly better code retrieval than the default model. It is 137M parameters, requires ~1 GB VRAM, and has an 8192-token context window.
 
+```bash
+claude mcp add cocoindex-code \
+  -e COCOINDEX_CODE_EMBEDDING_MODEL=sbert/nomic-ai/CodeRankEmbed \
+  -e COCOINDEX_CODE_BATCH_SIZE=16 \
+  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
+```
+
+> **Note:** Switching models requires re-indexing your codebase (the vector dimensions differ).
 
 ## MCP Tools
 
