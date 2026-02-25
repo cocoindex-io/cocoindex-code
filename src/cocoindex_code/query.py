@@ -2,8 +2,8 @@
 
 import cocoindex as coco
 
-from .schema import QueryResult
 from .config import config
+from .schema import QueryResult
 from .shared import SQLITE_DB, embedder
 
 
