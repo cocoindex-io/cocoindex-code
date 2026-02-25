@@ -7,9 +7,9 @@ import sqlite3
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from .config import config
 from .indexer import app as indexer_app
 from .query import query_codebase
-from .shared import config
 
 # Initialize MCP server
 mcp = FastMCP(

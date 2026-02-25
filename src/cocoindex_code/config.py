@@ -1,46 +1,59 @@
-"""Configuration for CocoIndex Code MCP server."""
+"""Configuration management for cocoindex-code."""
+
+from __future__ import annotations
 
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
+_SBERT_PREFIX = "sbert/"
+_DEFAULT_MODEL = "sbert/sentence-transformers/all-MiniLM-L6-v2"
 
-def _find_root_with_marker(start_dir: Path, marker: str) -> Path | None:
-    """Find the nearest parent directory containing the given marker directory."""
-    current = start_dir.resolve()
-    while current != current.parent:
-        if (current / marker).is_dir():
+
+def _detect_device() -> str:
+    """Return best available compute device, respecting env var override."""
+    override = os.environ.get("COCOINDEX_CODE_DEVICE")
+    if override:
+        return override
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except (ImportError, ModuleNotFoundError):
+        return "cpu"
+
+
+def _find_root_with_marker(start: Path, markers: list[str]) -> Path | None:
+    """Walk up from start, return first directory containing any marker."""
+    current = start
+    while True:
+        if any((current / m).exists() for m in markers):
             return current
-        current = current.parent
-    # Check root directory too
-    if (current / marker).is_dir():
-        return current
-    return None
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
 
 
 def _discover_codebase_root() -> Path:
-    """
-    Discover the codebase root directory.
+    """Discover the codebase root directory.
 
     Discovery order:
-    1. Find nearest parent with `.cocoindex_code` directory
-    2. Find nearest parent with `.git` directory
+    1. Find nearest parent with `.cocoindex_code` directory (re-anchor to previously-indexed tree)
+    2. Find nearest parent with any common project root marker
     3. Fall back to current working directory
     """
     cwd = Path.cwd()
 
     # First, look for existing .cocoindex_code directory
-    root = _find_root_with_marker(cwd, ".cocoindex_code")
+    root = _find_root_with_marker(cwd, [".cocoindex_code"])
     if root is not None:
         return root
 
-    # Then, look for .git directory
-    root = _find_root_with_marker(cwd, ".git")
-    if root is not None:
-        return root
-
-    # Fall back to current working directory
-    return cwd
+    # Then, look for common project root markers
+    markers = [".git", "pyproject.toml", "package.json", "Cargo.toml", "go.mod"]
+    root = _find_root_with_marker(cwd, markers)
+    return root if root is not None else cwd
 
 
 @dataclass
@@ -50,9 +63,12 @@ class Config:
     codebase_root_path: Path
     embedding_model: str
     index_dir: Path
+    device: str
+    trust_remote_code: bool
+    batch_size: int
 
     @classmethod
-    def from_env(cls) -> "Config":
+    def from_env(cls) -> Config:
         """Load configuration from environment variables."""
         # Get root path from env or discover it
         root_path_str = os.environ.get("COCOINDEX_CODE_ROOT_PATH")
@@ -65,16 +81,45 @@ class Config:
         # Prefix "sbert/" for SentenceTransformers models, otherwise LiteLLM.
         embedding_model = os.environ.get(
             "COCOINDEX_CODE_EMBEDDING_MODEL",
-            "sbert/sentence-transformers/all-MiniLM-L6-v2",
+            _DEFAULT_MODEL,
         )
 
         # Index directory is always under the root
         index_dir = root / ".cocoindex_code"
 
+        # Device: auto-detect CUDA or use env override
+        device = _detect_device()
+
+        # trust_remote_code: opt-in via env var only.
+        # sentence-transformers 5.x+ supports Jina models natively, so
+        # auto-enabling this for jinaai/ models causes failures with
+        # transformers 5.x (removed find_pruneable_heads_and_indices).
+        trust_remote_code = os.environ.get("COCOINDEX_CODE_TRUST_REMOTE_CODE", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+
+        # Batch size for local embedding model
+        _raw_batch_size = os.environ.get("COCOINDEX_CODE_BATCH_SIZE", "16")
+        try:
+            batch_size = int(_raw_batch_size)
+        except ValueError:
+            raise ValueError(
+                f"COCOINDEX_CODE_BATCH_SIZE must be a positive integer, got: {_raw_batch_size!r}"
+            ) from None
+        if batch_size <= 0:
+            raise ValueError(
+                f"COCOINDEX_CODE_BATCH_SIZE must be a positive integer, got: {batch_size}"
+            )
+
         return cls(
             codebase_root_path=root,
             embedding_model=embedding_model,
             index_dir=index_dir,
+            device=device,
+            trust_remote_code=trust_remote_code,
+            batch_size=batch_size,
         )
 
     @property
@@ -86,3 +131,7 @@ class Config:
     def cocoindex_db_path(self) -> Path:
         """Path to the CocoIndex state database."""
         return self.index_dir / "cocoindex.db"
+
+
+# Module-level singleton — imported directly by all modules that need configuration
+config: Config = Config.from_env()

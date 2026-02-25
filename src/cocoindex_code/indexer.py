@@ -7,7 +7,8 @@ from cocoindex.resources.chunk import Chunk
 from cocoindex.resources.file import PatternFilePathMatcher
 from cocoindex.resources.id import IdGenerator
 
-from .shared import SQLITE_DB, CodeChunk, config, embedder
+from .config import config
+from .shared import SQLITE_DB, CodeChunk, embedder
 
 # File patterns for supported languages
 INCLUDED_PATTERNS = [
@@ -55,9 +56,9 @@ EXCLUDED_PATTERNS = [
 ]
 
 # Chunking configuration
-CHUNK_SIZE = 1000
-MIN_CHUNK_SIZE = 300
-CHUNK_OVERLAP = 200
+CHUNK_SIZE = 4000
+MIN_CHUNK_SIZE = 500
+CHUNK_OVERLAP = 400
 
 # Chunking splitter (stateless, can be module-level)
 splitter = RecursiveSplitter()
