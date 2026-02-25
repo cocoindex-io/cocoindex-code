@@ -7,6 +7,8 @@ import numpy as np
 
 from cocoindex_code.embedder import LocalEmbedder
 
+_SENTENCE_TRANSFORMER = "sentence_transformers.SentenceTransformer"
+
 
 def _make_mock_model(dim: int = 768) -> MagicMock:
     """Return a mock SentenceTransformer with controllable output."""
@@ -21,7 +23,7 @@ class TestLocalEmbedderInit:
 
     def test_passes_device_to_sentence_transformer(self) -> None:
         mock_model = _make_mock_model()
-        with patch("sentence_transformers.SentenceTransformer", return_value=mock_model) as mock_cls:
+        with patch(_SENTENCE_TRANSFORMER, return_value=mock_model) as mock_cls:
             embedder = LocalEmbedder("some-model", device="cuda")
             embedder._get_model()
             mock_cls.assert_called_once_with(
@@ -30,7 +32,7 @@ class TestLocalEmbedderInit:
 
     def test_passes_trust_remote_code_to_sentence_transformer(self) -> None:
         mock_model = _make_mock_model()
-        with patch("sentence_transformers.SentenceTransformer", return_value=mock_model) as mock_cls:
+        with patch(_SENTENCE_TRANSFORMER, return_value=mock_model) as mock_cls:
             embedder = LocalEmbedder("jinaai/model", device="cpu", trust_remote_code=True)
             embedder._get_model()
             mock_cls.assert_called_once_with(
@@ -39,7 +41,7 @@ class TestLocalEmbedderInit:
 
     def test_lazy_loads_model_only_once(self) -> None:
         mock_model = _make_mock_model()
-        with patch("sentence_transformers.SentenceTransformer", return_value=mock_model) as mock_cls:
+        with patch(_SENTENCE_TRANSFORMER, return_value=mock_model) as mock_cls:
             embedder = LocalEmbedder("some-model", device="cpu")
             embedder._get_model()
             embedder._get_model()
