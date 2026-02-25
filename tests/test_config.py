@@ -1,4 +1,5 @@
 """Unit tests for Config loading."""
+
 from __future__ import annotations
 
 import os
