@@ -1,4 +1,5 @@
 """Shared singletons: config, embedder, and CocoIndex lifecycle."""
+
 from __future__ import annotations
 
 import logging
@@ -29,7 +30,7 @@ embedder: LocalEmbedder | LiteLLMEmbedder
 if config.embedding_model.startswith(SBERT_PREFIX):
     from .embedder import LocalEmbedder
 
-    _model_name = config.embedding_model[len(SBERT_PREFIX):]
+    _model_name = config.embedding_model[len(SBERT_PREFIX) :]
     # Models that define a "query" prompt for asymmetric retrieval.
     _QUERY_PROMPT_MODELS = {"nomic-ai/nomic-embed-code", "nomic-ai/CodeRankEmbed"}
     _query_prompt_name: str | None = "query" if _model_name in _QUERY_PROMPT_MODELS else None
@@ -46,7 +47,7 @@ if config.embedding_model.startswith(SBERT_PREFIX):
         "Embedding model: %s | device: %s | trust_remote_code: %s",
         config.embedding_model,
         config.device,
-        config.trust_remote_code,
+        _trust,
     )
 else:
     from cocoindex.ops.litellm import LiteLLMEmbedder
