@@ -29,11 +29,13 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
         device: str = "cpu",
         trust_remote_code: bool = False,
         normalize_embeddings: bool = True,
+        query_prompt_name: str | None = None,
     ) -> None:
         self._model_name_or_path = model_name_or_path
         self._device = device
         self._trust_remote_code = trust_remote_code
         self._normalize_embeddings = normalize_embeddings
+        self._query_prompt_name = query_prompt_name
         self._model: SentenceTransformer | None = None
         self._lock = threading.Lock()
 
@@ -43,6 +45,7 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
             "device": self._device,
             "trust_remote_code": self._trust_remote_code,
             "normalize_embeddings": self._normalize_embeddings,
+            "query_prompt_name": self._query_prompt_name,
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -50,6 +53,7 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
         self._device = state["device"]
         self._trust_remote_code = state["trust_remote_code"]
         self._normalize_embeddings = state["normalize_embeddings"]
+        self._query_prompt_name = state.get("query_prompt_name")
         self._model = None
         self._lock = threading.Lock()
 
@@ -67,7 +71,7 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
                     )
         return self._model
 
-    @coco_aio.function(batching=True, runner=coco.GPU, memo=True, max_batch_size=64)
+    @coco_aio.function(batching=True, runner=coco.GPU, memo=True, max_batch_size=16)
     def embed(self, texts: list[str]) -> list[NDArray[np.float32]]:
         """Embed a batch of texts into float32 vectors."""
         model = self._get_model()
@@ -75,6 +79,21 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
             texts,
             convert_to_numpy=True,
             normalize_embeddings=self._normalize_embeddings,
+        )  # type: ignore[assignment]
+        return list(embeddings)
+
+    @coco_aio.function(batching=True, runner=coco.GPU, memo=True, max_batch_size=16)
+    def embed_query(self, texts: list[str]) -> list[NDArray[np.float32]]:
+        """Embed query texts, applying query_prompt_name if configured."""
+        model = self._get_model()
+        kwargs: dict[str, object] = {
+            "convert_to_numpy": True,
+            "normalize_embeddings": self._normalize_embeddings,
+        }
+        if self._query_prompt_name is not None:
+            kwargs["prompt_name"] = self._query_prompt_name
+        embeddings: NDArray[np.float32] = model.encode(
+            texts, **kwargs
         )  # type: ignore[assignment]
         return list(embeddings)
 
@@ -95,4 +114,5 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
             self._device,
             self._trust_remote_code,
             self._normalize_embeddings,
+            self._query_prompt_name,
         )

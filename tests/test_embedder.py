@@ -56,7 +56,7 @@ class TestLocalEmbedderPickle:
         state = embedder.__getstate__()
         # Verify the actual SentenceTransformer model object is not in state (only primitives)
         assert "_model" not in state
-        assert all(isinstance(v, (str, bool)) for v in state.values())
+        assert all(isinstance(v, (str, bool)) for v in state.values() if v is not None)
         assert state["model_name_or_path"] == "some-model"
         assert state["device"] == "cuda"
         assert state["trust_remote_code"] is True

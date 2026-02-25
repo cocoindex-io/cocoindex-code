@@ -5,9 +5,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-_JINA_PREFIX = "jinaai/"  # kept for reference, not used in auto-detection = "jinaai/"
 _SBERT_PREFIX = "sbert/"
-_DEFAULT_MODEL = "sbert/jinaai/jina-embeddings-v2-base-code"
+_DEFAULT_MODEL = "sbert/nomic-ai/CodeRankEmbed"
 
 
 def _detect_device() -> str:

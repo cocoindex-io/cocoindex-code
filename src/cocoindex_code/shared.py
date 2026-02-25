@@ -29,10 +29,18 @@ embedder: LocalEmbedder | LiteLLMEmbedder
 if config.embedding_model.startswith(SBERT_PREFIX):
     from .embedder import LocalEmbedder
 
+    _model_name = config.embedding_model[len(SBERT_PREFIX):]
+    # Models that define a "query" prompt for asymmetric retrieval.
+    _QUERY_PROMPT_MODELS = {"nomic-ai/nomic-embed-code", "nomic-ai/CodeRankEmbed"}
+    _query_prompt_name: str | None = "query" if _model_name in _QUERY_PROMPT_MODELS else None
+    # Models whose custom remote code is known-compatible with transformers 5.x.
+    _KNOWN_REMOTE_CODE_MODELS = {"nomic-ai/CodeRankEmbed"}
+    _trust = config.trust_remote_code or _model_name in _KNOWN_REMOTE_CODE_MODELS
     embedder = LocalEmbedder(
-        config.embedding_model[len(SBERT_PREFIX):],
+        _model_name,
         device=config.device,
-        trust_remote_code=config.trust_remote_code,
+        trust_remote_code=_trust,
+        query_prompt_name=_query_prompt_name,
     )
     logger.info(
         "Embedding model: %s | device: %s | trust_remote_code: %s",

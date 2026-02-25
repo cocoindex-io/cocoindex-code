@@ -70,11 +70,11 @@ class TestConfigTrustRemoteCode:
             config = Config.from_env()
             assert config.trust_remote_code is True
 
-    def test_default_model_is_jina(self, tmp_path: Path) -> None:
+    def test_default_model_is_coderank(self, tmp_path: Path) -> None:
         with patch.dict(
             os.environ,
             {"COCOINDEX_CODE_ROOT_PATH": str(tmp_path)},
         ):
             os.environ.pop("COCOINDEX_CODE_EMBEDDING_MODEL", None)
             config = Config.from_env()
-            assert "jinaai" in config.embedding_model
+            assert "nomic-ai/CodeRankEmbed" in config.embedding_model

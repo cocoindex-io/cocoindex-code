@@ -25,8 +25,13 @@ async def query_codebase(
     # Get the database connection from CocoIndex environment
     db = coco.default_env().get_context(SQLITE_DB)
 
-    # Generate query embedding
-    query_embedding = await embedder.embed(query)
+    # Generate query embedding — use embed_query if available (supports asymmetric
+    # prompting for models like nomic-embed-code that use different prefixes for
+    # queries vs indexed documents).
+    if hasattr(embedder, "embed_query"):
+        query_embedding = await embedder.embed_query(query)  # type: ignore[union-attr]
+    else:
+        query_embedding = await embedder.embed(query)
 
     # Convert to bytes for sqlite-vec (float32)
     embedding_bytes = query_embedding.astype("float32").tobytes()
