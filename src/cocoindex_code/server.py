@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from .indexer import app as indexer_app
 from .query import query_codebase
-from .shared import config
+from .config import config
 
 # Initialize MCP server
 mcp = FastMCP(

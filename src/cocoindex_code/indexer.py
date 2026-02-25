@@ -7,7 +7,8 @@ from cocoindex.resources.chunk import Chunk
 from cocoindex.resources.file import PatternFilePathMatcher
 from cocoindex.resources.id import IdGenerator
 
-from .shared import SQLITE_DB, CodeChunk, config, embedder
+from .config import config
+from .shared import SQLITE_DB, CodeChunk, embedder
 
 # File patterns for supported languages
 INCLUDED_PATTERNS = [

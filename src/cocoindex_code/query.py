@@ -3,7 +3,8 @@
 import cocoindex as coco
 
 from .schema import QueryResult
-from .shared import SQLITE_DB, config, embedder
+from .config import config
+from .shared import SQLITE_DB, embedder
 
 
 async def query_codebase(
