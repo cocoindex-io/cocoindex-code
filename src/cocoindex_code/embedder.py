@@ -11,10 +11,10 @@ import numpy as np
 from cocoindex.resources import schema as _schema
 from numpy.typing import NDArray
 
+from .config import config as _config
+
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
-
-from .config import config as _config
 
 
 class LocalEmbedder(_schema.VectorSchemaProvider):
