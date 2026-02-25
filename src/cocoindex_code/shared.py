@@ -16,14 +16,11 @@ if TYPE_CHECKING:
 
     from .embedder import LocalEmbedder
 
-from .config import Config
+from .config import config
 
 logger = logging.getLogger(__name__)
 
 SBERT_PREFIX = "sbert/"
-
-# Load configuration at module level
-config = Config.from_env()
 
 # Initialize embedder at module level based on model prefix
 embedder: LocalEmbedder | LiteLLMEmbedder
