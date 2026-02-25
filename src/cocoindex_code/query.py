@@ -29,7 +29,7 @@ async def query_codebase(
     # prompting for models like nomic-embed-code that use different prefixes for
     # queries vs indexed documents).
     if hasattr(embedder, "embed_query"):
-        query_embedding = await embedder.embed_query(query)  # type: ignore[union-attr]
+        query_embedding = await embedder.embed_query(query)
     else:
         query_embedding = await embedder.embed(query)
 

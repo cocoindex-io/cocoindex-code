@@ -1,4 +1,5 @@
 """Unit tests for LocalEmbedder."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -26,18 +27,14 @@ class TestLocalEmbedderInit:
         with patch(_SENTENCE_TRANSFORMER, return_value=mock_model) as mock_cls:
             embedder = LocalEmbedder("some-model", device="cuda")
             embedder._get_model()
-            mock_cls.assert_called_once_with(
-                "some-model", device="cuda", trust_remote_code=False
-            )
+            mock_cls.assert_called_once_with("some-model", device="cuda", trust_remote_code=False)
 
     def test_passes_trust_remote_code_to_sentence_transformer(self) -> None:
         mock_model = _make_mock_model()
         with patch(_SENTENCE_TRANSFORMER, return_value=mock_model) as mock_cls:
             embedder = LocalEmbedder("jinaai/model", device="cpu", trust_remote_code=True)
             embedder._get_model()
-            mock_cls.assert_called_once_with(
-                "jinaai/model", device="cpu", trust_remote_code=True
-            )
+            mock_cls.assert_called_once_with("jinaai/model", device="cpu", trust_remote_code=True)
 
     def test_lazy_loads_model_only_once(self) -> None:
         mock_model = _make_mock_model()
@@ -56,7 +53,7 @@ class TestLocalEmbedderPickle:
         state = embedder.__getstate__()
         # Verify the actual SentenceTransformer model object is not in state (only primitives)
         assert "_model" not in state
-        assert all(isinstance(v, (str, bool)) for v in state.values() if v is not None)
+        assert all(isinstance(v, str | bool) for v in state.values() if v is not None)
         assert state["model_name_or_path"] == "some-model"
         assert state["device"] == "cuda"
         assert state["trust_remote_code"] is True

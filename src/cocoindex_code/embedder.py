@@ -1,4 +1,5 @@
 """Local SentenceTransformer embedder with device and trust_remote_code support."""
+
 from __future__ import annotations
 
 import threading
@@ -86,14 +87,11 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
     def embed_query(self, texts: list[str]) -> list[NDArray[np.float32]]:
         """Embed query texts, applying query_prompt_name if configured."""
         model = self._get_model()
-        kwargs: dict[str, object] = {
-            "convert_to_numpy": True,
-            "normalize_embeddings": self._normalize_embeddings,
-        }
-        if self._query_prompt_name is not None:
-            kwargs["prompt_name"] = self._query_prompt_name
         embeddings: NDArray[np.float32] = model.encode(
-            texts, **kwargs
+            texts,
+            prompt_name=self._query_prompt_name,
+            convert_to_numpy=True,
+            normalize_embeddings=self._normalize_embeddings,
         )  # type: ignore[assignment]
         return list(embeddings)
 
