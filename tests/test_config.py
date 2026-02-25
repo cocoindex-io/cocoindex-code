@@ -37,29 +37,38 @@ class TestDetectDevice:
 
 
 class TestConfigTrustRemoteCode:
-    """Tests for trust_remote_code auto-detection."""
+    """Tests for trust_remote_code env var control."""
 
-    def test_true_for_jinaai_models(self, tmp_path: Path) -> None:
+    def test_false_by_default(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {"COCOINDEX_CODE_ROOT_PATH": str(tmp_path)},
+        ):
+            os.environ.pop("COCOINDEX_CODE_TRUST_REMOTE_CODE", None)
+            config = Config.from_env()
+            assert config.trust_remote_code is False
+
+    def test_true_when_env_var_set_to_true(self, tmp_path: Path) -> None:
         with patch.dict(
             os.environ,
             {
                 "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
-                "COCOINDEX_CODE_EMBEDDING_MODEL": "sbert/jinaai/jina-embeddings-v2-base-code",
+                "COCOINDEX_CODE_TRUST_REMOTE_CODE": "true",
             },
         ):
             config = Config.from_env()
             assert config.trust_remote_code is True
 
-    def test_false_for_non_jinaai_models(self, tmp_path: Path) -> None:
+    def test_true_when_env_var_set_to_1(self, tmp_path: Path) -> None:
         with patch.dict(
             os.environ,
             {
                 "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
-                "COCOINDEX_CODE_EMBEDDING_MODEL": "sbert/sentence-transformers/all-MiniLM-L6-v2",
+                "COCOINDEX_CODE_TRUST_REMOTE_CODE": "1",
             },
         ):
             config = Config.from_env()
-            assert config.trust_remote_code is False
+            assert config.trust_remote_code is True
 
     def test_default_model_is_jina(self, tmp_path: Path) -> None:
         with patch.dict(
@@ -69,4 +78,3 @@ class TestConfigTrustRemoteCode:
             os.environ.pop("COCOINDEX_CODE_EMBEDDING_MODEL", None)
             config = Config.from_env()
             assert "jinaai" in config.embedding_model
-            assert config.trust_remote_code is True

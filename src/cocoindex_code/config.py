@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-_JINA_PREFIX = "jinaai/"
+_JINA_PREFIX = "jinaai/"  # kept for reference, not used in auto-detection = "jinaai/"
 _SBERT_PREFIX = "sbert/"
 _DEFAULT_MODEL = "sbert/jinaai/jina-embeddings-v2-base-code"
 
@@ -89,13 +89,15 @@ class Config:
         # Device: auto-detect CUDA or use env override
         device = _detect_device()
 
-        # trust_remote_code: required for Jina models (custom pooling code)
-        model_path = (
-            embedding_model[len(_SBERT_PREFIX):]
-            if embedding_model.startswith(_SBERT_PREFIX)
-            else embedding_model
+        # trust_remote_code: opt-in via env var only.
+        # sentence-transformers 5.x+ supports Jina models natively, so
+        # auto-enabling this for jinaai/ models causes failures with
+        # transformers 5.x (removed find_pruneable_heads_and_indices).
+        trust_remote_code = os.environ.get("COCOINDEX_CODE_TRUST_REMOTE_CODE", "").lower() in (
+            "1",
+            "true",
+            "yes",
         )
-        trust_remote_code = model_path.startswith(_JINA_PREFIX)
 
         return cls(
             codebase_root_path=root,
