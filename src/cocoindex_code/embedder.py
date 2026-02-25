@@ -14,6 +14,8 @@ from numpy.typing import NDArray
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
+from .config import config as _config
+
 
 class LocalEmbedder(_schema.VectorSchemaProvider):
     """SentenceTransformer embedder with explicit device and trust_remote_code support.
@@ -72,7 +74,7 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
                     )
         return self._model
 
-    @coco_aio.function(batching=True, runner=coco.GPU, memo=True, max_batch_size=16)
+    @coco_aio.function(batching=True, runner=coco.GPU, memo=True, max_batch_size=_config.batch_size)
     def embed(self, texts: list[str]) -> list[NDArray[np.float32]]:
         """Embed a batch of texts into float32 vectors."""
         model = self._get_model()
@@ -83,7 +85,7 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
         )  # type: ignore[assignment]
         return list(embeddings)
 
-    @coco_aio.function(batching=True, runner=coco.GPU, memo=True, max_batch_size=16)
+    @coco_aio.function(batching=True, runner=coco.GPU, memo=True, max_batch_size=_config.batch_size)
     def embed_query(self, texts: list[str]) -> list[NDArray[np.float32]]:
         """Embed query texts, applying query_prompt_name if configured."""
         model = self._get_model()
