@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _SBERT_PREFIX = "sbert/"
-_DEFAULT_MODEL = "sbert/nomic-ai/CodeRankEmbed"
+_DEFAULT_MODEL = "sbert/sentence-transformers/all-MiniLM-L6-v2"
 
 
 def _detect_device() -> str:
@@ -65,6 +65,7 @@ class Config:
     index_dir: Path
     device: str
     trust_remote_code: bool
+    batch_size: int
 
     @classmethod
     def from_env(cls) -> Config:
@@ -99,12 +100,16 @@ class Config:
             "yes",
         )
 
+        # Batch size for local embedding model
+        batch_size = int(os.environ.get("COCOINDEX_CODE_BATCH_SIZE", "16"))
+
         return cls(
             codebase_root_path=root,
             embedding_model=embedding_model,
             index_dir=index_dir,
             device=device,
             trust_remote_code=trust_remote_code,
+            batch_size=batch_size,
         )
 
     @property
@@ -116,3 +121,7 @@ class Config:
     def cocoindex_db_path(self) -> Path:
         """Path to the CocoIndex state database."""
         return self.index_dir / "cocoindex.db"
+
+
+# Module-level singleton — imported by shared.py and embedder.py
+config: Config = Config.from_env()
