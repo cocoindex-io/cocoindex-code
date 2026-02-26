@@ -23,7 +23,8 @@ async def query_codebase(
         )
 
     # Get the database connection from CocoIndex environment
-    db = coco.default_env().get_context(SQLITE_DB)
+    coco_env = await coco.default_env()
+    db = coco_env.get_context(SQLITE_DB)
 
     # Generate query embedding
     query_embedding = await embedder.embed(query)

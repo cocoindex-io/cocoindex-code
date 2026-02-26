@@ -1,6 +1,6 @@
 """CocoIndex app for indexing codebases."""
 
-import cocoindex.asyncio as coco_aio
+import cocoindex as coco
 from cocoindex.connectors import localfs, sqlite
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
 from cocoindex.resources.chunk import Chunk
@@ -63,7 +63,7 @@ CHUNK_OVERLAP = 200
 splitter = RecursiveSplitter()
 
 
-@coco_aio.function(memo=True)
+@coco.fn(memo=True)
 async def process_file(
     file: localfs.AsyncFile,
     table: sqlite.TableTarget[CodeChunk],
@@ -108,13 +108,13 @@ async def process_file(
             )
         )
 
-    await coco_aio.map(process, chunks)
+    await coco.map(process, chunks)
 
 
-@coco_aio.function
+@coco.fn
 async def app_main() -> None:
     """Main indexing function - walks files and processes each."""
-    db = coco_aio.use_context(SQLITE_DB)
+    db = coco.use_context(SQLITE_DB)
 
     # Declare the table target for storing embeddings
     table = await db.mount_table_target(
@@ -136,12 +136,12 @@ async def app_main() -> None:
     )
 
     # Process each file
-    with coco_aio.component_subpath(coco_aio.Symbol("process_file")):
-        await coco_aio.mount_each(process_file, files.items(), table)
+    with coco.component_subpath(coco.Symbol("process_file")):
+        await coco.mount_each(process_file, files.items(), table)
 
 
 # Create the app
-app = coco_aio.App(
-    coco_aio.AppConfig(name="CocoIndexCode"),
+app = coco.App(
+    coco.AppConfig(name="CocoIndexCode"),
     app_main,
 )
