@@ -6,7 +6,6 @@ import threading
 from typing import TYPE_CHECKING, Any
 
 import cocoindex as coco
-import cocoindex.asyncio as coco_aio
 import numpy as np
 from cocoindex.resources import schema as _schema
 from numpy.typing import NDArray
@@ -74,7 +73,7 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
                     )
         return self._model
 
-    @coco_aio.function(batching=True, runner=coco.GPU, memo=True, max_batch_size=_config.batch_size)
+    @coco.fn.as_async(batching=True, runner=coco.GPU, memo=True, max_batch_size=_config.batch_size)
     def embed(self, texts: list[str]) -> list[NDArray[np.float32]]:
         """Embed a batch of texts into float32 vectors."""
         model = self._get_model()
@@ -85,7 +84,7 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
         )  # type: ignore[assignment]
         return list(embeddings)
 
-    @coco_aio.function(batching=True, runner=coco.GPU, memo=True, max_batch_size=_config.batch_size)
+    @coco.fn.as_async(batching=True, runner=coco.GPU, memo=True, max_batch_size=_config.batch_size)
     def embed_query(self, texts: list[str]) -> list[NDArray[np.float32]]:
         """Embed query texts, applying query_prompt_name if configured."""
         model = self._get_model()
@@ -97,7 +96,7 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
         )  # type: ignore[assignment]
         return list(embeddings)
 
-    @coco_aio.function(runner=coco.GPU, memo=True)
+    @coco.fn.as_async(runner=coco.GPU, memo=True)
     def __coco_vector_schema__(self) -> _schema.VectorSchema:
         """Return the vector schema (dimension + dtype) for this model."""
         model = self._get_model()

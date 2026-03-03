@@ -51,7 +51,7 @@ class TestLocalEmbedderInit:
             embedder._get_model()
             mock_model.encode.reset_mock()
             # Call the underlying method directly, bypassing the CocoIndex batching decorator.
-            LocalEmbedder.embed_query.__wrapped__(embedder, ["find functions that embed text"])
+            LocalEmbedder.embed_query.__wrapped__(embedder, ["find functions that embed text"])  # type: ignore
             _, kwargs = mock_model.encode.call_args
             assert kwargs.get("prompt_name") == "query"
 
@@ -61,7 +61,7 @@ class TestLocalEmbedderInit:
             embedder = LocalEmbedder("some-model", device="cpu", query_prompt_name=None)
             embedder._get_model()
             mock_model.encode.reset_mock()
-            LocalEmbedder.embed_query.__wrapped__(embedder, ["some query"])
+            LocalEmbedder.embed_query.__wrapped__(embedder, ["some query"])  # type: ignore
             _, kwargs = mock_model.encode.call_args
             assert kwargs.get("prompt_name") is None
 
