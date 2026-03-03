@@ -5,7 +5,7 @@ import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-import cocoindex.asyncio as coco_aio
+import cocoindex as coco
 import pytest
 import pytest_asyncio
 
@@ -29,5 +29,5 @@ async def coco_runtime() -> AsyncIterator[None]:
     Uses session-scoped event loop to ensure CocoIndex environment
     persists across all tests.
     """
-    async with coco_aio.runtime():
+    async with coco.runtime():
         yield
