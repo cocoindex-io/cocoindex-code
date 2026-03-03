@@ -40,22 +40,20 @@ A super light-weight, effective embedded MCP **(AST-based)** that understand and
 
 ## Get Started - zero config, let's go!!
 
-Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/) if you don't have it.
+Requires Python 3 (`pip3` comes pre-installed with Python).
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+pip3 install -U cocoindex-code
 ```
 
 ### Claude
 ```bash
-claude mcp add cocoindex-code \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a22" cocoindex-code@latest
+claude mcp add cocoindex-code -- cocoindex-code
 ```
 
 ### Codex
 ```bash
-codex mcp add cocoindex-code \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a22" cocoindex-code@latest
+codex mcp add cocoindex-code -- cocoindex-code
 ```
 
 ### OpenCode
@@ -64,7 +62,7 @@ opencode mcp add
 ```
 Enter MCP server name: `cocoindex-code`
 Select MCP server type: `local`
-Enter command to run: `uvx --prerelease=explicit --with cocoindex>=1.0.0a16 cocoindex-code@latest`
+Enter command to run: `cocoindex-code`
 
 Or use opencode.json:
 ```
@@ -74,16 +72,14 @@ Or use opencode.json:
     "cocoindex-code": {
       "type": "local",
       "command": [
-        "uvx",
-        "--prerelease=explicit",
-        "--with",
-        "cocoindex>=1.0.0a16",
-        "cocoindex-code@latest"
+        "cocoindex-code"
       ]
     }
   }
 }
 ```
+
+Optionally, you can run `cocoindex-code index` to create or update the index. Without running it, the MCP server will automatically build and keep the index up-to-date in the background.
 
 ## Features
 - **Semantic Code Search**: Find relevant code using natural language queries when grep doesn't work well, and save tokens immediately.
@@ -123,7 +119,7 @@ Set `COCOINDEX_CODE_EMBEDDING_MODEL` to any [LiteLLM-supported model](https://do
 ```bash
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=ollama/nomic-embed-text \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a22" cocoindex-code@latest
+  -- cocoindex-code
 ```
 
 Set `OLLAMA_API_BASE` if your Ollama server is not at `http://localhost:11434`.
@@ -137,7 +133,7 @@ Set `OLLAMA_API_BASE` if your Ollama server is not at `http://localhost:11434`.
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=text-embedding-3-small \
   -e OPENAI_API_KEY=your-api-key \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a22" cocoindex-code@latest
+  -- cocoindex-code
 ```
 
 </details>
@@ -151,7 +147,7 @@ claude mcp add cocoindex-code \
   -e AZURE_API_KEY=your-api-key \
   -e AZURE_API_BASE=https://your-resource.openai.azure.com \
   -e AZURE_API_VERSION=2024-06-01 \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a22" cocoindex-code@latest
+  -- cocoindex-code
 ```
 
 </details>
@@ -163,7 +159,7 @@ claude mcp add cocoindex-code \
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=gemini/text-embedding-004 \
   -e GEMINI_API_KEY=your-api-key \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a22" cocoindex-code@latest
+  -- cocoindex-code
 ```
 
 </details>
@@ -175,7 +171,7 @@ claude mcp add cocoindex-code \
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=mistral/mistral-embed \
   -e MISTRAL_API_KEY=your-api-key \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a22" cocoindex-code@latest
+  -- cocoindex-code
 ```
 
 </details>
@@ -187,7 +183,7 @@ claude mcp add cocoindex-code \
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=voyage/voyage-code-3 \
   -e VOYAGE_API_KEY=your-api-key \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a22" cocoindex-code@latest
+  -- cocoindex-code
 ```
 
 </details>
@@ -199,7 +195,7 @@ claude mcp add cocoindex-code \
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=cohere/embed-english-v3.0 \
   -e COHERE_API_KEY=your-api-key \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a22" cocoindex-code@latest
+  -- cocoindex-code
 ```
 
 </details>
@@ -213,7 +209,7 @@ claude mcp add cocoindex-code \
   -e AWS_ACCESS_KEY_ID=your-access-key \
   -e AWS_SECRET_ACCESS_KEY=your-secret-key \
   -e AWS_REGION_NAME=us-east-1 \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a22" cocoindex-code@latest
+  -- cocoindex-code
 ```
 
 </details>
@@ -225,7 +221,7 @@ claude mcp add cocoindex-code \
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=nebius/BAAI/bge-en-icl \
   -e NEBIUS_API_KEY=your-api-key \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a22" cocoindex-code@latest
+  -- cocoindex-code
 ```
 
 </details>
@@ -240,7 +236,7 @@ If you have a GPU, [`nomic-ai/CodeRankEmbed`](https://huggingface.co/nomic-ai/Co
 claude mcp add cocoindex-code \
   -e COCOINDEX_CODE_EMBEDDING_MODEL=sbert/nomic-ai/CodeRankEmbed \
   -e COCOINDEX_CODE_BATCH_SIZE=16 \
-  -- uvx --prerelease=explicit --with "cocoindex>=1.0.0a18" cocoindex-code@latest
+  -- cocoindex-code
 ```
 
 > **Note:** Switching models requires re-indexing your codebase (the vector dimensions differ).
@@ -314,6 +310,24 @@ Common generated directories are automatically excluded:
 - `target/`
 - `dist/`
 - `vendor/` (Go vendored dependencies, matched by domain-based child paths)
+
+## Troubleshooting
+
+### `sqlite3.Connection object has no attribute enable_load_extension`
+
+Some Python installations (e.g. the one pre-installed on macOS) ship with a SQLite library that doesn't enable extensions.
+
+**macOS fix:** Install Python through [Homebrew](https://brew.sh/):
+
+```bash
+brew install python3
+```
+
+Then re-install cocoindex-code with the Homebrew Python:
+
+```bash
+pip3 install -U cocoindex-code
+```
 
 ## Large codebase / Enterprise
 [CocoIndex](https://github.com/cocoindex-io/cocoindex) is an ultra effecient indexing engine that also works on large codebase at scale on XXX G for enterprises. In enterprise scenarios it is a lot more effecient to do index share with teammates when there are large repo or many repos. We also have advanced features like branch dedupe etc designed for enterprise users.
