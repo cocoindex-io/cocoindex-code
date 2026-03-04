@@ -2,14 +2,15 @@
 
 import argparse
 import asyncio
-import sqlite3
 
+import cocoindex as coco
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from .config import config
 from .indexer import app as indexer_app
 from .query import query_codebase
+from .shared import SQLITE_DB
 
 # Initialize MCP server
 mcp = FastMCP(
@@ -172,35 +173,36 @@ async def _async_serve() -> None:
 async def _async_index() -> None:
     """Async entry point for the index command."""
     await indexer_app.update(report_to_stdout=True)
-    _print_index_stats()
+    await _print_index_stats()
 
 
-def _print_index_stats() -> None:
+async def _print_index_stats() -> None:
     """Print index statistics from the database."""
     db_path = config.target_sqlite_db_path
     if not db_path.exists():
         print("No index database found.")
         return
 
-    conn = sqlite3.connect(str(db_path))
-    try:
-        total_chunks = conn.execute("SELECT COUNT(*) FROM code_chunks").fetchone()[0]
-        total_files = conn.execute("SELECT COUNT(DISTINCT file_path) FROM code_chunks").fetchone()[
-            0
-        ]
+    coco_env = await coco.default_env()
+    db = coco_env.get_context(SQLITE_DB)
+
+    with db.value.readonly() as conn:
+        total_chunks = conn.execute("SELECT COUNT(*) FROM code_chunks_vec").fetchone()[0]
+        total_files = conn.execute(
+            "SELECT COUNT(DISTINCT file_path) FROM code_chunks_vec"
+        ).fetchone()[0]
         langs = conn.execute(
-            "SELECT language, COUNT(*) as cnt FROM code_chunks GROUP BY language ORDER BY cnt DESC"
+            "SELECT language, COUNT(*) as cnt FROM code_chunks_vec"
+            " GROUP BY language ORDER BY cnt DESC"
         ).fetchall()
 
-        print("\nIndex stats:")
-        print(f"  Chunks: {total_chunks}")
-        print(f"  Files:  {total_files}")
-        if langs:
-            print("  Languages:")
-            for lang, count in langs:
-                print(f"    {lang}: {count} chunks")
-    finally:
-        conn.close()
+    print("\nIndex stats:")
+    print(f"  Chunks: {total_chunks}")
+    print(f"  Files:  {total_files}")
+    if langs:
+        print("  Languages:")
+        for lang, count in langs:
+            print(f"    {lang}: {count} chunks")
 
 
 def main() -> None:

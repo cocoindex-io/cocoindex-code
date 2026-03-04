@@ -2,6 +2,7 @@
 
 import cocoindex as coco
 from cocoindex.connectors import localfs, sqlite
+from cocoindex.connectors.sqlite import Vec0TableDef
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
 from cocoindex.resources.chunk import Chunk
 from cocoindex.resources.file import PatternFilePathMatcher
@@ -118,10 +119,13 @@ async def app_main() -> None:
 
     # Declare the table target for storing embeddings
     table = await db.mount_table_target(
-        table_name="code_chunks",
+        table_name="code_chunks_vec",
         table_schema=await sqlite.TableSchema.from_class(
             CodeChunk,
             primary_key=["id"],
+        ),
+        virtual_table_def=Vec0TableDef(
+            auxiliary_columns=["file_path", "language", "content", "start_line", "end_line"],
         ),
     )
 
