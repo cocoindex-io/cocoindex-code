@@ -7,8 +7,7 @@ from cocoindex.resources.chunk import Chunk
 from cocoindex.resources.file import PatternFilePathMatcher
 from cocoindex.resources.id import IdGenerator
 
-from .config import config
-from .shared import SQLITE_DB, CodeChunk, embedder
+from .shared import CODEBASE_DIR, SQLITE_DB, CodeChunk, embedder
 
 # File patterns for supported languages
 INCLUDED_PATTERNS = [
@@ -128,7 +127,7 @@ async def app_main() -> None:
 
     # Walk source directory
     files = localfs.walk_dir(
-        config.codebase_root_path,
+        coco.use_context(CODEBASE_DIR),
         recursive=True,
         path_matcher=PatternFilePathMatcher(
             included_patterns=INCLUDED_PATTERNS,

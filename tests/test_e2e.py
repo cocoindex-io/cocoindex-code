@@ -365,9 +365,9 @@ class TestSearchFilters:
         setup_multi_lang_codebase(test_codebase_root)
         await app.update(report_to_stdout=False)
 
-        results = await query_codebase("function", limit=50, paths=["*/lib/*"])
+        results = await query_codebase("function", limit=50, paths=["lib/*"])
         assert len(results) > 0
-        assert all("/lib/" in r.file_path for r in results)
+        assert all(r.file_path.startswith("lib/") for r in results)
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_filter_by_file_path_wildcard_extension(
@@ -390,12 +390,10 @@ class TestSearchFilters:
         await app.update(report_to_stdout=False)
 
         # Filter for Python files under lib/
-        results = await query_codebase(
-            "function", limit=50, languages=["python"], paths=["*/lib/*"]
-        )
+        results = await query_codebase("function", limit=50, languages=["python"], paths=["lib/*"])
         assert len(results) > 0
         assert all(r.language == "python" for r in results)
-        assert all("/lib/" in r.file_path for r in results)
+        assert all(r.file_path.startswith("lib/") for r in results)
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_no_filter_returns_all_languages(

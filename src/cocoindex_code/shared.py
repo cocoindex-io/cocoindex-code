@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated
 
 import cocoindex as coco
 from cocoindex.connectors import sqlite
+from cocoindex.connectors.localfs import FilePath, register_base_dir
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
@@ -54,6 +55,8 @@ else:
 
 # Context key for SQLite database (connection managed in lifespan)
 SQLITE_DB = coco.ContextKey[sqlite.SqliteDatabase]("sqlite_db")
+# Context key for codebase root directory (provided in lifespan)
+CODEBASE_DIR = coco.ContextKey[FilePath]("codebase_dir")
 
 
 @coco.lifespan
@@ -64,6 +67,9 @@ def coco_lifespan(builder: coco.EnvironmentBuilder) -> Iterator[None]:
 
     # Set CocoIndex state database path
     builder.settings.db_path = config.cocoindex_db_path
+
+    # Provide codebase root directory to environment
+    builder.provide(CODEBASE_DIR, register_base_dir("codebase", config.codebase_root_path))
 
     # Connect to SQLite with vector extension
     conn = sqlite.connect(str(config.target_sqlite_db_path), load_vec="auto")
