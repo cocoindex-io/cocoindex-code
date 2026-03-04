@@ -65,7 +65,7 @@ splitter = RecursiveSplitter()
 
 @coco.fn(memo=True)
 async def process_file(
-    file: localfs.AsyncFile,
+    file: localfs.File,
     table: sqlite.TableTarget[CodeChunk],
 ) -> None:
     """Process a single file: chunk, embed, and store."""
