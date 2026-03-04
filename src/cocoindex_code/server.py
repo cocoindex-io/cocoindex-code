@@ -107,6 +107,17 @@ async def search(
             " when the codebase hasn't changed."
         ),
     ),
+    languages: list[str] | None = Field(
+        default=None,
+        description=("Filter by programming language(s). Example: ['python', 'typescript']"),
+    ),
+    paths: list[str] | None = Field(
+        default=None,
+        description=(
+            "Filter by file path pattern(s) using GLOB wildcards (* and ?)."
+            " Example: ['src/utils/*', '*.py']"
+        ),
+    ),
 ) -> SearchResultModel:
     """Query the codebase index."""
     try:
@@ -114,7 +125,13 @@ async def search(
         if refresh_index:
             await _refresh_index()
 
-        results = await query_codebase(query=query, limit=limit, offset=offset)
+        results = await query_codebase(
+            query=query,
+            limit=limit,
+            offset=offset,
+            languages=languages,
+            paths=paths,
+        )
 
         return SearchResultModel(
             success=True,
