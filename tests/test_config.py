@@ -138,3 +138,60 @@ class TestConfigBatchSize:
         ):
             with pytest.raises(ValueError, match="COCOINDEX_CODE_BATCH_SIZE"):
                 Config.from_env()
+
+
+class TestExtraExtensions:
+    """Tests for COCOINDEX_CODE_EXTRA_EXTENSIONS env var."""
+
+    def test_empty_by_default(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {"COCOINDEX_CODE_ROOT_PATH": str(tmp_path)},
+        ):
+            os.environ.pop("COCOINDEX_CODE_EXTRA_EXTENSIONS", None)
+            config = Config.from_env()
+            assert config.extra_extensions == []
+
+    def test_parses_comma_separated(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
+                "COCOINDEX_CODE_EXTRA_EXTENSIONS": "rb,yaml,toml",
+            },
+        ):
+            config = Config.from_env()
+            assert config.extra_extensions == [".rb", ".yaml", ".toml"]
+
+    def test_trims_whitespace(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
+                "COCOINDEX_CODE_EXTRA_EXTENSIONS": " rb , yaml , ",
+            },
+        ):
+            config = Config.from_env()
+            assert config.extra_extensions == [".rb", ".yaml"]
+
+    def test_empty_string_gives_empty_list(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
+                "COCOINDEX_CODE_EXTRA_EXTENSIONS": "",
+            },
+        ):
+            config = Config.from_env()
+            assert config.extra_extensions == []
+
+    def test_dot_prefix_passed_through(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
+                "COCOINDEX_CODE_EXTRA_EXTENSIONS": ".rb,yaml",
+            },
+        ):
+            config = Config.from_env()
+            assert config.extra_extensions == ["..rb", ".yaml"]

@@ -8,10 +8,11 @@ from cocoindex.resources.chunk import Chunk
 from cocoindex.resources.file import PatternFilePathMatcher
 from cocoindex.resources.id import IdGenerator
 
+from .config import config
 from .shared import CODEBASE_DIR, SQLITE_DB, CodeChunk, embedder
 
 # File patterns for supported languages
-INCLUDED_PATTERNS = [
+DEFAULT_INCLUDED_PATTERNS = [
     "**/*.py",  # Python
     "**/*.pyi",  # Python stubs
     "**/*.js",  # JavaScript
@@ -42,6 +43,8 @@ INCLUDED_PATTERNS = [
     "**/*.rst",  # reStructuredText
     "**/*.php",  # PHP
 ]
+
+INCLUDED_PATTERNS = DEFAULT_INCLUDED_PATTERNS + [f"**/*{ext}" for ext in config.extra_extensions]
 
 EXCLUDED_PATTERNS = [
     "**/.*",  # Hidden directories

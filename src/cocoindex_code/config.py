@@ -66,6 +66,7 @@ class Config:
     device: str
     trust_remote_code: bool
     batch_size: int
+    extra_extensions: list[str]
 
     @classmethod
     def from_env(cls) -> Config:
@@ -113,6 +114,14 @@ class Config:
                 f"COCOINDEX_CODE_BATCH_SIZE must be a positive integer, got: {batch_size}"
             )
 
+        # Extra file extensions
+        raw_extra = os.environ.get("COCOINDEX_CODE_EXTRA_EXTENSIONS", "")
+        extra_extensions: list[str] = []
+        for ext in raw_extra.split(","):
+            ext = ext.strip()
+            if ext:
+                extra_extensions.append(f".{ext}")
+
         return cls(
             codebase_root_path=root,
             embedding_model=embedding_model,
@@ -120,6 +129,7 @@ class Config:
             device=device,
             trust_remote_code=trust_remote_code,
             batch_size=batch_size,
+            extra_extensions=extra_extensions,
         )
 
     @property
