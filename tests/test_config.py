@@ -150,7 +150,7 @@ class TestExtraExtensions:
         ):
             os.environ.pop("COCOINDEX_CODE_EXTRA_EXTENSIONS", None)
             config = Config.from_env()
-            assert config.extra_extensions == []
+            assert config.extra_extensions == {}
 
     def test_parses_comma_separated(self, tmp_path: Path) -> None:
         with patch.dict(
@@ -161,7 +161,7 @@ class TestExtraExtensions:
             },
         ):
             config = Config.from_env()
-            assert config.extra_extensions == [".rb", ".yaml", ".toml"]
+            assert config.extra_extensions == {".rb": None, ".yaml": None, ".toml": None}
 
     def test_trims_whitespace(self, tmp_path: Path) -> None:
         with patch.dict(
@@ -172,9 +172,9 @@ class TestExtraExtensions:
             },
         ):
             config = Config.from_env()
-            assert config.extra_extensions == [".rb", ".yaml"]
+            assert config.extra_extensions == {".rb": None, ".yaml": None}
 
-    def test_empty_string_gives_empty_list(self, tmp_path: Path) -> None:
+    def test_empty_string_gives_empty_dict(self, tmp_path: Path) -> None:
         with patch.dict(
             os.environ,
             {
@@ -183,7 +183,7 @@ class TestExtraExtensions:
             },
         ):
             config = Config.from_env()
-            assert config.extra_extensions == []
+            assert config.extra_extensions == {}
 
     def test_dot_prefix_passed_through(self, tmp_path: Path) -> None:
         with patch.dict(
@@ -194,4 +194,26 @@ class TestExtraExtensions:
             },
         ):
             config = Config.from_env()
-            assert config.extra_extensions == ["..rb", ".yaml"]
+            assert config.extra_extensions == {"..rb": None, ".yaml": None}
+
+    def test_parses_lang_mapping(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
+                "COCOINDEX_CODE_EXTRA_EXTENSIONS": "inc:php",
+            },
+        ):
+            config = Config.from_env()
+            assert config.extra_extensions == {".inc": "php"}
+
+    def test_mixed_with_and_without_lang(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
+                "COCOINDEX_CODE_EXTRA_EXTENSIONS": "inc:php,yaml,tpl:html",
+            },
+        ):
+            config = Config.from_env()
+            assert config.extra_extensions == {".inc": "php", ".yaml": None, ".tpl": "html"}
