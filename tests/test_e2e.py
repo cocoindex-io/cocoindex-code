@@ -100,6 +100,49 @@ def create_login_session(user_id: int) -> str:
     return f"session_{user_id}"
 '''
 
+SAMPLE_APP_JS = """\
+/** Express web application server. */
+
+const express = require('express');
+const app = express();
+
+function handleRequest(req, res) {
+    const name = req.query.name || 'World';
+    res.json({ message: `Hello, ${name}!` });
+}
+
+function startServer(port) {
+    app.get('/api/greet', handleRequest);
+    app.listen(port, () => console.log(`Server running on port ${port}`));
+}
+
+module.exports = { handleRequest, startServer };
+"""
+
+SAMPLE_HELPERS_TS = """\
+/** TypeScript helper utilities for data transformation. */
+
+interface DataRecord {
+    id: number;
+    value: string;
+    timestamp: Date;
+}
+
+function transformRecords(records: DataRecord[]): Map<number, string> {
+    const result = new Map<number, string>();
+    for (const record of records) {
+        result.set(record.id, record.value.toUpperCase());
+    }
+    return result;
+}
+
+function filterByTimestamp(records: DataRecord[], after: Date): DataRecord[] {
+    return records.filter(r => r.timestamp > after);
+}
+
+export { transformRecords, filterByTimestamp, DataRecord };
+"""
+
 
 # === Helper functions ===
 
@@ -123,6 +166,20 @@ def setup_base_codebase(codebase: Path) -> None:
     lib_dir = codebase / "lib"
     lib_dir.mkdir(exist_ok=True)
     (lib_dir / "database.py").write_text(SAMPLE_DATABASE_PY)
+
+
+def setup_multi_lang_codebase(codebase: Path) -> None:
+    """Set up a codebase with Python, JavaScript, and TypeScript files."""
+    clear_codebase(codebase)
+    (codebase / "main.py").write_text(SAMPLE_MAIN_PY)
+    (codebase / "utils.py").write_text(SAMPLE_UTILS_PY)
+
+    lib_dir = codebase / "lib"
+    lib_dir.mkdir(exist_ok=True)
+    (lib_dir / "database.py").write_text(SAMPLE_DATABASE_PY)
+
+    (codebase / "app.js").write_text(SAMPLE_APP_JS)
+    (lib_dir / "helpers.ts").write_text(SAMPLE_HELPERS_TS)
 
 
 # === Tests ===
@@ -269,3 +326,86 @@ class TestCodebaseRootDiscovery:
         monkeypatch.chdir(empty_dir)
         result = _discover_codebase_root()
         assert result == empty_dir
+
+
+class TestSearchFilters:
+    """End-to-end tests for language and file_path search filters."""
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_filter_by_language(self, test_codebase_root: Path, coco_runtime: None) -> None:
+        """Should return only results matching the specified language."""
+        setup_multi_lang_codebase(test_codebase_root)
+        await app.update(report_to_stdout=False)
+
+        results = await query_codebase("function", limit=50, languages=["python"])
+        assert len(results) > 0
+        assert all(r.language == "python" for r in results)
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_filter_by_language_multiple(
+        self, test_codebase_root: Path, coco_runtime: None
+    ) -> None:
+        """Should return results matching any of the specified languages."""
+        setup_multi_lang_codebase(test_codebase_root)
+        await app.update(report_to_stdout=False)
+
+        results = await query_codebase("function", limit=50, languages=["python", "javascript"])
+        assert len(results) > 0
+        languages_found = {r.language for r in results}
+        assert languages_found <= {"python", "javascript"}
+        # Should find at least one of each since both have relevant content
+        assert "python" in languages_found
+        assert "javascript" in languages_found
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_filter_by_file_path_glob(
+        self, test_codebase_root: Path, coco_runtime: None
+    ) -> None:
+        """Should return only results matching the file path glob pattern."""
+        setup_multi_lang_codebase(test_codebase_root)
+        await app.update(report_to_stdout=False)
+
+        results = await query_codebase("function", limit=50, paths=["*/lib/*"])
+        assert len(results) > 0
+        assert all("/lib/" in r.file_path for r in results)
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_filter_by_file_path_wildcard_extension(
+        self, test_codebase_root: Path, coco_runtime: None
+    ) -> None:
+        """Should filter by file extension using glob wildcard."""
+        setup_multi_lang_codebase(test_codebase_root)
+        await app.update(report_to_stdout=False)
+
+        results = await query_codebase("function", limit=50, paths=["*.js"])
+        assert len(results) > 0
+        assert all(r.file_path.endswith(".js") for r in results)
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_filter_by_both_language_and_file_path(
+        self, test_codebase_root: Path, coco_runtime: None
+    ) -> None:
+        """Should apply both language and file path filters together."""
+        setup_multi_lang_codebase(test_codebase_root)
+        await app.update(report_to_stdout=False)
+
+        # Filter for Python files under lib/
+        results = await query_codebase(
+            "function", limit=50, languages=["python"], paths=["*/lib/*"]
+        )
+        assert len(results) > 0
+        assert all(r.language == "python" for r in results)
+        assert all("/lib/" in r.file_path for r in results)
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_no_filter_returns_all_languages(
+        self, test_codebase_root: Path, coco_runtime: None
+    ) -> None:
+        """Should return results from all languages when no filter is applied."""
+        setup_multi_lang_codebase(test_codebase_root)
+        await app.update(report_to_stdout=False)
+
+        results = await query_codebase("function", limit=50)
+        languages_found = {r.language for r in results}
+        # Should find at least Python and JavaScript
+        assert len(languages_found) >= 2
