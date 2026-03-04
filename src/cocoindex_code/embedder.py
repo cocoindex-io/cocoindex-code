@@ -81,6 +81,7 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
             texts,
             convert_to_numpy=True,
             normalize_embeddings=self._normalize_embeddings,
+            show_progress_bar=False,
         )  # type: ignore[assignment]
         return list(embeddings)
 
@@ -93,6 +94,7 @@ class LocalEmbedder(_schema.VectorSchemaProvider):
             prompt_name=self._query_prompt_name,
             convert_to_numpy=True,
             normalize_embeddings=self._normalize_embeddings,
+            show_progress_bar=False,
         )  # type: ignore[assignment]
         return list(embeddings)
 

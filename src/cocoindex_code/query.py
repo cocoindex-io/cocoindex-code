@@ -1,6 +1,8 @@
 """Query implementation for codebase search."""
 
-import fnmatch
+import heapq
+import sqlite3
+from typing import Any
 
 import cocoindex as coco
 
@@ -8,9 +10,76 @@ from .config import config
 from .schema import QueryResult
 from .shared import SQLITE_DB, embedder
 
-# Over-fetch multiplier when post-filtering is needed
-_FILTER_OVERFETCH = 5
-_FILTER_MIN_K = 200
+
+def _l2_to_score(distance: float) -> float:
+    """Convert L2 distance to cosine similarity (exact for unit vectors)."""
+    return 1.0 - distance * distance / 2.0
+
+
+def _knn_query(
+    conn: sqlite3.Connection,
+    embedding_bytes: bytes,
+    k: int,
+    language: str | None = None,
+) -> list[tuple[Any, ...]]:
+    """Run a vec0 KNN query, optionally constrained to a language partition."""
+    if language is not None:
+        return conn.execute(
+            """
+            SELECT file_path, language, content, start_line, end_line, distance
+            FROM code_chunks_vec
+            WHERE embedding MATCH ? AND k = ? AND language = ?
+            ORDER BY distance
+            """,
+            (embedding_bytes, k, language),
+        ).fetchall()
+    return conn.execute(
+        """
+        SELECT file_path, language, content, start_line, end_line, distance
+        FROM code_chunks_vec
+        WHERE embedding MATCH ? AND k = ?
+        ORDER BY distance
+        """,
+        (embedding_bytes, k),
+    ).fetchall()
+
+
+def _full_scan_query(
+    conn: sqlite3.Connection,
+    embedding_bytes: bytes,
+    limit: int,
+    offset: int,
+    languages: list[str] | None = None,
+    paths: list[str] | None = None,
+) -> list[tuple[Any, ...]]:
+    """Full scan with SQL-level distance computation and filtering."""
+    conditions: list[str] = []
+    params: list[Any] = [embedding_bytes]
+
+    if languages:
+        placeholders = ",".join("?" for _ in languages)
+        conditions.append(f"language IN ({placeholders})")
+        params.extend(languages)
+
+    if paths:
+        path_clauses = " OR ".join("file_path GLOB ?" for _ in paths)
+        conditions.append(f"({path_clauses})")
+        params.extend(paths)
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    params.extend([limit, offset])
+
+    return conn.execute(
+        f"""
+        SELECT file_path, language, content, start_line, end_line,
+               vec_distance_L2(embedding, ?) as distance
+        FROM code_chunks_vec
+        {where}
+        ORDER BY distance
+        LIMIT ? OFFSET ?
+        """,
+        params,
+    ).fetchall()
 
 
 async def query_codebase(
@@ -24,7 +93,8 @@ async def query_codebase(
     Perform vector similarity search using vec0 KNN index.
 
     Uses sqlite-vec's vec0 virtual table for indexed nearest-neighbor search.
-    Optionally filters by language(s) and/or file path glob pattern(s).
+    Language filtering uses vec0 partition keys for exact index-level filtering.
+    Path filtering triggers a full scan with distance computation.
     """
     if not config.target_sqlite_db_path.exists():
         raise RuntimeError(
@@ -32,68 +102,50 @@ async def query_codebase(
             "Please run a query with refresh_index=True first."
         )
 
-    # Get the database connection from CocoIndex environment
     coco_env = await coco.default_env()
     db = coco_env.get_context(SQLITE_DB)
 
-    # Generate query embedding — use embed_query if available (supports asymmetric
-    # prompting for models like nomic-embed-code that use different prefixes for
-    # queries vs indexed documents).
+    # Generate query embedding.
     if hasattr(embedder, "embed_query"):
         query_embedding = await embedder.embed_query(query)
     else:
         query_embedding = await embedder.embed(query)
 
-    # Convert to bytes for sqlite-vec (float32)
     embedding_bytes = query_embedding.astype("float32").tobytes()
 
-    # vec0 KNN queries don't support arbitrary WHERE/OFFSET, so we
-    # over-fetch when post-filtering is needed and apply filters in Python.
-    needs_post_filter = bool(languages or paths)
-    if needs_post_filter:
-        fetch_k = max((limit + offset) * _FILTER_OVERFETCH, _FILTER_MIN_K)
-    else:
-        fetch_k = limit + offset
-
-    # Query using vec0 KNN index with readonly transaction.
-    # vec0 returns L2 distance; for normalized embeddings the ranking is
-    # identical to cosine distance.  Convert to cosine similarity via
-    # cos_sim = 1 - L2² / 2  (exact for unit vectors).
     with db.value.readonly() as conn:
-        cursor = conn.execute(
-            """
-            SELECT
-                file_path,
-                language,
-                content,
-                start_line,
-                end_line,
-                distance
-            FROM code_chunks_vec
-            WHERE embedding MATCH ? AND k = ?
-            ORDER BY distance
-            """,
-            (embedding_bytes, fetch_k),
-        )
-        rows = cursor.fetchall()
-
-    language_set = set(languages) if languages else None
-    results: list[QueryResult] = []
-
-    for file_path, language, content, start_line, end_line, distance in rows:
-        if language_set and language not in language_set:
-            continue
-        if paths and not any(fnmatch.fnmatch(file_path, p) for p in paths):
-            continue
-        results.append(
-            QueryResult(
-                file_path=file_path,
-                language=language,
-                content=content,
-                start_line=start_line,
-                end_line=end_line,
-                score=1.0 - distance * distance / 2.0,
+        if paths:
+            # Path filter → full scan (vec0 can't filter on auxiliary columns).
+            # LIMIT/OFFSET handled in SQL.
+            rows = _full_scan_query(conn, embedding_bytes, limit, offset, languages, paths)
+        elif not languages or len(languages) == 1:
+            # Single language or no filter: one KNN query.
+            lang = languages[0] if languages else None
+            rows = _knn_query(conn, embedding_bytes, limit + offset, lang)
+        else:
+            # Multiple languages: separate KNN per partition, merge by distance.
+            fetch_k = limit + offset
+            rows = heapq.nsmallest(
+                fetch_k,
+                (
+                    row
+                    for lang in languages
+                    for row in _knn_query(conn, embedding_bytes, fetch_k, lang)
+                ),
+                key=lambda r: r[5],  # distance column
             )
-        )
 
-    return results[offset : offset + limit]
+    if not paths:
+        rows = rows[offset:]
+
+    return [
+        QueryResult(
+            file_path=file_path,
+            language=language,
+            content=content,
+            start_line=start_line,
+            end_line=end_line,
+            score=_l2_to_score(distance),
+        )
+        for file_path, language, content, start_line, end_line, distance in rows
+    ]

@@ -56,9 +56,9 @@ EXCLUDED_PATTERNS = [
 ]
 
 # Chunking configuration
-CHUNK_SIZE = 4000
-MIN_CHUNK_SIZE = 500
-CHUNK_OVERLAP = 400
+CHUNK_SIZE = 2000
+MIN_CHUNK_SIZE = 300
+CHUNK_OVERLAP = 200
 
 # Chunking splitter (stateless, can be module-level)
 splitter = RecursiveSplitter()
@@ -125,7 +125,8 @@ async def app_main() -> None:
             primary_key=["id"],
         ),
         virtual_table_def=Vec0TableDef(
-            auxiliary_columns=["file_path", "language", "content", "start_line", "end_line"],
+            partition_key_columns=["language"],
+            auxiliary_columns=["file_path", "content", "start_line", "end_line"],
         ),
     )
 

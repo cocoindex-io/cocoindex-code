@@ -77,6 +77,8 @@ class SearchResultModel(BaseModel):
         " or code snippets."
         " Returns matching code chunks with file paths,"
         " line numbers, and relevance scores."
+        " Start with a small limit (e.g., 5);"
+        " if most results look relevant, use offset to paginate for more."
     ),
 )
 async def search(
@@ -90,7 +92,7 @@ async def search(
         )
     ),
     limit: int = Field(
-        default=10,
+        default=5,
         ge=1,
         le=100,
         description="Maximum number of results to return (1-100)",
