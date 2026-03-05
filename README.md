@@ -5,6 +5,10 @@
 
 <h1 align="center">light weight MCP for code that just works </h1>
 
+![effect](https://github.com/user-attachments/assets/cb3a4cae-0e1f-49c4-890b-7bb93317ab60)
+
+
+
 
 A super light-weight, effective embedded MCP **(AST-based)** that understand and searches your codebase that just works! Using [CocoIndex](https://github.com/cocoindex-io/cocoindex) - an Rust-based ultra performant data transformation engine. No blackbox. Works for Claude, Codex, Cursor - any coding agent.
 
