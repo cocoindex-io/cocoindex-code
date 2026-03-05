@@ -14,8 +14,7 @@ from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     from cocoindex.ops.litellm import LiteLLMEmbedder
-
-    from .embedder import LocalEmbedder
+    from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
 from .config import config
 
@@ -24,9 +23,9 @@ logger = logging.getLogger(__name__)
 SBERT_PREFIX = "sbert/"
 
 # Initialize embedder at module level based on model prefix
-embedder: LocalEmbedder | LiteLLMEmbedder
+embedder: SentenceTransformerEmbedder | LiteLLMEmbedder
 if config.embedding_model.startswith(SBERT_PREFIX):
-    from .embedder import LocalEmbedder
+    from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
     _model_name = config.embedding_model[len(SBERT_PREFIX) :]
     # Models that define a "query" prompt for asymmetric retrieval.
@@ -35,7 +34,7 @@ if config.embedding_model.startswith(SBERT_PREFIX):
     # Models whose custom remote code is known-compatible with transformers 5.x.
     _KNOWN_REMOTE_CODE_MODELS = {"nomic-ai/CodeRankEmbed"}
     _trust = config.trust_remote_code or _model_name in _KNOWN_REMOTE_CODE_MODELS
-    embedder = LocalEmbedder(
+    embedder = SentenceTransformerEmbedder(
         _model_name,
         device=config.device,
         trust_remote_code=_trust,
