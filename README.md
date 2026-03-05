@@ -85,6 +85,20 @@ Or use opencode.json:
 
 Optionally, you can run `cocoindex-code index` to create or update the index. Without running it, the MCP server will automatically build and keep the index up-to-date in the background.
 
+## When Is the MCP Triggered?
+
+Once configured, your coding agent (Claude Code, Codex, Cursor, etc.) automatically decides when semantic code search is helpful — especially for finding code by description, exploring unfamiliar codebases, fuzzy/conceptual matches, or locating implementations without knowing exact names.
+
+You can also nudge the agent explicitly, e.g. *"Use the cocoindex-code MCP to find how user sessions are managed."* For persistent instructions, add guidance to your project's `AGENTS.md` or `CLAUDE.md`:
+
+```
+Use the cocoindex-code MCP server for semantic code search when:
+- Searching for code by meaning or description rather than exact text
+- Exploring unfamiliar parts of the codebase
+- Looking for implementations without knowing exact names
+- Finding similar code patterns or related functionality
+```
+
 ## Features
 - **Semantic Code Search**: Find relevant code using natural language queries when grep doesn't work well, and save tokens immediately.
 - **Ultra Performant to code changes**:⚡ Built on top of ultra performant [Rust indexing engine](https://github.com/cocoindex-io/cocoindex/edit/main/README.md). Only re-indexes changed files for fast updates.
