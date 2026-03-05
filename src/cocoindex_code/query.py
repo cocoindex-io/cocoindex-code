@@ -8,7 +8,7 @@ import cocoindex as coco
 
 from .config import config
 from .schema import QueryResult
-from .shared import SQLITE_DB, embedder
+from .shared import SQLITE_DB, embedder, query_prompt_name
 
 
 def _l2_to_score(distance: float) -> float:
@@ -106,10 +106,7 @@ async def query_codebase(
     db = coco_env.get_context(SQLITE_DB)
 
     # Generate query embedding.
-    if hasattr(embedder, "embed_query"):
-        query_embedding = await embedder.embed_query(query)
-    else:
-        query_embedding = await embedder.embed(query)
+    query_embedding = await embedder.embed(query, True, query_prompt_name)
 
     embedding_bytes = query_embedding.astype("float32").tobytes()
 

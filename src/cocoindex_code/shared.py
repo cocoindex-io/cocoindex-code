@@ -31,7 +31,7 @@ if config.embedding_model.startswith(SBERT_PREFIX):
     _model_name = config.embedding_model[len(SBERT_PREFIX) :]
     # Models that define a "query" prompt for asymmetric retrieval.
     _QUERY_PROMPT_MODELS = {"nomic-ai/nomic-embed-code", "nomic-ai/CodeRankEmbed"}
-    _query_prompt_name: str | None = "query" if _model_name in _QUERY_PROMPT_MODELS else None
+    query_prompt_name: str | None = "query" if _model_name in _QUERY_PROMPT_MODELS else None
     # Models whose custom remote code is known-compatible with transformers 5.x.
     _KNOWN_REMOTE_CODE_MODELS = {"nomic-ai/CodeRankEmbed"}
     _trust = config.trust_remote_code or _model_name in _KNOWN_REMOTE_CODE_MODELS
@@ -39,7 +39,6 @@ if config.embedding_model.startswith(SBERT_PREFIX):
         _model_name,
         device=config.device,
         trust_remote_code=_trust,
-        query_prompt_name=_query_prompt_name,
     )
     logger.info(
         "Embedding model: %s | device: %s | trust_remote_code: %s",
@@ -51,6 +50,7 @@ else:
     from cocoindex.ops.litellm import LiteLLMEmbedder
 
     embedder = LiteLLMEmbedder(config.embedding_model)
+    query_prompt_name = None
     logger.info("Embedding model (LiteLLM): %s", config.embedding_model)
 
 # Context key for SQLite database (connection managed in lifespan)

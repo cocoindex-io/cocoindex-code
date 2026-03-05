@@ -44,24 +44,25 @@ class TestLocalEmbedderInit:
             embedder._get_model()
             assert mock_cls.call_count == 1
 
-    def test_embed_query_forwards_prompt_name(self) -> None:
+    def test_embed_forwards_prompt_name(self) -> None:
         mock_model = _make_mock_model()
         with patch(_SENTENCE_TRANSFORMER, return_value=mock_model):
-            embedder = LocalEmbedder("some-model", device="cpu", query_prompt_name="query")
+            embedder = LocalEmbedder("some-model", device="cpu")
             embedder._get_model()
             mock_model.encode.reset_mock()
             # Call the underlying method directly, bypassing the CocoIndex batching decorator.
-            LocalEmbedder.embed_query.__wrapped__(embedder, ["find functions that embed text"])  # type: ignore
+            embed = LocalEmbedder.embed.__wrapped__  # type: ignore[attr-defined]
+            embed(embedder, ["find functions that embed text"], True, "query")
             _, kwargs = mock_model.encode.call_args
             assert kwargs.get("prompt_name") == "query"
 
-    def test_embed_query_no_prompt_when_unset(self) -> None:
+    def test_embed_no_prompt_by_default(self) -> None:
         mock_model = _make_mock_model()
         with patch(_SENTENCE_TRANSFORMER, return_value=mock_model):
-            embedder = LocalEmbedder("some-model", device="cpu", query_prompt_name=None)
+            embedder = LocalEmbedder("some-model", device="cpu")
             embedder._get_model()
             mock_model.encode.reset_mock()
-            LocalEmbedder.embed_query.__wrapped__(embedder, ["some query"])  # type: ignore
+            LocalEmbedder.embed.__wrapped__(embedder, ["some query"])  # type: ignore
             _, kwargs = mock_model.encode.call_args
             assert kwargs.get("prompt_name") is None
 
@@ -104,14 +105,4 @@ class TestLocalEmbedderMemoKey:
     def test_different_trust_remote_code_have_different_keys(self) -> None:
         e1 = LocalEmbedder("model", device="cpu", trust_remote_code=False)
         e2 = LocalEmbedder("model", device="cpu", trust_remote_code=True)
-        assert e1.__coco_memo_key__() != e2.__coco_memo_key__()
-
-    def test_different_normalize_have_different_keys(self) -> None:
-        e1 = LocalEmbedder("model", device="cpu", normalize_embeddings=True)
-        e2 = LocalEmbedder("model", device="cpu", normalize_embeddings=False)
-        assert e1.__coco_memo_key__() != e2.__coco_memo_key__()
-
-    def test_different_query_prompt_name_have_different_keys(self) -> None:
-        e1 = LocalEmbedder("model", device="cpu", query_prompt_name=None)
-        e2 = LocalEmbedder("model", device="cpu", query_prompt_name="query")
         assert e1.__coco_memo_key__() != e2.__coco_memo_key__()
