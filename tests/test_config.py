@@ -6,8 +6,6 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from cocoindex_code.config import Config, _detect_device
 
 
@@ -81,63 +79,6 @@ class TestConfigTrustRemoteCode:
             os.environ.pop("COCOINDEX_CODE_EMBEDDING_MODEL", None)
             config = Config.from_env()
             assert "all-MiniLM-L6-v2" in config.embedding_model
-
-
-class TestConfigBatchSize:
-    """Tests for COCOINDEX_CODE_BATCH_SIZE env var."""
-
-    def test_default_batch_size_is_16(self, tmp_path: Path) -> None:
-        with patch.dict(
-            os.environ,
-            {"COCOINDEX_CODE_ROOT_PATH": str(tmp_path)},
-        ):
-            os.environ.pop("COCOINDEX_CODE_BATCH_SIZE", None)
-            config = Config.from_env()
-            assert config.batch_size == 16
-
-    def test_batch_size_reads_env_var(self, tmp_path: Path) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
-                "COCOINDEX_CODE_BATCH_SIZE": "32",
-            },
-        ):
-            config = Config.from_env()
-            assert config.batch_size == 32
-
-    def test_batch_size_raises_on_non_integer(self, tmp_path: Path) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
-                "COCOINDEX_CODE_BATCH_SIZE": "notanint",
-            },
-        ):
-            with pytest.raises(ValueError, match="COCOINDEX_CODE_BATCH_SIZE"):
-                Config.from_env()
-
-    def test_batch_size_raises_on_zero(self, tmp_path: Path) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
-                "COCOINDEX_CODE_BATCH_SIZE": "0",
-            },
-        ):
-            with pytest.raises(ValueError, match="COCOINDEX_CODE_BATCH_SIZE"):
-                Config.from_env()
-
-    def test_batch_size_raises_on_negative(self, tmp_path: Path) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
-                "COCOINDEX_CODE_BATCH_SIZE": "-1",
-            },
-        ):
-            with pytest.raises(ValueError, match="COCOINDEX_CODE_BATCH_SIZE"):
-                Config.from_env()
 
 
 class TestExtraExtensions:

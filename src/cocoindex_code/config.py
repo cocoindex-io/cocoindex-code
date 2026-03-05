@@ -6,7 +6,6 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-_SBERT_PREFIX = "sbert/"
 _DEFAULT_MODEL = "sbert/sentence-transformers/all-MiniLM-L6-v2"
 
 
@@ -65,7 +64,6 @@ class Config:
     index_dir: Path
     device: str
     trust_remote_code: bool
-    batch_size: int
     extra_extensions: dict[str, str | None]
 
     @classmethod
@@ -101,19 +99,6 @@ class Config:
             "yes",
         )
 
-        # Batch size for local embedding model
-        _raw_batch_size = os.environ.get("COCOINDEX_CODE_BATCH_SIZE", "16")
-        try:
-            batch_size = int(_raw_batch_size)
-        except ValueError:
-            raise ValueError(
-                f"COCOINDEX_CODE_BATCH_SIZE must be a positive integer, got: {_raw_batch_size!r}"
-            ) from None
-        if batch_size <= 0:
-            raise ValueError(
-                f"COCOINDEX_CODE_BATCH_SIZE must be a positive integer, got: {batch_size}"
-            )
-
         # Extra file extensions (format: "inc:php,yaml,toml" — optional lang after colon)
         raw_extra = os.environ.get("COCOINDEX_CODE_EXTRA_EXTENSIONS", "")
         extra_extensions: dict[str, str | None] = {}
@@ -133,7 +118,6 @@ class Config:
             index_dir=index_dir,
             device=device,
             trust_remote_code=trust_remote_code,
-            batch_size=batch_size,
             extra_extensions=extra_extensions,
         )
 

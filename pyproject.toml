@@ -23,7 +23,7 @@ classifiers = [
 
 dependencies = [
     "mcp>=1.0.0",
-    "cocoindex[litellm]==1.0.0a23",
+    "cocoindex[litellm]==1.0.0a24",
     "sentence-transformers>=2.2.0",
     "sqlite-vec>=0.1.0",
     "pydantic>=2.0.0",
@@ -81,10 +81,6 @@ select = ["E", "F", "I", "N", "W", "UP"]
 python_version = "3.11"
 strict = true
 ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "cocoindex_code.embedder"
-warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
