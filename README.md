@@ -44,10 +44,15 @@ A super light-weight, effective embedded MCP **(AST-based)** that understand and
 
 ## Get Started - zero config, let's go!!
 
-Requires Python 3 (`pip3` comes pre-installed with Python).
-
+Using [pipx](https://pipx.pypa.io/stable/installation/):
 ```bash
-pip3 install -U cocoindex-code
+pipx install cocoindex-code       # first install
+pipx upgrade cocoindex-code       # upgrade
+```
+
+Using [uv](https://docs.astral.sh/uv/getting-started/installation/):
+```bash
+uv tool install --upgrade cocoindex-code --prerelease explicit --with "cocoindex>=1.0.0a24"
 ```
 
 ### Claude
@@ -342,10 +347,17 @@ Some Python installations (e.g. the one pre-installed on macOS) ship with a SQLi
 brew install python3
 ```
 
-Then re-install cocoindex-code with the Homebrew Python:
+Then re-install cocoindex-code (see [Get Started](#get-started---zero-config-lets-go) for install options):
 
+Using pipx:
 ```bash
-pip3 install -U cocoindex-code
+pipx install cocoindex-code       # first install
+pipx upgrade cocoindex-code       # upgrade
+```
+
+Using uv (install or upgrade):
+```bash
+uv tool install --upgrade cocoindex-code --prerelease explicit --with "cocoindex>=1.0.0a24"
 ```
 
 ## Large codebase / Enterprise
