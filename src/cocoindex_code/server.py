@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from .config import config
 from .filesystem_tools import register_filesystem_tools
+from .thinking_tools import register_thinking_tools
 from .indexer import app as indexer_app
 from .query import query_codebase
 from .shared import SQLITE_DB
@@ -33,10 +34,19 @@ mcp = FastMCP(
         "\n- edit_file: exact string replacement in files"
         "\n- grep_code: regex text search across files"
         "\n- directory_tree: list project structure"
+        "\n\n"
+        "Advanced thinking and reasoning tools:"
+        "\n- sequential_thinking: step-by-step problem solving with branching"
+        "\n- extended_thinking: deep analysis with automatic checkpoints"
+        "\n- ultra_thinking: maximum-depth reasoning with hypothesis verification"
+        "\n- learning_loop: reflect on sessions and extract learnings"
+        "\n- self_improve: get strategy recommendations from past performance"
+        "\n- reward_thinking: provide reinforcement signals for thinking sessions"
     ),
 )
 
 register_filesystem_tools(mcp)
+register_thinking_tools(mcp)
 
 # Lock to prevent concurrent index updates
 _index_lock = asyncio.Lock()
