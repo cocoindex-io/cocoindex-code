@@ -12,6 +12,7 @@ import pytest
 from cocoindex_code.filesystem_tools import (
     _detect_lang,
     _directory_tree,
+    _edit_file,
     _grep_files,
     _is_binary,
     _is_excluded_dir,
@@ -386,3 +387,81 @@ class TestWriteFile:
         assert read_content == content
         assert s == 1
         assert e == total == 1
+
+
+class TestEditFile:
+    """Tests for _edit_file."""
+
+    def test_single_replacement(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "main.py"
+        original = path.read_text()
+        assert "def hello" in original
+        replacements = _edit_file(path, "def hello", "def greet")
+        assert replacements == 1
+        assert "def greet" in path.read_text()
+        assert "def hello" not in path.read_text()
+
+    def test_replace_all(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "replace_all.txt"
+        path.write_text("aaa bbb aaa ccc aaa")
+        replacements = _edit_file(path, "aaa", "xxx", replace_all=True)
+        assert replacements == 3
+        assert path.read_text() == "xxx bbb xxx ccc xxx"
+
+    def test_ambiguous_match_without_replace_all(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "ambiguous.txt"
+        path.write_text("foo bar foo baz foo")
+        with pytest.raises(ValueError, match="Found 3 matches"):
+            _edit_file(path, "foo", "qux")
+
+    def test_old_string_not_found(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "main.py"
+        with pytest.raises(ValueError, match="old_string not found"):
+            _edit_file(path, "nonexistent_string_xyz", "replacement")
+
+    def test_identical_strings_rejected(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "main.py"
+        with pytest.raises(ValueError, match="identical"):
+            _edit_file(path, "def hello", "def hello")
+
+    def test_multiline_replacement(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "multi.py"
+        path.write_text("def foo():\n    return 1\n\ndef bar():\n    return 2\n")
+        replacements = _edit_file(
+            path,
+            "def foo():\n    return 1",
+            "def foo(x: int):\n    return x + 1",
+        )
+        assert replacements == 1
+        content = path.read_text()
+        assert "def foo(x: int):" in content
+        assert "return x + 1" in content
+        assert "def bar():" in content
+
+    def test_replacement_preserves_rest_of_file(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "src" / "app.ts"
+        original = path.read_text()
+        line_count_before = original.count("\n")
+        _edit_file(path, "greet", "welcome")
+        updated = path.read_text()
+        assert "welcome" in updated
+        assert "greet" not in updated
+        assert updated.count("\n") == line_count_before
+
+    def test_delete_by_replacing_with_empty(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "delete.txt"
+        path.write_text("keep this\nremove this line\nkeep this too\n")
+        _edit_file(path, "remove this line\n", "")
+        assert path.read_text() == "keep this\nkeep this too\n"
+
+    def test_insert_by_replacing_anchor(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "insert.py"
+        path.write_text("import os\n\ndef main():\n    pass\n")
+        _edit_file(path, "import os\n", "import os\nimport sys\n")
+        content = path.read_text()
+        assert "import os\nimport sys\n" in content
+
+    def test_file_not_found(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "nope.txt"
+        with pytest.raises(FileNotFoundError):
+            _edit_file(path, "a", "b")

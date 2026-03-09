@@ -1,6 +1,6 @@
 """Fast filesystem tools for the cocoindex-code MCP server.
 
-Provides find_files, read_file, write_file, grep_code, and directory_tree tools
+Provides find_files, read_file, write_file, edit_file, grep_code, and directory_tree tools
 that operate directly on the filesystem without vector search overhead.
 """
 
@@ -139,6 +139,15 @@ class WriteFileResult(BaseModel):
     path: str = ""
     bytes_written: int = 0
     created: bool = False
+    message: str | None = None
+
+
+class EditFileResult(BaseModel):
+    """Result from edit_file tool."""
+
+    success: bool
+    path: str = ""
+    replacements: int = 0
     message: str | None = None
 
 
@@ -318,6 +327,52 @@ def _write_file(path: Path, content: str) -> tuple[int, bool]:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     return len(content_bytes), created
+
+
+def _edit_file(
+    path: Path,
+    old_string: str,
+    new_string: str,
+    *,
+    replace_all: bool = False,
+) -> int:
+    """Perform exact string replacement in a file.
+
+    Returns the number of replacements made.
+    Raises ValueError if old_string is not found or is ambiguous.
+    """
+    content = path.read_text(encoding="utf-8")
+
+    if old_string == new_string:
+        msg = "old_string and new_string are identical"
+        raise ValueError(msg)
+
+    count = content.count(old_string)
+    if count == 0:
+        msg = "old_string not found in file"
+        raise ValueError(msg)
+
+    if count > 1 and not replace_all:
+        msg = (
+            f"Found {count} matches for old_string."
+            " Provide more context to identify a unique match, or set replace_all=true."
+        )
+        raise ValueError(msg)
+
+    if replace_all:
+        new_content = content.replace(old_string, new_string)
+        replacements = count
+    else:
+        new_content = content.replace(old_string, new_string, 1)
+        replacements = 1
+
+    new_bytes = new_content.encode("utf-8")
+    if len(new_bytes) > MAX_WRITE_BYTES:
+        msg = f"Resulting file exceeds maximum size ({MAX_WRITE_BYTES} bytes)"
+        raise ValueError(msg)
+
+    path.write_text(new_content, encoding="utf-8")
+    return replacements
 
 
 def _grep_files(
@@ -590,6 +645,59 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
             return WriteFileResult(success=False, path=path, message=str(ve))
         except Exception as e:
             return WriteFileResult(success=False, path=path, message=f"Write failed: {e!s}")
+
+    @mcp.tool(
+        name="edit_file",
+        description=(
+            "Perform exact string replacements in a file."
+            " Finds old_string in the file and replaces it with new_string."
+            " By default requires old_string to match exactly once (for safety)."
+            " Set replace_all=true to replace every occurrence."
+            " Use this for surgical edits instead of rewriting entire files."
+        ),
+    )
+    async def edit_file(
+        path: str = Field(
+            description="Relative path from codebase root. Example: 'src/utils/helpers.ts'",
+        ),
+        old_string: str = Field(
+            description="The exact text to find and replace. Must match file content exactly.",
+        ),
+        new_string: str = Field(
+            description="The replacement text. Must differ from old_string.",
+        ),
+        replace_all: bool = Field(
+            default=False,
+            description=(
+                "Replace all occurrences. Default false requires exactly one match for safety."
+            ),
+        ),
+    ) -> EditFileResult:
+        """Perform exact string replacement in a file."""
+        try:
+            resolved = _safe_resolve(path)
+            if not resolved.is_file():
+                return EditFileResult(
+                    success=False,
+                    path=path,
+                    message=f"File not found: {path}",
+                )
+            if _is_binary(resolved):
+                return EditFileResult(
+                    success=False,
+                    path=path,
+                    message=f"Binary file, cannot edit: {path}",
+                )
+            replacements = _edit_file(resolved, old_string, new_string, replace_all=replace_all)
+            return EditFileResult(
+                success=True,
+                path=path,
+                replacements=replacements,
+            )
+        except ValueError as ve:
+            return EditFileResult(success=False, path=path, message=str(ve))
+        except Exception as e:
+            return EditFileResult(success=False, path=path, message=f"Edit failed: {e!s}")
 
     @mcp.tool(
         name="grep_code",

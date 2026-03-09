@@ -30,6 +30,7 @@ mcp = FastMCP(
         "\n- find_files: fast glob-based file discovery"
         "\n- read_file: read file contents with line ranges"
         "\n- write_file: write/create files instantly"
+        "\n- edit_file: exact string replacement in files"
         "\n- grep_code: regex text search across files"
         "\n- directory_tree: list project structure"
     ),
