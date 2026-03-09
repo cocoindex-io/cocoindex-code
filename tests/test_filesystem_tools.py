@@ -1,4 +1,4 @@
-"""Tests for filesystem tools: find_files, read_file, grep_code, directory_tree."""
+"""Tests for filesystem tools: find_files, read_file, write_file, grep_code, directory_tree."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from cocoindex_code.filesystem_tools import (
     _read_file,
     _safe_resolve,
     _walk_files,
+    _write_file,
 )
 
 
@@ -314,3 +315,74 @@ class TestDirectoryTree:
         entries = _directory_tree(sample_codebase)
         src_entry = next(e for e in entries if e.path == "src")
         assert src_entry.children > 0
+
+
+class TestWriteFile:
+    """Tests for _write_file."""
+
+    def test_create_new_file(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "new_file.txt"
+        bytes_written, created = _write_file(path, "hello world")
+        assert created is True
+        assert bytes_written == 11
+        assert path.read_text() == "hello world"
+
+    def test_overwrite_existing_file(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "main.py"
+        original = path.read_text()
+        new_content = "# replaced\n"
+        bytes_written, created = _write_file(path, new_content)
+        assert created is False
+        assert bytes_written == len(new_content.encode("utf-8"))
+        assert path.read_text() == new_content
+        assert path.read_text() != original
+
+    def test_creates_parent_directories(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "deep" / "nested" / "dir" / "file.go"
+        bytes_written, created = _write_file(path, "package main\n")
+        assert created is True
+        assert path.exists()
+        assert path.read_text() == "package main\n"
+
+    def test_unicode_content(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "unicode.txt"
+        content = "Hello, mundo! Emoji: \u2764\ufe0f"
+        bytes_written, created = _write_file(path, content)
+        assert created is True
+        assert path.read_text(encoding="utf-8") == content
+        assert bytes_written == len(content.encode("utf-8"))
+
+    def test_empty_content(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "empty.txt"
+        bytes_written, created = _write_file(path, "")
+        assert created is True
+        assert bytes_written == 0
+        assert path.read_text() == ""
+
+    def test_multiline_content(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "multi.py"
+        content = "def foo():\n    return 42\n\ndef bar():\n    return 0\n"
+        bytes_written, created = _write_file(path, content)
+        assert created is True
+        assert path.read_text() == content
+
+    def test_exceeds_max_size(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "huge.txt"
+        content = "x" * 2_000_000
+        with pytest.raises(ValueError, match="exceeds maximum write size"):
+            _write_file(path, content)
+        assert not path.exists()
+
+    def test_path_traversal_blocked(self, sample_codebase: Path) -> None:
+        with pytest.raises(ValueError, match="escapes the codebase root"):
+            resolved = _safe_resolve("../../etc/evil.txt")
+            _write_file(resolved, "malicious")
+
+    def test_write_then_read_roundtrip(self, sample_codebase: Path) -> None:
+        path = sample_codebase / "roundtrip.ts"
+        content = "export const x: number = 42;\n"
+        _write_file(path, content)
+        read_content, s, e, total = _read_file(path)
+        assert read_content == content
+        assert s == 1
+        assert e == total == 1

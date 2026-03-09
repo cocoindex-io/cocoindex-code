@@ -1,6 +1,6 @@
 """Fast filesystem tools for the cocoindex-code MCP server.
 
-Provides find_files, read_file, grep_code, and directory_tree tools
+Provides find_files, read_file, write_file, grep_code, and directory_tree tools
 that operate directly on the filesystem without vector search overhead.
 """
 
@@ -126,6 +126,19 @@ class ReadFileResult(BaseModel):
     end_line: int = 0
     total_lines: int = 0
     language: str = ""
+    message: str | None = None
+
+
+MAX_WRITE_BYTES = 1_048_576
+
+
+class WriteFileResult(BaseModel):
+    """Result from write_file tool."""
+
+    success: bool
+    path: str = ""
+    bytes_written: int = 0
+    created: bool = False
     message: str | None = None
 
 
@@ -289,6 +302,22 @@ def _read_file(
         content = content[:MAX_READ_BYTES] + "\n\n... [truncated at 1 MB] ..."
 
     return content, s, e, total
+
+
+def _write_file(path: Path, content: str) -> tuple[int, bool]:
+    """Write content to a file, creating parent directories as needed.
+
+    Returns (bytes_written, created) where created indicates a new file.
+    """
+    content_bytes = content.encode("utf-8")
+    if len(content_bytes) > MAX_WRITE_BYTES:
+        msg = f"Content exceeds maximum write size ({MAX_WRITE_BYTES} bytes)"
+        raise ValueError(msg)
+    created = not path.exists()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return len(content_bytes), created
 
 
 def _grep_files(
@@ -528,6 +557,39 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
             return ReadFileResult(success=False, path=path, message=str(ve))
         except Exception as e:
             return ReadFileResult(success=False, path=path, message=f"Read failed: {e!s}")
+
+    @mcp.tool(
+        name="write_file",
+        description=(
+            "Write content to a file in the codebase."
+            " Creates the file if it does not exist, overwrites if it does."
+            " Automatically creates parent directories as needed."
+            " Use this to create new files or update existing ones."
+            " Returns bytes written and whether the file was newly created."
+        ),
+    )
+    async def write_file(
+        path: str = Field(
+            description="Relative path from codebase root. Example: 'src/utils/helpers.ts'",
+        ),
+        content: str = Field(
+            description="The text content to write to the file.",
+        ),
+    ) -> WriteFileResult:
+        """Write content to a file in the codebase."""
+        try:
+            resolved = _safe_resolve(path)
+            bytes_written, created = _write_file(resolved, content)
+            return WriteFileResult(
+                success=True,
+                path=path,
+                bytes_written=bytes_written,
+                created=created,
+            )
+        except ValueError as ve:
+            return WriteFileResult(success=False, path=path, message=str(ve))
+        except Exception as e:
+            return WriteFileResult(success=False, path=path, message=f"Write failed: {e!s}")
 
     @mcp.tool(
         name="grep_code",
