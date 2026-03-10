@@ -98,7 +98,7 @@ cocoindex-code index
 
 This lets you monitor the indexing process and ensure everything is ready. After the initial build, the MCP server will automatically keep the index up-to-date in the background as files change.
 
-> For small projects you can skip this step — the MCP server will build the index automatically on first use.
+For small projects you can skip this step — the MCP server will build the index automatically on first use.
 
 ## When Is the MCP Triggered?
 
@@ -273,7 +273,7 @@ claude mcp add cocoindex-code \
   -- cocoindex-code
 ```
 
-> **Note:** Switching models requires re-indexing your codebase (the vector dimensions differ).
+**Note:** Switching models requires re-indexing your codebase (the vector dimensions differ).
 
 ## MCP Tools
 

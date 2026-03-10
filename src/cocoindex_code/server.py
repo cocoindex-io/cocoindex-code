@@ -30,6 +30,9 @@ mcp = FastMCP(
 # Lock to prevent concurrent index updates
 _index_lock = asyncio.Lock()
 
+# Event set once the initial background index is ready
+_initial_index_done = asyncio.Event()
+
 
 async def _refresh_index() -> None:
     """Refresh the index. Uses lock to prevent concurrent updates."""
@@ -123,6 +126,16 @@ async def search(
     ),
 ) -> SearchResultModel:
     """Query the codebase index."""
+    if not _initial_index_done.is_set():
+        return SearchResultModel(
+            success=False,
+            message=(
+                "The index is still being built — this may take a while"
+                " for a large codebase or after significant changes."
+                " Please try again shortly."
+            ),
+        )
+
     try:
         # Refresh index if requested
         if refresh_index:
@@ -167,8 +180,15 @@ async def search(
 
 async def _async_serve() -> None:
     """Async entry point for the MCP server."""
+
     # Refresh index in background so startup isn't blocked
-    asyncio.create_task(_refresh_index())
+    async def _initial_index() -> None:
+        try:
+            await _refresh_index()
+        finally:
+            _initial_index_done.set()
+
+    asyncio.create_task(_initial_index())
     await mcp.run_stdio_async()
 
 
