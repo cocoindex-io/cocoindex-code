@@ -88,7 +88,17 @@ Or use opencode.json:
 }
 ```
 
-Optionally, you can run `cocoindex-code index` to create or update the index. Without running it, the MCP server will automatically build and keep the index up-to-date in the background.
+### Build the Index
+
+For large codebases, we recommend running the indexer once before using the MCP so you can see the progress:
+
+```bash
+cocoindex-code index
+```
+
+This lets you monitor the indexing process and ensure everything is ready. After the initial build, the MCP server will automatically keep the index up-to-date in the background as files change.
+
+> For small projects you can skip this step — the MCP server will build the index automatically on first use.
 
 ## When Is the MCP Triggered?
 
