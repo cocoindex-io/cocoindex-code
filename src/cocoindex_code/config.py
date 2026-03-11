@@ -9,19 +9,6 @@ from pathlib import Path
 _DEFAULT_MODEL = "sbert/sentence-transformers/all-MiniLM-L6-v2"
 
 
-def _detect_device() -> str:
-    """Return best available compute device, respecting env var override."""
-    override = os.environ.get("COCOINDEX_CODE_DEVICE")
-    if override:
-        return override
-    try:
-        import torch
-
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except (ImportError, ModuleNotFoundError):
-        return "cpu"
-
-
 def _find_root_with_marker(start: Path, markers: list[str]) -> Path | None:
     """Walk up from start, return first directory containing any marker."""
     current = start
@@ -62,7 +49,7 @@ class Config:
     codebase_root_path: Path
     embedding_model: str
     index_dir: Path
-    device: str
+    device: str | None
     trust_remote_code: bool
     extra_extensions: dict[str, str | None]
 
@@ -87,7 +74,7 @@ class Config:
         index_dir = root / ".cocoindex_code"
 
         # Device: auto-detect CUDA or use env override
-        device = _detect_device()
+        device = os.environ.get("COCOINDEX_CODE_DEVICE")
 
         # trust_remote_code: opt-in via env var only.
         # sentence-transformers 5.x+ supports Jina models natively, so
