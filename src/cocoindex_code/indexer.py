@@ -42,6 +42,7 @@ DEFAULT_INCLUDED_PATTERNS = [
     "**/*.txt",  # Plain text
     "**/*.rst",  # reStructuredText
     "**/*.php",  # PHP
+    "**/*.lua",  # Lua
 ]
 
 INCLUDED_PATTERNS = DEFAULT_INCLUDED_PATTERNS + [f"**/*{ext}" for ext in config.extra_extensions]
