@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +41,33 @@ def _discover_codebase_root() -> Path:
     markers = [".git", "pyproject.toml", "package.json", "Cargo.toml", "go.mod"]
     root = _find_root_with_marker(cwd, markers)
     return root if root is not None else cwd
+
+
+def _parse_json_string_list_env(var_name: str) -> list[str]:
+    """Parse an environment variable as a JSON array of strings."""
+    raw_value = os.environ.get(var_name, "")
+    if not raw_value.strip():
+        return []
+
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"{var_name} must be a JSON array of strings, got invalid JSON"
+        ) from exc
+
+    if not isinstance(parsed, list):
+        raise ValueError(f"{var_name} must be a JSON array of strings")
+
+    result: list[str] = []
+    for item in parsed:
+        if not isinstance(item, str):
+            raise ValueError(f"{var_name} must be a JSON array of strings")
+        item = item.strip()
+        if item:
+            result.append(item)
+
+    return result
 
 
 @dataclass
@@ -101,13 +129,9 @@ class Config:
                 extra_extensions[f".{token}"] = None
 
         # Excluded file glob patterns
-        raw_excluded_patterns = os.environ.get("COCOINDEX_CODE_EXCLUDED_PATTERNS", "")
-        excluded_patterns: list[str] = []
-        for pattern in raw_excluded_patterns.split(","):
-            pattern = pattern.strip()
-            if not pattern:
-                continue
-            excluded_patterns.append(pattern)
+        excluded_patterns = _parse_json_string_list_env(
+            "COCOINDEX_CODE_EXCLUDED_PATTERNS"
+        )
 
         return cls(
             codebase_root_path=root,
