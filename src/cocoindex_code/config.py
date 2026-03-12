@@ -52,6 +52,7 @@ class Config:
     device: str | None
     trust_remote_code: bool
     extra_extensions: dict[str, str | None]
+    excluded_patterns: list[str]
 
     @classmethod
     def from_env(cls) -> Config:
@@ -99,6 +100,15 @@ class Config:
             else:
                 extra_extensions[f".{token}"] = None
 
+        # Excluded file glob patterns
+        raw_excluded_patterns = os.environ.get("COCOINDEX_CODE_EXCLUDED_PATTERNS", "")
+        excluded_patterns: list[str] = []
+        for pattern in raw_excluded_patterns.split(","):
+            pattern = pattern.strip()
+            if not pattern:
+                continue
+            excluded_patterns.append(pattern)
+
         return cls(
             codebase_root_path=root,
             embedding_model=embedding_model,
@@ -106,6 +116,7 @@ class Config:
             device=device,
             trust_remote_code=trust_remote_code,
             extra_extensions=extra_extensions,
+            excluded_patterns=excluded_patterns,
         )
 
     @property

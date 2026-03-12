@@ -51,7 +51,7 @@ LANGUAGE_OVERRIDES: dict[str, str] = {
     ext: lang for ext, lang in config.extra_extensions.items() if lang is not None
 }
 
-EXCLUDED_PATTERNS = [
+DEFAULT_EXCLUDED_PATTERNS = [
     "**/.*",  # Hidden directories
     "**/__pycache__",  # Python cache
     "**/node_modules",  # Node.js dependencies
@@ -62,6 +62,8 @@ EXCLUDED_PATTERNS = [
     "**/vendor/*",  # PHP vendor directory
     "**/.cocoindex_code",  # Our own index directory
 ]
+
+EXCLUDED_PATTERNS = DEFAULT_EXCLUDED_PATTERNS + config.excluded_patterns
 
 # Chunking configuration
 CHUNK_SIZE = 2000
