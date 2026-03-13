@@ -106,7 +106,7 @@ async def query_codebase(
     db = coco_env.get_context(SQLITE_DB)
 
     # Generate query embedding.
-    query_embedding = await embedder.embed(query, True, query_prompt_name)
+    query_embedding = await embedder.embed(query, query_prompt_name)
 
     embedding_bytes = query_embedding.astype("float32").tobytes()
 
