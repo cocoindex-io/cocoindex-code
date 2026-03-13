@@ -35,4 +35,3 @@ repos:
         entry: uv run pytest tests/ -v
         language: system
         pass_filenames: false
-        stages: [pre-push]
