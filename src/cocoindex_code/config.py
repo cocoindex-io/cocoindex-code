@@ -52,9 +52,7 @@ def _parse_json_string_list_env(var_name: str) -> list[str]:
     try:
         parsed = json.loads(raw_value)
     except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"{var_name} must be a JSON array of strings, got invalid JSON"
-        ) from exc
+        raise ValueError(f"{var_name} must be a JSON array of strings, got invalid JSON") from exc
 
     if not isinstance(parsed, list):
         raise ValueError(f"{var_name} must be a JSON array of strings")
@@ -129,9 +127,7 @@ class Config:
                 extra_extensions[f".{token}"] = None
 
         # Excluded file glob patterns
-        excluded_patterns = _parse_json_string_list_env(
-            "COCOINDEX_CODE_EXCLUDED_PATTERNS"
-        )
+        excluded_patterns = _parse_json_string_list_env("COCOINDEX_CODE_EXCLUDED_PATTERNS")
 
         return cls(
             codebase_root_path=root,
