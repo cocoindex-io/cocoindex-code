@@ -263,9 +263,20 @@ claude mcp add cocoindex-code \
 
 Any model supported by LiteLLM works — see the [full list of embedding providers](https://docs.litellm.ai/docs/embedding/supported_embedding).
 
-### GPU-optimised local model
+### Local SentenceTransformers models
 
-If you have a GPU, [`nomic-ai/CodeRankEmbed`](https://huggingface.co/nomic-ai/CodeRankEmbed) delivers significantly better code retrieval than the default model. It is 137M parameters, requires ~1 GB VRAM, and has an 8192-token context window.
+Use the `sbert/` prefix to load any [SentenceTransformers](https://www.sbert.net/) model locally (no API key required).
+
+**Example — general purpose text model:**
+```bash
+claude mcp add cocoindex-code \
+  -e COCOINDEX_CODE_EMBEDDING_MODEL=sbert/nomic-ai/nomic-embed-text-v1 \
+  -- cocoindex-code
+```
+
+**GPU-optimised code retrieval:**
+
+[`nomic-ai/CodeRankEmbed`](https://huggingface.co/nomic-ai/CodeRankEmbed) delivers significantly better code retrieval than the default model. It is 137M parameters, requires ~1 GB VRAM, and has an 8192-token context window.
 
 ```bash
 claude mcp add cocoindex-code \

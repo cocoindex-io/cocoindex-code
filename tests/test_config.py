@@ -34,41 +34,6 @@ class TestConfigDevice:
             config = Config.from_env()
             assert config.device == "cpu"
 
-
-class TestConfigTrustRemoteCode:
-    """Tests for trust_remote_code env var control."""
-
-    def test_false_by_default(self, tmp_path: Path) -> None:
-        with patch.dict(
-            os.environ,
-            {"COCOINDEX_CODE_ROOT_PATH": str(tmp_path)},
-        ):
-            os.environ.pop("COCOINDEX_CODE_TRUST_REMOTE_CODE", None)
-            config = Config.from_env()
-            assert config.trust_remote_code is False
-
-    def test_true_when_env_var_set_to_true(self, tmp_path: Path) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
-                "COCOINDEX_CODE_TRUST_REMOTE_CODE": "true",
-            },
-        ):
-            config = Config.from_env()
-            assert config.trust_remote_code is True
-
-    def test_true_when_env_var_set_to_1(self, tmp_path: Path) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "COCOINDEX_CODE_ROOT_PATH": str(tmp_path),
-                "COCOINDEX_CODE_TRUST_REMOTE_CODE": "1",
-            },
-        ):
-            config = Config.from_env()
-            assert config.trust_remote_code is True
-
     def test_default_model_is_minilm(self, tmp_path: Path) -> None:
         with patch.dict(
             os.environ,

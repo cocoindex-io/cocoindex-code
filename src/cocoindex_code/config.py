@@ -76,7 +76,6 @@ class Config:
     embedding_model: str
     index_dir: Path
     device: str | None
-    trust_remote_code: bool
     extra_extensions: dict[str, str | None]
     excluded_patterns: list[str]
 
@@ -103,16 +102,6 @@ class Config:
         # Device: auto-detect CUDA or use env override
         device = os.environ.get("COCOINDEX_CODE_DEVICE")
 
-        # trust_remote_code: opt-in via env var only.
-        # sentence-transformers 5.x+ supports Jina models natively, so
-        # auto-enabling this for jinaai/ models causes failures with
-        # transformers 5.x (removed find_pruneable_heads_and_indices).
-        trust_remote_code = os.environ.get("COCOINDEX_CODE_TRUST_REMOTE_CODE", "").lower() in (
-            "1",
-            "true",
-            "yes",
-        )
-
         # Extra file extensions (format: "inc:php,yaml,toml" — optional lang after colon)
         raw_extra = os.environ.get("COCOINDEX_CODE_EXTRA_EXTENSIONS", "")
         extra_extensions: dict[str, str | None] = {}
@@ -134,7 +123,6 @@ class Config:
             embedding_model=embedding_model,
             index_dir=index_dir,
             device=device,
-            trust_remote_code=trust_remote_code,
             extra_extensions=extra_extensions,
             excluded_patterns=excluded_patterns,
         )
