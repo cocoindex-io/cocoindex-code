@@ -116,7 +116,7 @@ async def process_file(
         table.declare_row(
             row=CodeChunk(
                 id=await id_gen.next_id(chunk.text),
-                file_path=str(file.file_path.path),
+                file_path=file.file_path.path.as_posix(),
                 language=language,
                 content=chunk.text,
                 start_line=chunk.start.line,
