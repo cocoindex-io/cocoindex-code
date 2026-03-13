@@ -320,6 +320,7 @@ Returns matching code chunks with:
 | javascript | js | `.js` |
 | json | | `.json` |
 | kotlin | | `.kt`, `.kts` |
+| lua | | `.lua` |
 | markdown | md | `.md`, `.mdx` |
 | pascal | pas, dpr, delphi | `.pas`, `.dpr` |
 | php | | `.php` |
