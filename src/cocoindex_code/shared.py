@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated
 
 import cocoindex as coco
 from cocoindex.connectors import sqlite
-from cocoindex.connectors.localfs import FilePath, register_base_dir
+from cocoindex.connectors.localfs import FilePath
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
@@ -52,27 +51,6 @@ else:
 SQLITE_DB = coco.ContextKey[sqlite.SqliteDatabase]("sqlite_db")
 # Context key for codebase root directory (provided in lifespan)
 CODEBASE_DIR = coco.ContextKey[FilePath]("codebase_dir")
-
-
-@coco.lifespan
-def coco_lifespan(builder: coco.EnvironmentBuilder) -> Iterator[None]:
-    """Set up database connection."""
-    # Ensure index directory exists
-    config.index_dir.mkdir(parents=True, exist_ok=True)
-
-    # Set CocoIndex state database path
-    builder.settings.db_path = config.cocoindex_db_path
-
-    # Provide codebase root directory to environment
-    builder.provide(CODEBASE_DIR, register_base_dir("codebase", config.codebase_root_path))
-
-    # Connect to SQLite with vector extension
-    conn = sqlite.connect(str(config.target_sqlite_db_path), load_vec="auto")
-    builder.provide(SQLITE_DB, sqlite.register_db("index_db", conn))
-
-    yield
-
-    conn.close()
 
 
 @dataclass

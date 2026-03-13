@@ -129,7 +129,7 @@ async def process_file(
 
 
 @coco.fn
-async def app_main() -> None:
+async def indexer_main() -> None:
     """Main indexing function - walks files and processes each."""
     db = coco.use_context(SQLITE_DB)
 
@@ -159,10 +159,3 @@ async def app_main() -> None:
     # Process each file
     with coco.component_subpath(coco.Symbol("process_file")):
         await coco.mount_each(process_file, files.items(), table)
-
-
-# Create the app
-app = coco.App(
-    coco.AppConfig(name="CocoIndexCode"),
-    app_main,
-)

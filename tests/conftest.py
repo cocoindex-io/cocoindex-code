@@ -5,7 +5,6 @@ import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-import cocoindex as coco
 import pytest
 import pytest_asyncio
 
@@ -24,10 +23,12 @@ def test_codebase_root() -> Path:
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def coco_runtime() -> AsyncIterator[None]:
     """
-    Set up CocoIndex runtime context for the entire test session.
+    Set up CocoIndex project for the entire test session.
 
     Uses session-scoped event loop to ensure CocoIndex environment
     persists across all tests.
     """
-    async with coco.runtime():
-        yield
+    from cocoindex_code.project import default_project
+
+    await default_project()
+    yield

@@ -3,12 +3,11 @@
 import argparse
 import asyncio
 
-import cocoindex as coco
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from .config import config
-from .indexer import app as indexer_app
+from .project import default_project
 from .query import query_codebase
 from .shared import SQLITE_DB
 
@@ -27,17 +26,11 @@ mcp = FastMCP(
     ),
 )
 
-# Lock to prevent concurrent index updates
-_index_lock = asyncio.Lock()
-
-# Event set once the initial background index is ready
-_initial_index_done = asyncio.Event()
-
 
 async def _refresh_index() -> None:
     """Refresh the index. Uses lock to prevent concurrent updates."""
-    async with _index_lock:
-        await indexer_app.update(report_to_stdout=False)
+    proj = await default_project()
+    await proj.update_index()
 
 
 # === Pydantic Models for Tool Inputs/Outputs ===
@@ -126,7 +119,8 @@ async def search(
     ),
 ) -> SearchResultModel:
     """Query the codebase index."""
-    if not _initial_index_done.is_set():
+    proj = await default_project()
+    if not proj.is_initial_index_done:
         return SearchResultModel(
             success=False,
             message=(
@@ -182,19 +176,14 @@ async def _async_serve() -> None:
     """Async entry point for the MCP server."""
 
     # Refresh index in background so startup isn't blocked
-    async def _initial_index() -> None:
-        try:
-            await _refresh_index()
-        finally:
-            _initial_index_done.set()
-
-    asyncio.create_task(_initial_index())
+    asyncio.create_task(_refresh_index())
     await mcp.run_stdio_async()
 
 
 async def _async_index() -> None:
     """Async entry point for the index command."""
-    await indexer_app.update(report_to_stdout=True)
+    proj = await default_project()
+    await proj.update_index(report_to_stdout=True)
     await _print_index_stats()
 
 
@@ -205,8 +194,8 @@ async def _print_index_stats() -> None:
         print("No index database found.")
         return
 
-    coco_env = await coco.default_env()
-    db = coco_env.get_context(SQLITE_DB)
+    proj = await default_project()
+    db = proj.env.get_context(SQLITE_DB)
 
     with db.value.readonly() as conn:
         total_chunks = conn.execute("SELECT COUNT(*) FROM code_chunks_vec").fetchone()[0]

@@ -4,9 +4,8 @@ import heapq
 import sqlite3
 from typing import Any
 
-import cocoindex as coco
-
 from .config import config
+from .project import default_project
 from .schema import QueryResult
 from .shared import SQLITE_DB, embedder, query_prompt_name
 
@@ -102,8 +101,8 @@ async def query_codebase(
             "Please run a query with refresh_index=True first."
         )
 
-    coco_env = await coco.default_env()
-    db = coco_env.get_context(SQLITE_DB)
+    coco_proj = await default_project()
+    db = coco_proj.env.get_context(SQLITE_DB)
 
     # Generate query embedding.
     query_embedding = await embedder.embed(query, query_prompt_name)

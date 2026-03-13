@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from cocoindex_code.config import _discover_codebase_root
-from cocoindex_code.indexer import app
+from cocoindex_code.project import default_project
 from cocoindex_code.query import query_codebase
 
 pytest_plugins = ("pytest_asyncio",)
@@ -194,7 +194,7 @@ class TestEndToEnd:
     ) -> None:
         """Should index a codebase and return relevant query results."""
         setup_base_codebase(test_codebase_root)
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
 
         # Verify index was created
         index_dir = test_codebase_root / ".cocoindex_code"
@@ -218,7 +218,7 @@ class TestEndToEnd:
     ) -> None:
         """Should reflect newly added files after re-indexing."""
         setup_base_codebase(test_codebase_root)
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
 
         # Query for ML content - should not find it
         results = await query_codebase("machine learning neural network")
@@ -232,7 +232,7 @@ class TestEndToEnd:
         (test_codebase_root / "ml_model.py").write_text(SAMPLE_ML_MODEL_PY)
 
         # Re-index and query again
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
         results = await query_codebase("neural network machine learning")
 
         assert len(results) > 0
@@ -244,13 +244,13 @@ class TestEndToEnd:
     ) -> None:
         """Should reflect file modifications after re-indexing."""
         setup_base_codebase(test_codebase_root)
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
 
         # Modify utils.py to add authentication
         (test_codebase_root / "utils.py").write_text(SAMPLE_UTILS_AUTH_PY)
 
         # Re-index and query for authentication
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
         results = await query_codebase("user authentication login")
 
         assert len(results) > 0
@@ -264,7 +264,7 @@ class TestEndToEnd:
     ) -> None:
         """Should no longer return results from deleted files after re-indexing."""
         setup_base_codebase(test_codebase_root)
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
 
         # Query for database - should find it
         results = await query_codebase("database connection execute query")
@@ -274,7 +274,7 @@ class TestEndToEnd:
         (test_codebase_root / "lib" / "database.py").unlink()
 
         # Re-index and query again - should no longer find database.py
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
         results = await query_codebase("database connection execute query")
         assert not any("database.py" in r.file_path for r in results)
 
@@ -335,7 +335,7 @@ class TestSearchFilters:
     async def test_filter_by_language(self, test_codebase_root: Path, coco_runtime: None) -> None:
         """Should return only results matching the specified language."""
         setup_multi_lang_codebase(test_codebase_root)
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
 
         results = await query_codebase("function", limit=50, languages=["python"])
         assert len(results) > 0
@@ -347,7 +347,7 @@ class TestSearchFilters:
     ) -> None:
         """Should return results matching any of the specified languages."""
         setup_multi_lang_codebase(test_codebase_root)
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
 
         results = await query_codebase("function", limit=50, languages=["python", "javascript"])
         assert len(results) > 0
@@ -363,7 +363,7 @@ class TestSearchFilters:
     ) -> None:
         """Should return only results matching the file path glob pattern."""
         setup_multi_lang_codebase(test_codebase_root)
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
 
         results = await query_codebase("function", limit=50, paths=["lib/*"])
         assert len(results) > 0
@@ -375,7 +375,7 @@ class TestSearchFilters:
     ) -> None:
         """Should filter by file extension using glob wildcard."""
         setup_multi_lang_codebase(test_codebase_root)
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
 
         results = await query_codebase("function", limit=50, paths=["*.js"])
         assert len(results) > 0
@@ -387,7 +387,7 @@ class TestSearchFilters:
     ) -> None:
         """Should apply both language and file path filters together."""
         setup_multi_lang_codebase(test_codebase_root)
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
 
         # Filter for Python files under lib/
         results = await query_codebase("function", limit=50, languages=["python"], paths=["lib/*"])
@@ -401,7 +401,7 @@ class TestSearchFilters:
     ) -> None:
         """Should return results from all languages when no filter is applied."""
         setup_multi_lang_codebase(test_codebase_root)
-        await app.update(report_to_stdout=False)
+        await (await default_project()).update_index()
 
         results = await query_codebase("function", limit=50)
         languages_found = {r.language for r in results}
