@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import tempfile
 import threading
 import time
@@ -13,6 +15,7 @@ import pytest
 
 from cocoindex_code._version import __version__
 from cocoindex_code.client import DaemonClient
+from cocoindex_code.daemon import _connection_family
 from cocoindex_code.protocol import (
     HandshakeRequest,
     StopRequest,
@@ -30,8 +33,11 @@ def daemon_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, s
     user_dir = tmp_path / "user_home" / ".cocoindex_code"
     user_dir.mkdir(parents=True)
 
-    sock_dir = Path(tempfile.mkdtemp(prefix="ccc_client_"))
-    sock_path = str(sock_dir / "d.sock")
+    if sys.platform == "win32":
+        sock_path = rf"\\.\pipe\ccc_client_{os.getpid()}"
+    else:
+        sock_dir = Path(tempfile.mkdtemp(prefix="ccc_client_"))
+        sock_path = str(sock_dir / "d.sock")
     pid_path = user_dir / "daemon.pid"
 
     monkeypatch.setattr("cocoindex_code.settings.user_settings_dir", lambda: user_dir)
@@ -59,17 +65,17 @@ def daemon_thread(daemon_env: tuple[Path, str, Path]) -> Iterator[str]:
     thread = threading.Thread(target=run_daemon, daemon=True)
     thread.start()
 
-    # Wait for socket
+    # Wait for socket/pipe
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
-        if Path(sock_path).exists():
+        if os.path.exists(sock_path):
             break
         time.sleep(0.2)
 
     yield sock_path
 
     try:
-        conn = Client(sock_path, family="AF_UNIX")
+        conn = Client(sock_path, family=_connection_family())
         conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
         conn.recv_bytes()
         conn.send_bytes(encode_request(StopRequest()))

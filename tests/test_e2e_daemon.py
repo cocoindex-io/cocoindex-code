@@ -61,7 +61,7 @@ def e2e_daemon() -> Iterator[tuple[str, Path]]:
         sock_path = daemon_socket_path()
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
-            if Path(sock_path).exists():
+            if os.path.exists(sock_path):
                 break
             time.sleep(0.2)
         else:

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 import threading
 import time
 from multiprocessing.connection import Connection, Listener
@@ -55,8 +56,18 @@ def daemon_dir() -> Path:
     return user_settings_dir()
 
 
+def _connection_family() -> str:
+    """Return the multiprocessing connection family for this platform."""
+    return "AF_PIPE" if sys.platform == "win32" else "AF_UNIX"
+
+
 def daemon_socket_path() -> str:
-    """Return the path for the daemon's Unix socket."""
+    """Return the daemon socket/pipe address."""
+    if sys.platform == "win32":
+        import getpass
+
+        user = getpass.getuser().replace(" ", "_")
+        return rf"\\.\pipe\cocoindex_code_{user}"
     return str(daemon_dir() / "daemon.sock")
 
 
@@ -326,16 +337,17 @@ def run_daemon() -> None:
     try:
         asyncio.run(_async_daemon_main(embedder))
     finally:
-        # Clean up PID file and socket
+        # Clean up PID file and socket (named pipes on Windows clean up automatically)
         try:
             pid_path.unlink(missing_ok=True)
         except Exception:
             pass
-        sock = daemon_socket_path()
-        try:
-            Path(sock).unlink(missing_ok=True)
-        except Exception:
-            pass
+        if sys.platform != "win32":
+            sock = daemon_socket_path()
+            try:
+                Path(sock).unlink(missing_ok=True)
+            except Exception:
+                pass
         logger.info("Daemon stopped")
 
 
@@ -346,23 +358,24 @@ async def _async_daemon_main(embedder: Embedder) -> None:
     shutdown_event = asyncio.Event()
 
     sock_path = daemon_socket_path()
-    # Remove stale socket
-    try:
-        Path(sock_path).unlink(missing_ok=True)
-    except Exception:
-        pass
+    # Remove stale socket (not applicable for Windows named pipes)
+    if sys.platform != "win32":
+        try:
+            Path(sock_path).unlink(missing_ok=True)
+        except Exception:
+            pass
 
-    listener = Listener(sock_path, family="AF_UNIX")
+    listener = Listener(sock_path, family=_connection_family())
     logger.info("Listening on %s", sock_path)
 
     loop = asyncio.get_event_loop()
 
-    # Handle signals for graceful shutdown (only works in main thread)
+    # Handle signals for graceful shutdown (not supported on all platforms/contexts)
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, shutdown_event.set)
-    except RuntimeError:
-        pass  # Not in main thread (e.g., during tests)
+    except (RuntimeError, NotImplementedError):
+        pass  # Not in main thread, or not supported on this platform (e.g. Windows)
 
     tasks: set[asyncio.Task[Any]] = set()
 
@@ -381,7 +394,10 @@ async def _async_daemon_main(embedder: Embedder) -> None:
     def _accept_loop() -> None:
         while not shutdown_event.is_set():
             try:
-                listener._listener._socket.settimeout(0.5)  # type: ignore[attr-defined]
+                try:
+                    listener._listener._socket.settimeout(0.5)  # type: ignore[attr-defined]
+                except AttributeError:
+                    pass  # AF_PIPE (Windows) doesn't expose ._socket
                 conn = listener.accept()
                 # Schedule the handler on the event loop
                 asyncio.run_coroutine_threadsafe(
@@ -400,7 +416,7 @@ async def _async_daemon_main(embedder: Embedder) -> None:
     try:
         await shutdown_event.wait()
     finally:
+        listener.close()
         accept_thread.join(timeout=2)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        listener.close()

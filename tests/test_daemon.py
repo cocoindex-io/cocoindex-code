@@ -6,6 +6,7 @@ Uses a session-scoped fixture to avoid re-creating the daemon for each test.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import threading
 import time
@@ -15,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from cocoindex_code._version import __version__
+from cocoindex_code.daemon import _connection_family
 from cocoindex_code.protocol import (
     DaemonStatusRequest,
     HandshakeRequest,
@@ -70,7 +72,7 @@ def daemon_sock() -> str:
     sock_path = dm.daemon_socket_path()
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
-        if Path(sock_path).exists():
+        if os.path.exists(sock_path):
             break
         time.sleep(0.1)
     else:
@@ -86,7 +88,7 @@ def daemon_project(daemon_sock: str) -> str:
     save_project_settings(project, default_project_settings())
     (project / "main.py").write_text(SAMPLE_MAIN_PY)
 
-    conn = Client(daemon_sock, family="AF_UNIX")
+    conn = Client(daemon_sock, family=_connection_family())
     conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
     decode_response(conn.recv_bytes())
     conn.send_bytes(encode_request(IndexRequest(project_root=str(project))))
@@ -97,7 +99,7 @@ def daemon_project(daemon_sock: str) -> str:
 
 
 def _connect_and_handshake(sock_path: str) -> tuple[Connection, Response]:
-    conn = Client(sock_path, family="AF_UNIX")
+    conn = Client(sock_path, family=_connection_family())
     conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
     resp = decode_response(conn.recv_bytes())
     return conn, resp
@@ -111,7 +113,7 @@ def test_daemon_starts_and_accepts_handshake(daemon_sock: str) -> None:
 
 
 def test_daemon_rejects_version_mismatch(daemon_sock: str) -> None:
-    conn = Client(daemon_sock, family="AF_UNIX")
+    conn = Client(daemon_sock, family=_connection_family())
     conn.send_bytes(encode_request(HandshakeRequest(version="0.0.0-fake")))
     resp = decode_response(conn.recv_bytes())
     assert resp.ok is False  # type: ignore[union-attr]

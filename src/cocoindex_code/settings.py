@@ -155,11 +155,16 @@ def find_parent_with_marker(start: Path) -> Path | None:
     """Walk up from *start* looking for ``.cocoindex_code/`` or ``.git/``.
 
     Returns the first directory found, or ``None``.
+    Stops at the user home directory to avoid false positives on CI runners.
     """
+    home = Path.home().resolve()
     current = start.resolve()
     while True:
         if (current / _SETTINGS_DIR_NAME).is_dir() or (current / ".git").is_dir():
             return current
+        # Don't traverse above the home directory
+        if current == home:
+            return None
         parent = current.parent
         if parent == current:
             return None

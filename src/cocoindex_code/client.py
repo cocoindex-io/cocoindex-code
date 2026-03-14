@@ -12,7 +12,7 @@ from multiprocessing.connection import Client, Connection
 from pathlib import Path
 
 from ._version import __version__
-from .daemon import daemon_pid_path, daemon_socket_path
+from .daemon import _connection_family, daemon_pid_path, daemon_socket_path
 from .protocol import (
     DaemonStatusResponse,
     ErrorResponse,
@@ -47,10 +47,10 @@ class DaemonClient:
     def connect(cls) -> DaemonClient:
         """Connect to daemon. Raises ConnectionRefusedError if not running."""
         sock = daemon_socket_path()
-        if not Path(sock).exists():
+        if not os.path.exists(sock):
             raise ConnectionRefusedError(f"Daemon socket not found: {sock}")
         try:
-            conn = Client(sock, family="AF_UNIX")
+            conn = Client(sock, family=_connection_family())
         except (ConnectionRefusedError, FileNotFoundError, OSError) as e:
             raise ConnectionRefusedError(f"Cannot connect to daemon: {e}") from e
         return cls(conn)
@@ -122,7 +122,7 @@ class DaemonClient:
 def is_daemon_running() -> bool:
     """Check if the daemon is running."""
     sock = daemon_socket_path()
-    return Path(sock).exists()
+    return os.path.exists(sock)
 
 
 def start_daemon() -> None:
@@ -152,11 +152,13 @@ def start_daemon() -> None:
 
 def _find_ccc_executable() -> str | None:
     """Find the ccc executable in PATH or the same directory as python."""
-    # Check in the same directory as the Python executable
     python_dir = Path(sys.executable).parent
-    ccc = python_dir / "ccc"
-    if ccc.exists():
-        return str(ccc)
+    # On Windows the script is ccc.exe; on Unix it's just ccc
+    names = ["ccc.exe", "ccc"] if sys.platform == "win32" else ["ccc"]
+    for name in names:
+        ccc = python_dir / name
+        if ccc.exists():
+            return str(ccc)
     return None
 
 
@@ -179,12 +181,13 @@ def stop_daemon() -> None:
         except (ValueError, ProcessLookupError, PermissionError):
             pass
 
-    # Clean up stale files
-    sock = daemon_socket_path()
-    try:
-        Path(sock).unlink(missing_ok=True)
-    except Exception:
-        pass
+    # Clean up stale files (named pipes on Windows clean up automatically)
+    if sys.platform != "win32":
+        sock = daemon_socket_path()
+        try:
+            Path(sock).unlink(missing_ok=True)
+        except Exception:
+            pass
     try:
         pid_path.unlink(missing_ok=True)
     except Exception:
@@ -196,7 +199,7 @@ def _wait_for_daemon(timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     sock = daemon_socket_path()
     while time.monotonic() < deadline:
-        if Path(sock).exists():
+        if os.path.exists(sock):
             return
         time.sleep(0.1)
     raise TimeoutError("Daemon did not start in time")
