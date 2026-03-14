@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import sys
 import tempfile
 import threading
 import time
+import uuid
 from collections.abc import Iterator
 from multiprocessing.connection import Client
 from pathlib import Path
@@ -34,7 +34,7 @@ def daemon_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, s
     user_dir.mkdir(parents=True)
 
     if sys.platform == "win32":
-        sock_path = rf"\\.\pipe\ccc_client_{os.getpid()}"
+        sock_path = rf"\\.\pipe\ccc_client_{uuid.uuid4().hex[:12]}"
     else:
         sock_dir = Path(tempfile.mkdtemp(prefix="ccc_client_"))
         sock_path = str(sock_dir / "d.sock")
@@ -66,6 +66,8 @@ def daemon_thread(daemon_env: tuple[Path, str, Path]) -> Iterator[str]:
     thread.start()
 
     # Wait for socket/pipe
+    import os
+
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if os.path.exists(sock_path):

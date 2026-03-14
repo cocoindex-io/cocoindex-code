@@ -10,6 +10,7 @@ import os
 import tempfile
 import threading
 import time
+from collections.abc import Iterator
 from multiprocessing.connection import Client, Connection
 from pathlib import Path
 
@@ -46,10 +47,9 @@ def calculate_fibonacci(n: int) -> int:
 
 
 @pytest.fixture(scope="session")
-def daemon_sock() -> str:
+def daemon_sock() -> Iterator[str]:
     """Start a daemon once per session and return the socket path."""
     import cocoindex_code.daemon as dm
-    import cocoindex_code.settings as st
     from cocoindex_code.settings import EmbeddingSettings
     from cocoindex_code.shared import create_embedder
     from cocoindex_code.shared import embedder as shared_emb
@@ -60,8 +60,14 @@ def daemon_sock() -> str:
     user_dir = Path(tempfile.mkdtemp(prefix="ccc_d_"))
     user_dir.mkdir(parents=True, exist_ok=True)
 
-    st.user_settings_dir = lambda: user_dir
-    st.user_settings_path = lambda: user_dir / "settings.yml"
+    # Use COCOINDEX_CODE_DIR env var for isolation instead of direct module patching.
+    # Direct patching of dm.user_settings_dir leaks across test modules and causes
+    # stop_daemon() in other fixtures to read the wrong PID file (pytest's own PID).
+    old_env = os.environ.get("COCOINDEX_CODE_DIR")
+    os.environ["COCOINDEX_CODE_DIR"] = str(user_dir)
+
+    # Patch create_embedder to reuse the already-loaded embedder (performance)
+    _orig_create_embedder = dm.create_embedder  # type: ignore[attr-defined]
     dm.create_embedder = lambda settings: emb  # type: ignore[attr-defined]
 
     save_user_settings(default_user_settings())
@@ -70,6 +76,7 @@ def daemon_sock() -> str:
     thread.start()
 
     sock_path = dm.daemon_socket_path()
+
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         if os.path.exists(sock_path):
@@ -78,7 +85,14 @@ def daemon_sock() -> str:
     else:
         raise TimeoutError("Daemon did not start")
 
-    return sock_path
+    yield sock_path
+
+    # Restore patches and env var
+    dm.create_embedder = _orig_create_embedder  # type: ignore[attr-defined]
+    if old_env is None:
+        os.environ.pop("COCOINDEX_CODE_DIR", None)
+    else:
+        os.environ["COCOINDEX_CODE_DIR"] = old_env
 
 
 @pytest.fixture(scope="session")

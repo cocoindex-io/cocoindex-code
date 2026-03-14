@@ -121,8 +121,7 @@ class DaemonClient:
 
 def is_daemon_running() -> bool:
     """Check if the daemon is running."""
-    sock = daemon_socket_path()
-    return os.path.exists(sock)
+    return os.path.exists(daemon_socket_path())
 
 
 def start_daemon() -> None:
@@ -177,7 +176,8 @@ def stop_daemon() -> None:
     if pid_path.exists():
         try:
             pid = int(pid_path.read_text().strip())
-            os.kill(pid, signal.SIGTERM)
+            if pid != os.getpid():  # Never kill ourselves (happens when daemon runs in a thread)
+                os.kill(pid, signal.SIGTERM)
         except (ValueError, ProcessLookupError, PermissionError):
             pass
 
@@ -195,11 +195,10 @@ def stop_daemon() -> None:
 
 
 def _wait_for_daemon(timeout: float = 5.0) -> None:
-    """Wait for the daemon socket to become available."""
+    """Wait for the daemon socket/pipe to become available."""
     deadline = time.monotonic() + timeout
-    sock = daemon_socket_path()
     while time.monotonic() < deadline:
-        if os.path.exists(sock):
+        if os.path.exists(daemon_socket_path()):
             return
         time.sleep(0.1)
     raise TimeoutError("Daemon did not start in time")

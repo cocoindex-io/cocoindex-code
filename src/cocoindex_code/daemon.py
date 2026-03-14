@@ -64,10 +64,12 @@ def _connection_family() -> str:
 def daemon_socket_path() -> str:
     """Return the daemon socket/pipe address."""
     if sys.platform == "win32":
-        import getpass
+        import hashlib
 
-        user = getpass.getuser().replace(" ", "_")
-        return rf"\\.\pipe\cocoindex_code_{user}"
+        # Hash the daemon dir so COCOINDEX_CODE_DIR overrides create unique pipe names,
+        # preventing conflicts between different daemon instances (tests, users, etc.)
+        dir_hash = hashlib.md5(str(daemon_dir()).encode()).hexdigest()[:12]
+        return rf"\\.\pipe\cocoindex_code_{dir_hash}"
     return str(daemon_dir() / "daemon.sock")
 
 
