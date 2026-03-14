@@ -37,7 +37,6 @@ def _patch_user_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-# 1
 def test_default_user_settings() -> None:
     s = default_user_settings()
     assert s.embedding.provider == "sentence-transformers"
@@ -46,7 +45,6 @@ def test_default_user_settings() -> None:
     assert s.envs == {}
 
 
-# 2
 def test_default_project_settings() -> None:
     s = default_project_settings()
     assert s.include_patterns == DEFAULT_INCLUDED_PATTERNS
@@ -54,7 +52,6 @@ def test_default_project_settings() -> None:
     assert s.language_overrides == []
 
 
-# 3
 @pytest.mark.usefixtures("_patch_user_dir")
 def test_save_and_load_user_settings(tmp_path: Path) -> None:
     settings = UserSettings(
@@ -73,7 +70,6 @@ def test_save_and_load_user_settings(tmp_path: Path) -> None:
     assert loaded.envs == settings.envs
 
 
-# 4
 def test_save_and_load_project_settings(tmp_path: Path) -> None:
     settings = ProjectSettings(
         include_patterns=["**/*.py", "**/*.rs"],
@@ -89,7 +85,6 @@ def test_save_and_load_project_settings(tmp_path: Path) -> None:
     assert loaded.language_overrides[0].lang == "php"
 
 
-# 5
 @pytest.mark.usefixtures("_patch_user_dir")
 def test_load_user_settings_missing_file_returns_defaults() -> None:
     loaded = load_user_settings()
@@ -99,13 +94,11 @@ def test_load_user_settings_missing_file_returns_defaults() -> None:
     assert loaded.envs == expected.envs
 
 
-# 6
 def test_load_project_settings_missing_file_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_project_settings(tmp_path)
 
 
-# 7
 def test_find_project_root_from_subdirectory(tmp_path: Path) -> None:
     project = tmp_path / "project"
     (project / ".cocoindex_code").mkdir(parents=True)
@@ -115,7 +108,6 @@ def test_find_project_root_from_subdirectory(tmp_path: Path) -> None:
     assert find_project_root(subdir) == project
 
 
-# 8
 def test_find_project_root_from_project_root(tmp_path: Path) -> None:
     project = tmp_path / "project"
     (project / ".cocoindex_code").mkdir(parents=True)
@@ -123,14 +115,12 @@ def test_find_project_root_from_project_root(tmp_path: Path) -> None:
     assert find_project_root(project) == project
 
 
-# 9
 def test_find_project_root_returns_none_when_not_initialized(tmp_path: Path) -> None:
     standalone = tmp_path / "standalone"
     standalone.mkdir()
     assert find_project_root(standalone) is None
 
 
-# 10
 def test_find_parent_with_marker_finds_git(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
@@ -139,7 +129,6 @@ def test_find_parent_with_marker_finds_git(tmp_path: Path) -> None:
     assert find_parent_with_marker(subdir) == repo
 
 
-# 11
 def test_find_parent_with_marker_prefers_cocoindex_code(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
@@ -149,7 +138,6 @@ def test_find_parent_with_marker_prefers_cocoindex_code(tmp_path: Path) -> None:
     assert find_parent_with_marker(subdir) == repo
 
 
-# 12
 @pytest.mark.usefixtures("_patch_user_dir")
 def test_user_settings_litellm_round_trip() -> None:
     settings = UserSettings(
@@ -166,7 +154,6 @@ def test_user_settings_litellm_round_trip() -> None:
     assert loaded.envs == {"GEMINI_API_KEY": "test"}
 
 
-# 13
 def test_project_settings_with_language_overrides(tmp_path: Path) -> None:
     settings = ProjectSettings(
         language_overrides=[LanguageOverride(ext="inc", lang="php")],

@@ -9,7 +9,6 @@ import pytest
 from cocoindex_code.cli import require_project_root, resolve_default_path
 
 
-# 39
 def test_require_project_root_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = tmp_path / "project"
     (project / ".cocoindex_code").mkdir(parents=True)
@@ -20,7 +19,6 @@ def test_require_project_root_success(tmp_path: Path, monkeypatch: pytest.Monkey
     assert require_project_root() == project
 
 
-# 40
 def test_require_project_root_exits_when_not_initialized(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -33,7 +31,6 @@ def test_require_project_root_exits_when_not_initialized(
         require_project_root()
 
 
-# 41
 def test_resolve_default_path_from_subdirectory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -45,7 +42,6 @@ def test_resolve_default_path_from_subdirectory(
     assert result == "src/lib/*"
 
 
-# 42
 def test_resolve_default_path_from_project_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -56,7 +52,6 @@ def test_resolve_default_path_from_project_root(
     assert result is None
 
 
-# 43
 def test_resolve_default_path_outside_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

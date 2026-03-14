@@ -20,7 +20,6 @@ from cocoindex_code.settings import (
 )
 
 
-# 58 — partially: test env var -> settings conversion logic
 def test_legacy_entry_creates_settings_from_env_vars(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -46,7 +45,6 @@ def test_legacy_entry_creates_settings_from_env_vars(
     assert loaded.embedding.device == "cpu"
 
 
-# 59
 def test_legacy_entry_respects_existing_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -71,7 +69,6 @@ def test_legacy_entry_respects_existing_settings(
     assert loaded.embedding.model == "custom/model"
 
 
-# 60
 def test_legacy_embedding_model_conversion() -> None:
     """Old sbert/ prefix and litellm-style model names should be converted correctly."""
     provider, model = _convert_embedding_model("sbert/sentence-transformers/all-MiniLM-L6-v2")
@@ -83,7 +80,6 @@ def test_legacy_embedding_model_conversion() -> None:
     assert model == "gemini/text-embedding-004"
 
 
-# 61
 def test_legacy_extra_extensions_conversion(tmp_path: Path) -> None:
     """COCOINDEX_CODE_EXTRA_EXTENSIONS should produce language_overrides and include_patterns."""
     ps = default_project_settings()
@@ -108,7 +104,6 @@ def test_legacy_extra_extensions_conversion(tmp_path: Path) -> None:
     assert "**/*.toml" in loaded.include_patterns
 
 
-# 62
 def test_legacy_excluded_patterns_conversion(tmp_path: Path) -> None:
     """COCOINDEX_CODE_EXCLUDED_PATTERNS should be appended to default exclude_patterns."""
 

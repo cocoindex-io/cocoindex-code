@@ -80,7 +80,6 @@ def daemon_thread(daemon_env: tuple[Path, str, Path]) -> Iterator[str]:
     thread.join(timeout=5)
 
 
-# 33
 def test_client_connect_to_running_daemon(daemon_thread: str) -> None:
     client = DaemonClient.connect()
     resp = client.handshake()
@@ -88,7 +87,6 @@ def test_client_connect_to_running_daemon(daemon_thread: str) -> None:
     client.close()
 
 
-# 34
 def test_client_connect_refuses_when_no_daemon(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -100,7 +98,6 @@ def test_client_connect_refuses_when_no_daemon(
         DaemonClient.connect()
 
 
-# 38
 def test_client_close_is_idempotent(daemon_thread: str) -> None:
     client = DaemonClient.connect()
     client.handshake()

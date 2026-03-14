@@ -26,7 +26,6 @@ from cocoindex_code.protocol import (
 )
 
 
-# 14
 def test_encode_decode_handshake_request() -> None:
     req = HandshakeRequest(version="1.0.0")
     data = encode_request(req)
@@ -35,7 +34,6 @@ def test_encode_decode_handshake_request() -> None:
     assert decoded.version == "1.0.0"
 
 
-# 15
 def test_encode_decode_search_request_with_defaults() -> None:
     req = SearchRequest(project_root="/tmp", query="test")
     data = encode_request(req)
@@ -47,7 +45,6 @@ def test_encode_decode_search_request_with_defaults() -> None:
     assert decoded.refresh is False
 
 
-# 16
 def test_encode_decode_search_request_with_all_fields() -> None:
     req = SearchRequest(
         project_root="/tmp/proj",
@@ -70,7 +67,6 @@ def test_encode_decode_search_request_with_all_fields() -> None:
     assert decoded.refresh is True
 
 
-# 17
 def test_encode_decode_search_response_with_results() -> None:
     resp = SearchResponse(
         success=True,
@@ -96,7 +92,6 @@ def test_encode_decode_search_response_with_results() -> None:
     assert decoded.results[0].score == 0.95
 
 
-# 18
 def test_encode_decode_error_response() -> None:
     resp = ErrorResponse(message="something failed")
     data = encode_response(resp)
@@ -105,7 +100,6 @@ def test_encode_decode_error_response() -> None:
     assert decoded.message == "something failed"
 
 
-# 19
 def test_encode_decode_daemon_status_response() -> None:
     resp = DaemonStatusResponse(
         version="1.0.0",
@@ -124,7 +118,6 @@ def test_encode_decode_daemon_status_response() -> None:
     assert decoded.projects[0].indexing is False
 
 
-# 20
 def test_tagged_union_dispatch() -> None:
     req = IndexRequest(project_root="/tmp")
     data = encode_request(req)
@@ -133,7 +126,6 @@ def test_tagged_union_dispatch() -> None:
     assert not isinstance(decoded, HandshakeRequest)
 
 
-# 21
 def test_all_request_types_round_trip() -> None:
     requests: list[Request] = [
         HandshakeRequest(version="1.0.0"),
@@ -149,7 +141,6 @@ def test_all_request_types_round_trip() -> None:
         assert type(decoded) is type(req)
 
 
-# 22
 def test_all_response_types_round_trip() -> None:
     responses: list[Response] = [
         IndexResponse(success=True),
