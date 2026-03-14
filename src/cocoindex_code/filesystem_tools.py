@@ -6,9 +6,11 @@ that operate directly on the filesystem without vector search overhead.
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import os
 import re
+import time
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -541,7 +543,8 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
     ) -> FindFilesResult:
         """Find files in the codebase by pattern."""
         try:
-            files, total, truncated = _walk_files(
+            files, total, truncated = await asyncio.to_thread(
+                _walk_files,
                 _root(),
                 pattern=pattern,
                 languages=languages,
@@ -816,6 +819,7 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
 _large_write_buffers: dict[str, dict] = {}
 
 MAX_LARGE_WRITE_BYTES = 5_242_880  # 5 MB total limit per session
+MAX_LARGE_WRITE_SESSIONS = 50  # Maximum concurrent sessions
 
 
 class LargeWriteResult(BaseModel):
@@ -835,11 +839,26 @@ class LargeWriteResult(BaseModel):
 def _large_write_start(
     session_id: str, path: str,
 ) -> None:
-    """Start a new large write session."""
+    """Start a new large write session.
+
+    Evicts the oldest session if MAX_LARGE_WRITE_SESSIONS is reached.
+    """
+    # Evict oldest session if at capacity
+    if (
+        session_id not in _large_write_buffers
+        and len(_large_write_buffers) >= MAX_LARGE_WRITE_SESSIONS
+    ):
+        oldest_key = min(
+            _large_write_buffers,
+            key=lambda k: _large_write_buffers[k].get("created_at", 0),
+        )
+        _large_write_buffers.pop(oldest_key, None)
+
     _large_write_buffers[session_id] = {
         "path": path,
         "chunks": [],
         "total_bytes": 0,
+        "created_at": time.monotonic(),
     }
 
 

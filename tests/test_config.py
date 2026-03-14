@@ -135,7 +135,7 @@ class TestExtraExtensions:
             },
         ):
             config = Config.from_env()
-            assert config.extra_extensions == {"..rb": None, ".yaml": None}
+            assert config.extra_extensions == {".rb": None, ".yaml": None}
 
     def test_parses_lang_mapping(self, tmp_path: Path) -> None:
         with patch.dict(

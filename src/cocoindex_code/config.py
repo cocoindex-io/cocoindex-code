@@ -108,9 +108,9 @@ class Config:
                 continue
             if ":" in token:
                 ext, lang = token.split(":", 1)
-                extra_extensions[f".{ext.strip()}"] = lang.strip() or None
+                extra_extensions[f".{ext.strip().lstrip('.')}"] = lang.strip() or None
             else:
-                extra_extensions[f".{token}"] = None
+                extra_extensions[f".{token.lstrip('.')}"] = None
 
         return cls(
             codebase_root_path=root,

@@ -6,6 +6,7 @@ and rename_symbol tools using regex-based multi-language symbol extraction.
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import os
 import re
@@ -883,7 +884,8 @@ def register_code_intelligence_tools(mcp: FastMCP) -> None:
     ) -> FindDefinitionResult:
         """Find symbol definitions."""
         try:
-            defs = _find_definitions_impl(
+            defs = await asyncio.to_thread(
+                _find_definitions_impl,
                 symbol_name, _root(),
                 symbol_type=symbol_type,
                 languages=languages,
@@ -938,7 +940,8 @@ def register_code_intelligence_tools(mcp: FastMCP) -> None:
     ) -> FindReferencesResult:
         """Find all references to a symbol."""
         try:
-            refs, total, searched, trunc = _find_references_impl(
+            refs, total, searched, trunc = await asyncio.to_thread(
+                _find_references_impl,
                 symbol_name, _root(),
                 languages=languages, paths=paths,
                 context_lines=context_lines, limit=limit,
@@ -1052,7 +1055,8 @@ def register_code_intelligence_tools(mcp: FastMCP) -> None:
     ) -> RenameResult:
         """Rename a symbol across the codebase."""
         try:
-            return _rename_symbol_impl(
+            return await asyncio.to_thread(
+                _rename_symbol_impl,
                 old_name, new_name, _root(),
                 scope=scope, languages=languages,
                 dry_run=dry_run,

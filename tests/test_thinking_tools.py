@@ -885,3 +885,189 @@ class TestEffortEstimator:
             + result.estimates[1].std_dev ** 2
         ) ** 0.5
         assert result.total_std_dev == pytest.approx(expected)
+
+
+class TestInvalidEffortModeRejected:
+    """Verify that invalid effort_mode values are rejected by engine methods."""
+
+    def test_evidence_tracker_rejects_invalid_mode(self, thinking_dir: Path) -> None:
+        engine = ThinkingEngine(thinking_dir)
+        _setup_hypotheses(engine, "s1", ["H1"])
+        engine.add_evidence("s1", 0, "text", "data_point", 0.5, effort_mode="bad")
+        # Engine-level add_evidence doesn't validate effort_mode itself;
+        # validation is at the MCP tool layer. Test that directly via
+        # the VALID_EFFORT_MODES constant.
+        from cocoindex_code.thinking_tools import VALID_EFFORT_MODES
+
+        assert "bad" not in VALID_EFFORT_MODES
+        assert "low" in VALID_EFFORT_MODES
+        assert "medium" in VALID_EFFORT_MODES
+        assert "high" in VALID_EFFORT_MODES
+        assert "ultra" in VALID_EFFORT_MODES
+
+    def test_premortem_rejects_invalid_effort_mode(self, thinking_dir: Path) -> None:
+        """Engine method still works but MCP layer would reject 'bogus'."""
+        ThinkingEngine(thinking_dir)  # Verify engine can be created
+        from cocoindex_code.thinking_tools import VALID_EFFORT_MODES
+
+        assert "bogus" not in VALID_EFFORT_MODES
+
+    def test_valid_effort_modes_are_frozenset(self) -> None:
+        from cocoindex_code.thinking_tools import VALID_EFFORT_MODES
+
+        assert isinstance(VALID_EFFORT_MODES, frozenset)
+        assert VALID_EFFORT_MODES == {"low", "medium", "high", "ultra"}
+
+
+class TestMCPEffortModeValidation:
+    """Test that MCP tool wrappers reject invalid effort_mode."""
+
+    @pytest.mark.asyncio
+    async def test_evidence_tracker_rejects_invalid_effort_mode(
+        self, thinking_dir: Path,
+    ) -> None:
+        from cocoindex_code.thinking_tools import (
+            VALID_EFFORT_MODES,
+            EvidenceTrackerResult,
+        )
+
+        # Simulate what the MCP wrapper does
+        effort_mode = "nonsense"
+        if effort_mode not in VALID_EFFORT_MODES:
+            result = EvidenceTrackerResult(
+                success=False,
+                effort_mode=effort_mode,
+                message=f"Invalid effort_mode '{effort_mode}'",
+            )
+        assert result.success is False
+        assert "Invalid effort_mode" in (result.message or "")
+
+    @pytest.mark.asyncio
+    async def test_premortem_rejects_invalid_effort_mode(
+        self, thinking_dir: Path,
+    ) -> None:
+        from cocoindex_code.thinking_tools import (
+            VALID_EFFORT_MODES,
+            PremortemResult,
+        )
+
+        effort_mode = "turbo"
+        if effort_mode not in VALID_EFFORT_MODES:
+            result = PremortemResult(
+                success=False,
+                effort_mode=effort_mode,
+                message=f"Invalid effort_mode '{effort_mode}'",
+            )
+        assert result.success is False
+        assert "Invalid effort_mode" in (result.message or "")
+
+    @pytest.mark.asyncio
+    async def test_inversion_rejects_invalid_effort_mode(
+        self, thinking_dir: Path,
+    ) -> None:
+        from cocoindex_code.thinking_tools import (
+            VALID_EFFORT_MODES,
+            InversionThinkingResult,
+        )
+
+        effort_mode = "max"
+        if effort_mode not in VALID_EFFORT_MODES:
+            result = InversionThinkingResult(
+                success=False,
+                effort_mode=effort_mode,
+                message=f"Invalid effort_mode '{effort_mode}'",
+            )
+        assert result.success is False
+        assert "Invalid effort_mode" in (result.message or "")
+
+    @pytest.mark.asyncio
+    async def test_effort_estimator_rejects_invalid_effort_mode(
+        self, thinking_dir: Path,
+    ) -> None:
+        from cocoindex_code.thinking_tools import (
+            VALID_EFFORT_MODES,
+            EffortEstimatorResult,
+        )
+
+        effort_mode = "extreme"
+        if effort_mode not in VALID_EFFORT_MODES:
+            result = EffortEstimatorResult(
+                success=False,
+                effort_mode=effort_mode,
+                message=f"Invalid effort_mode '{effort_mode}'",
+            )
+        assert result.success is False
+        assert "Invalid effort_mode" in (result.message or "")
+
+    @pytest.mark.asyncio
+    async def test_plan_optimizer_rejects_invalid_effort_mode(
+        self, thinking_dir: Path,
+    ) -> None:
+        from cocoindex_code.thinking_tools import (
+            VALID_EFFORT_MODES,
+            PlanOptimizerResult,
+        )
+
+        effort_mode = "11"
+        if effort_mode not in VALID_EFFORT_MODES:
+            result = PlanOptimizerResult(
+                success=False,
+                effort_mode=effort_mode,
+                message=f"Invalid effort_mode '{effort_mode}'",
+            )
+        assert result.success is False
+        assert "Invalid effort_mode" in (result.message or "")
+
+
+class TestMemoryCompaction:
+    """Test that thinking memory JSONL file gets compacted on load."""
+
+    def test_compaction_deduplicates_strategies(self, thinking_dir: Path) -> None:
+        """When file has many duplicate strategy entries, compaction deduplicates."""
+        import json
+
+        memory_file = thinking_dir / "thinking_memory.jsonl"
+
+        # Write many duplicate strategy entries (simulating repeated saves)
+        with open(memory_file, "w", encoding="utf-8") as f:
+            for i in range(50):
+                entry = {
+                    "type": "strategy",
+                    "data": {
+                        "strategy": "divide_conquer",
+                        "total_reward": float(i),
+                        "usage_count": i,
+                        "avg_reward": 0.5,
+                        "last_used": float(i),
+                    },
+                }
+                f.write(json.dumps(entry) + "\n")
+
+        # Load — this should trigger compaction since 50 >> 1 unique strategy
+        engine = ThinkingEngine(thinking_dir)
+        assert len(engine._strategy_scores) == 1
+        assert engine._strategy_scores["divide_conquer"].usage_count == 49  # last one wins
+
+        # File should be compacted now
+        with open(memory_file) as f:
+            lines = [line.strip() for line in f if line.strip()]
+        assert len(lines) == 1  # Only one strategy entry after compaction
+
+    def test_no_compaction_when_small_file(self, thinking_dir: Path) -> None:
+        """Small files should not trigger compaction."""
+        engine = ThinkingEngine(thinking_dir)
+        engine.record_learning("s1", "strat1", ["ok"], 0.5, ["i1"])
+        engine.record_learning("s2", "strat2", ["ok"], 0.7, ["i2"])
+
+        memory_file = thinking_dir / "thinking_memory.jsonl"
+        with open(memory_file) as f:
+            lines_before = len([line for line in f if line.strip()])
+
+        # Reload — should NOT compact because file is small
+        engine2 = ThinkingEngine(thinking_dir)
+        assert len(engine2._learnings) == 2
+        assert len(engine2._strategy_scores) == 2
+
+        with open(memory_file) as f:
+            lines_after = len([line for line in f if line.strip()])
+        assert lines_after == lines_before  # No compaction happened

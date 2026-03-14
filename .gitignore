@@ -43,3 +43,6 @@ htmlcov/
 
 # CocoIndex
 .cocoindex_code/
+
+# Session transcripts
+session-*.md

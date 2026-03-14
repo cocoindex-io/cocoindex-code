@@ -156,3 +156,33 @@ class TestLargeWriteWorkflow:
 
         assert (sample_codebase / "file_a.py").read_text() == "content_a"
         assert (sample_codebase / "file_b.py").read_text() == "content_b"
+
+
+class TestSessionEviction:
+    """Test that old sessions are evicted when MAX_SESSIONS is reached."""
+
+    def test_evicts_oldest_when_at_capacity(self) -> None:
+        from cocoindex_code.filesystem_tools import MAX_LARGE_WRITE_SESSIONS
+
+        # Fill up to the limit
+        for i in range(MAX_LARGE_WRITE_SESSIONS):
+            _large_write_start(f"sess_{i}", f"file_{i}.py")
+        assert len(_large_write_buffers) == MAX_LARGE_WRITE_SESSIONS
+
+        # Adding one more should evict the oldest
+        _large_write_start("overflow", "overflow.py")
+        assert len(_large_write_buffers) == MAX_LARGE_WRITE_SESSIONS
+        assert "overflow" in _large_write_buffers
+        # sess_0 should have been evicted (oldest created_at)
+        assert "sess_0" not in _large_write_buffers
+
+    def test_restarting_existing_session_does_not_evict(self) -> None:
+        from cocoindex_code.filesystem_tools import MAX_LARGE_WRITE_SESSIONS
+
+        for i in range(MAX_LARGE_WRITE_SESSIONS):
+            _large_write_start(f"sess_{i}", f"file_{i}.py")
+
+        # Restarting an existing session should NOT evict anyone
+        _large_write_start("sess_0", "updated.py")
+        assert len(_large_write_buffers) == MAX_LARGE_WRITE_SESSIONS
+        assert _large_write_buffers["sess_0"]["path"] == "updated.py"
