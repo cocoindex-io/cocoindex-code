@@ -1,0 +1,4 @@
+# Ignore everything that isn't needed to build the image.
+# The Dockerfile installs cocoindex-code from PyPI — no source files are needed.
+**
+!docker/Dockerfile
