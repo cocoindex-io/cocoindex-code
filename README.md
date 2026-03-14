@@ -114,6 +114,119 @@ Use the cocoindex-code MCP server for semantic code search when:
 - Finding similar code patterns or related functionality
 ```
 
+## Docker
+ 
+A Docker image is available for teams who want a reproducible, dependency-free
+setup — no Python, `uv`, or system dependencies required on the host.
+ 
+### Pull the image
+ 
+```bash
+docker pull ghcr.io/cocoindex-io/cocoindex-code:latest
+```
+ 
+### Claude Code
+ 
+```bash
+claude mcp add cocoindex-code \
+  -- docker run --rm --interactive \
+    --volume "$(pwd):/workspace" \
+    --volume cocoindex-model-cache:/root/.cache \
+    ghcr.io/cocoindex-io/cocoindex-code:latest
+```
+ 
+### Codex
+ 
+```bash
+codex mcp add cocoindex-code \
+  -- docker run --rm --interactive \
+    --volume "$(pwd):/workspace" \
+    --volume cocoindex-model-cache:/root/.cache \
+    ghcr.io/cocoindex-io/cocoindex-code:latest
+```
+ 
+> **Tip — pre-warm the index before first use:**
+> The MCP server indexes on demand, but for large codebases you can run the
+> indexer once in the foreground to watch progress and ensure everything is
+> ready:
+>
+> ```bash
+> docker run --rm \
+>   --volume "$(pwd):/workspace" \
+>   --volume cocoindex-model-cache:/root/.cache \
+>   --entrypoint cocoindex-code \
+>   ghcr.io/cocoindex-io/cocoindex-code:latest index
+> ```
+ 
+### Configuration via environment variables
+ 
+All [configuration variables](#configuration) work identically in Docker — pass
+them with `--env` / `-e`:
+ 
+```bash
+# Extra extensions (e.g. Typesafe Config, SBT build files)
+-e COCOINDEX_CODE_EXTRA_EXTENSIONS="conf,sbt"
+ 
+# Exclude build artefacts (Scala/SBT example)
+-e COCOINDEX_CODE_EXCLUDE_PATTERNS='["**/target/**","**/.bloop/**","**/.metals/**"]'
+ 
+# Swap in a code-optimised embedding model
+-e COCOINDEX_CODE_EMBEDDING_MODEL=voyage/voyage-code-3
+-e VOYAGE_API_KEY=your-key
+```
+ 
+Full example with all options:
+ 
+```bash
+docker run --rm --interactive \
+  --volume "$(pwd):/workspace" \
+  --volume cocoindex-model-cache:/root/.cache \
+  -e COCOINDEX_CODE_EXTRA_EXTENSIONS="conf,sbt" \
+  -e COCOINDEX_CODE_EXCLUDE_PATTERNS='["**/target/**","**/.bloop/**"]' \
+  -e COCOINDEX_CODE_EMBEDDING_MODEL=voyage/voyage-code-3 \
+  -e VOYAGE_API_KEY=your-key \
+  ghcr.io/cocoindex-io/cocoindex-code:latest
+```
+ 
+### Named volume for the model cache
+ 
+The default embedding model (~90 MB) is baked into the image. If you override
+`COCOINDEX_CODE_EMBEDDING_MODEL` with an external model, use a named volume so
+it is downloaded only once:
+ 
+```bash
+docker volume create cocoindex-model-cache
+```
+ 
+### Build the image locally
+ 
+```bash
+docker build -t cocoindex-code:local -f docker/Dockerfile .
+```
+ 
+### `.mcp.json` (Claude Code project config)
+ 
+```json
+{
+  "mcpServers": {
+    "cocoindex-code": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "--rm", "--interactive",
+        "--volume", "/path/to/your/project:/workspace",
+        "--volume", "cocoindex-model-cache:/root/.cache",
+        "ghcr.io/cocoindex-io/cocoindex-code:latest"
+      ]
+    }
+  }
+}
+```
+ 
+> **Note:** The index (`.cocoindex_code/`) is written inside `/workspace`, which
+> maps to your project root on the host. Incremental updates persist between
+> sessions. Add `.cocoindex_code/` to your `.gitignore`.
+
 ## Features
 - **Semantic Code Search**: Find relevant code using natural language queries when grep doesn't work well, and save tokens immediately.
 - **Ultra Performant to code changes**:⚡ Built on top of ultra performant [Rust indexing engine](https://github.com/cocoindex-io/cocoindex/edit/main/README.md). Only re-indexes changed files for fast updates.
