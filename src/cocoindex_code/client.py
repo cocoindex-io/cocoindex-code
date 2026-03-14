@@ -1,0 +1,241 @@
+"""Client for communicating with the daemon."""
+
+from __future__ import annotations
+
+import logging
+import os
+import signal
+import subprocess
+import sys
+import time
+from multiprocessing.connection import Client, Connection
+from pathlib import Path
+
+from ._version import __version__
+from .daemon import daemon_pid_path, daemon_socket_path
+from .protocol import (
+    DaemonStatusResponse,
+    ErrorResponse,
+    HandshakeRequest,
+    HandshakeResponse,
+    IndexRequest,
+    IndexResponse,
+    ProjectStatusRequest,
+    ProjectStatusResponse,
+    Request,
+    Response,
+    SearchRequest,
+    SearchResponse,
+    StopRequest,
+    StopResponse,
+    decode_response,
+    encode_request,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class DaemonClient:
+    """Client for communicating with the daemon."""
+
+    _conn: Connection
+
+    def __init__(self, conn: Connection) -> None:
+        self._conn = conn
+
+    @classmethod
+    def connect(cls) -> DaemonClient:
+        """Connect to daemon. Raises ConnectionRefusedError if not running."""
+        sock = daemon_socket_path()
+        if not Path(sock).exists():
+            raise ConnectionRefusedError(f"Daemon socket not found: {sock}")
+        try:
+            conn = Client(sock, family="AF_UNIX")
+        except (ConnectionRefusedError, FileNotFoundError, OSError) as e:
+            raise ConnectionRefusedError(f"Cannot connect to daemon: {e}") from e
+        return cls(conn)
+
+    def handshake(self) -> HandshakeResponse:
+        """Send version handshake."""
+        return self._send(HandshakeRequest(version=__version__))  # type: ignore[return-value]
+
+    def index(self, project_root: str) -> IndexResponse:
+        """Request indexing. Blocks until complete."""
+        return self._send(IndexRequest(project_root=project_root))  # type: ignore[return-value]
+
+    def search(
+        self,
+        project_root: str,
+        query: str,
+        languages: list[str] | None = None,
+        paths: list[str] | None = None,
+        limit: int = 5,
+        offset: int = 0,
+        refresh: bool = False,
+    ) -> SearchResponse:
+        """Search the codebase."""
+        return self._send(  # type: ignore[return-value]
+            SearchRequest(
+                project_root=project_root,
+                query=query,
+                languages=languages,
+                paths=paths,
+                limit=limit,
+                offset=offset,
+                refresh=refresh,
+            )
+        )
+
+    def project_status(self, project_root: str) -> ProjectStatusResponse:
+        return self._send(  # type: ignore[return-value]
+            ProjectStatusRequest(project_root=project_root)
+        )
+
+    def daemon_status(self) -> DaemonStatusResponse:
+        from .protocol import DaemonStatusRequest
+
+        return self._send(DaemonStatusRequest())  # type: ignore[return-value]
+
+    def stop(self) -> StopResponse:
+        return self._send(StopRequest())  # type: ignore[return-value]
+
+    def close(self) -> None:
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+
+    def _send(self, req: Request) -> Response:
+        self._conn.send_bytes(encode_request(req))
+        data = self._conn.recv_bytes()
+        resp = decode_response(data)
+        if isinstance(resp, ErrorResponse):
+            raise RuntimeError(f"Daemon error: {resp.message}")
+        return resp
+
+
+# ---------------------------------------------------------------------------
+# Daemon lifecycle helpers
+# ---------------------------------------------------------------------------
+
+
+def is_daemon_running() -> bool:
+    """Check if the daemon is running."""
+    sock = daemon_socket_path()
+    return Path(sock).exists()
+
+
+def start_daemon() -> None:
+    """Start the daemon as a background process."""
+    from .daemon import daemon_dir
+
+    daemon_dir().mkdir(parents=True, exist_ok=True)
+    log_path = daemon_dir() / "daemon.log"
+
+    # Use the ccc entry point if available, otherwise fall back to python -m
+    ccc_path = _find_ccc_executable()
+    if ccc_path:
+        cmd = [ccc_path, "run-daemon"]
+    else:
+        cmd = [sys.executable, "-m", "cocoindex_code.cli", "run-daemon"]
+
+    log_fd = open(log_path, "a")
+    subprocess.Popen(
+        cmd,
+        start_new_session=True,
+        stdout=log_fd,
+        stderr=log_fd,
+        stdin=subprocess.DEVNULL,
+    )
+    log_fd.close()
+
+
+def _find_ccc_executable() -> str | None:
+    """Find the ccc executable in PATH or the same directory as python."""
+    # Check in the same directory as the Python executable
+    python_dir = Path(sys.executable).parent
+    ccc = python_dir / "ccc"
+    if ccc.exists():
+        return str(ccc)
+    return None
+
+
+def stop_daemon() -> None:
+    """Stop the daemon gracefully."""
+    try:
+        client = DaemonClient.connect()
+        client.handshake()
+        client.stop()
+        client.close()
+    except (ConnectionRefusedError, OSError):
+        pass
+
+    # If daemon doesn't respond, try SIGTERM via PID
+    pid_path = daemon_pid_path()
+    if pid_path.exists():
+        try:
+            pid = int(pid_path.read_text().strip())
+            os.kill(pid, signal.SIGTERM)
+        except (ValueError, ProcessLookupError, PermissionError):
+            pass
+
+    # Clean up stale files
+    sock = daemon_socket_path()
+    try:
+        Path(sock).unlink(missing_ok=True)
+    except Exception:
+        pass
+    try:
+        pid_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _wait_for_daemon(timeout: float = 5.0) -> None:
+    """Wait for the daemon socket to become available."""
+    deadline = time.monotonic() + timeout
+    sock = daemon_socket_path()
+    while time.monotonic() < deadline:
+        if Path(sock).exists():
+            return
+        time.sleep(0.1)
+    raise TimeoutError("Daemon did not start in time")
+
+
+def ensure_daemon() -> DaemonClient:
+    """Connect to daemon, starting or restarting as needed.
+
+    1. Try to connect to existing daemon.
+    2. If connection refused: start daemon, retry connect with backoff.
+    3. If connected but version mismatch: stop old daemon, start new one.
+    """
+    # Try connecting to existing daemon
+    try:
+        client = DaemonClient.connect()
+        resp = client.handshake()
+        if resp.ok:
+            return client
+        # Version mismatch — restart
+        client.close()
+        stop_daemon()
+    except (ConnectionRefusedError, OSError):
+        pass
+
+    # Start daemon
+    start_daemon()
+    _wait_for_daemon()
+
+    # Connect with retries
+    for attempt in range(10):
+        try:
+            client = DaemonClient.connect()
+            resp = client.handshake()
+            if resp.ok:
+                return client
+            raise RuntimeError(
+                f"Daemon version mismatch: expected {__version__}, got {resp.daemon_version}"
+            )
+        except (ConnectionRefusedError, OSError):
+            time.sleep(0.5)
+
+    raise RuntimeError("Failed to connect to daemon after starting it")

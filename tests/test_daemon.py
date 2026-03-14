@@ -1,0 +1,146 @@
+"""Integration tests for the daemon process.
+
+Runs the daemon in a background thread with a shared embedder.
+Uses a session-scoped fixture to avoid re-creating the daemon for each test.
+"""
+
+from __future__ import annotations
+
+import tempfile
+import threading
+import time
+from multiprocessing.connection import Client, Connection
+from pathlib import Path
+
+import pytest
+
+from cocoindex_code._version import __version__
+from cocoindex_code.protocol import (
+    DaemonStatusRequest,
+    HandshakeRequest,
+    IndexRequest,
+    ProjectStatusRequest,
+    Response,
+    SearchRequest,
+    decode_response,
+    encode_request,
+)
+from cocoindex_code.settings import (
+    default_project_settings,
+    default_user_settings,
+    save_project_settings,
+    save_user_settings,
+)
+
+SAMPLE_MAIN_PY = '''\
+"""Main module."""
+
+def calculate_fibonacci(n: int) -> int:
+    """Calculate the nth Fibonacci number."""
+    if n <= 1:
+        return n
+    return calculate_fibonacci(n - 1) + calculate_fibonacci(n - 2)
+'''
+
+
+@pytest.fixture(scope="session")
+def daemon_sock() -> str:
+    """Start a daemon once per session and return the socket path."""
+    import cocoindex_code.daemon as dm
+    import cocoindex_code.settings as st
+    from cocoindex_code.settings import EmbeddingSettings
+    from cocoindex_code.shared import create_embedder
+    from cocoindex_code.shared import embedder as shared_emb
+
+    emb = shared_emb if shared_emb is not None else create_embedder(EmbeddingSettings())
+
+    # Use a short path to stay within AF_UNIX limit
+    user_dir = Path(tempfile.mkdtemp(prefix="ccc_d_"))
+    user_dir.mkdir(parents=True, exist_ok=True)
+
+    st.user_settings_dir = lambda: user_dir
+    st.user_settings_path = lambda: user_dir / "settings.yml"
+    dm.create_embedder = lambda settings: emb  # type: ignore[attr-defined]
+
+    save_user_settings(default_user_settings())
+
+    thread = threading.Thread(target=dm.run_daemon, daemon=True)
+    thread.start()
+
+    sock_path = dm.daemon_socket_path()
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        if Path(sock_path).exists():
+            break
+        time.sleep(0.1)
+    else:
+        raise TimeoutError("Daemon did not start")
+
+    return sock_path
+
+
+@pytest.fixture(scope="session")
+def daemon_project(daemon_sock: str) -> str:
+    """Create and index a project once for the session. Returns project_root str."""
+    project = Path(tempfile.mkdtemp(prefix="ccc_proj_"))
+    save_project_settings(project, default_project_settings())
+    (project / "main.py").write_text(SAMPLE_MAIN_PY)
+
+    conn = Client(daemon_sock, family="AF_UNIX")
+    conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
+    decode_response(conn.recv_bytes())
+    conn.send_bytes(encode_request(IndexRequest(project_root=str(project))))
+    decode_response(conn.recv_bytes())
+    conn.close()
+
+    return str(project)
+
+
+def _connect_and_handshake(sock_path: str) -> tuple[Connection, Response]:
+    conn = Client(sock_path, family="AF_UNIX")
+    conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
+    resp = decode_response(conn.recv_bytes())
+    return conn, resp
+
+
+def test_daemon_starts_and_accepts_handshake(daemon_sock: str) -> None:
+    conn, resp = _connect_and_handshake(daemon_sock)
+    assert resp.ok is True  # type: ignore[union-attr]
+    assert resp.daemon_version == __version__  # type: ignore[union-attr]
+    conn.close()
+
+
+def test_daemon_rejects_version_mismatch(daemon_sock: str) -> None:
+    conn = Client(daemon_sock, family="AF_UNIX")
+    conn.send_bytes(encode_request(HandshakeRequest(version="0.0.0-fake")))
+    resp = decode_response(conn.recv_bytes())
+    assert resp.ok is False  # type: ignore[union-attr]
+    conn.close()
+
+
+def test_daemon_status(daemon_sock: str) -> None:
+    conn, _ = _connect_and_handshake(daemon_sock)
+    conn.send_bytes(encode_request(DaemonStatusRequest()))
+    resp = decode_response(conn.recv_bytes())
+    assert resp.version == __version__  # type: ignore[union-attr]
+    assert resp.uptime_seconds > 0  # type: ignore[union-attr]
+    conn.close()
+
+
+def test_daemon_project_status_after_index(daemon_sock: str, daemon_project: str) -> None:
+    conn, _ = _connect_and_handshake(daemon_sock)
+    conn.send_bytes(encode_request(ProjectStatusRequest(project_root=daemon_project)))
+    resp = decode_response(conn.recv_bytes())
+    assert resp.total_chunks > 0  # type: ignore[union-attr]
+    assert resp.total_files > 0  # type: ignore[union-attr]
+    conn.close()
+
+
+def test_daemon_search_after_index(daemon_sock: str, daemon_project: str) -> None:
+    conn, _ = _connect_and_handshake(daemon_sock)
+    conn.send_bytes(encode_request(SearchRequest(project_root=daemon_project, query="fibonacci")))
+    resp = decode_response(conn.recv_bytes())
+    assert resp.success is True  # type: ignore[union-attr]
+    assert len(resp.results) > 0  # type: ignore[union-attr]
+    assert "main.py" in resp.results[0].file_path  # type: ignore[union-attr]
+    conn.close()

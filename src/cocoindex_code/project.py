@@ -1,14 +1,16 @@
+"""Project management: wraps a CocoIndex Environment + App."""
+
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import cocoindex as coco
 from cocoindex.connectors import sqlite
-from cocoindex.connectors.localfs import register_base_dir
 
-from .config import config
 from .indexer import indexer_main
-from .shared import CODEBASE_DIR, SQLITE_DB
+from .settings import PROJECT_SETTINGS, ProjectSettings
+from .shared import CODEBASE_DIR, EMBEDDER, SQLITE_DB, Embedder
 
 
 class Project:
@@ -34,20 +36,25 @@ class Project:
         return self._initial_index_done
 
     @staticmethod
-    async def create() -> Project:
-        # Ensure index directory exists
-        config.index_dir.mkdir(parents=True, exist_ok=True)
+    async def create(
+        project_root: Path,
+        project_settings: ProjectSettings,
+        embedder: Embedder,
+    ) -> Project:
+        """Create a project with explicit settings and embedder."""
+        index_dir = project_root / ".cocoindex_code"
+        index_dir.mkdir(parents=True, exist_ok=True)
 
-        # Set CocoIndex state database path
-        settings = coco.Settings.from_env(config.cocoindex_db_path)
+        cocoindex_db_path = index_dir / "cocoindex.db"
+        target_sqlite_db_path = index_dir / "target_sqlite.db"
+
+        settings = coco.Settings.from_env(cocoindex_db_path)
 
         context = coco.ContextProvider()
-
-        # Provide codebase root directory to environment
-        context.provide(CODEBASE_DIR, register_base_dir("codebase", config.codebase_root_path))
-        # Connect to SQLite with vector extension
-        conn = sqlite.connect(str(config.target_sqlite_db_path), load_vec="auto")
-        context.provide(SQLITE_DB, sqlite.register_db("index_db", conn))
+        context.provide(CODEBASE_DIR, project_root)
+        context.provide(SQLITE_DB, sqlite.connect(str(target_sqlite_db_path), load_vec=True))
+        context.provide(EMBEDDER, embedder)
+        context.provide(PROJECT_SETTINGS, project_settings)
 
         env = coco.Environment(settings, context_provider=context)
         app = coco.App(
@@ -63,14 +70,3 @@ class Project:
         result._app = app
         result._index_lock = asyncio.Lock()
         return result
-
-
-_project: Project | None = None
-
-
-async def default_project() -> Project:
-    """Factory function to create the CocoIndexCode project."""
-    global _project
-    if _project is None:
-        _project = await Project.create()
-    return _project

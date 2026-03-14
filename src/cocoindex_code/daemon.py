@@ -1,0 +1,406 @@
+"""Daemon process: listener loop, project registry, request dispatch."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import signal
+import threading
+import time
+from multiprocessing.connection import Connection, Listener
+from pathlib import Path
+from typing import Any
+
+from ._version import __version__
+from .project import Project
+from .protocol import (
+    DaemonProjectInfo,
+    DaemonStatusRequest,
+    DaemonStatusResponse,
+    ErrorResponse,
+    HandshakeRequest,
+    HandshakeResponse,
+    IndexRequest,
+    IndexResponse,
+    ProjectStatusRequest,
+    ProjectStatusResponse,
+    Request,
+    Response,
+    SearchRequest,
+    SearchResponse,
+    SearchResult,
+    StopRequest,
+    StopResponse,
+    decode_request,
+    encode_response,
+)
+from .query import query_codebase
+from .settings import (
+    load_project_settings,
+    load_user_settings,
+    user_settings_dir,
+)
+from .shared import SQLITE_DB, Embedder, create_embedder
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Daemon paths
+# ---------------------------------------------------------------------------
+
+
+def daemon_dir() -> Path:
+    """Return the daemon directory (``~/.cocoindex_code/``)."""
+    return user_settings_dir()
+
+
+def daemon_socket_path() -> str:
+    """Return the path for the daemon's Unix socket."""
+    return str(daemon_dir() / "daemon.sock")
+
+
+def daemon_pid_path() -> Path:
+    """Return the path for the daemon's PID file."""
+    return daemon_dir() / "daemon.pid"
+
+
+def daemon_log_path() -> Path:
+    """Return the path for the daemon's log file."""
+    return daemon_dir() / "daemon.log"
+
+
+# ---------------------------------------------------------------------------
+# Project Registry
+# ---------------------------------------------------------------------------
+
+
+class ProjectRegistry:
+    """Manages loaded projects and their indexes."""
+
+    _projects: dict[str, Project]
+    _index_locks: dict[str, asyncio.Lock]
+    _indexing: dict[str, bool]
+    _embedder: Embedder
+
+    def __init__(self, embedder: Embedder) -> None:
+        self._projects = {}
+        self._index_locks = {}
+        self._indexing = {}
+        self._embedder = embedder
+
+    async def get_project(self, project_root: str) -> Project:
+        """Get or create a Project for the given root. Lazy initialization."""
+        if project_root not in self._projects:
+            root = Path(project_root)
+            project_settings = load_project_settings(root)
+            project = await Project.create(root, project_settings, self._embedder)
+            self._projects[project_root] = project
+            self._index_locks[project_root] = asyncio.Lock()
+            self._indexing[project_root] = False
+        return self._projects[project_root]
+
+    async def update_index(self, project_root: str) -> None:
+        """Update index for project, serialized by per-project lock."""
+        project = await self.get_project(project_root)
+        lock = self._index_locks[project_root]
+        async with lock:
+            self._indexing[project_root] = True
+            try:
+                await project.update_index()
+            finally:
+                self._indexing[project_root] = False
+
+    async def search(
+        self,
+        project_root: str,
+        query: str,
+        languages: list[str] | None = None,
+        paths: list[str] | None = None,
+        limit: int = 5,
+        offset: int = 0,
+    ) -> list[SearchResult]:
+        """Search within a project."""
+        project = await self.get_project(project_root)
+        root = Path(project_root)
+        target_db = root / ".cocoindex_code" / "target_sqlite.db"
+        results = await query_codebase(
+            query=query,
+            target_sqlite_db_path=target_db,
+            env=project.env,
+            limit=limit,
+            offset=offset,
+            languages=languages,
+            paths=paths,
+        )
+        return [
+            SearchResult(
+                file_path=r.file_path,
+                language=r.language,
+                content=r.content,
+                start_line=r.start_line,
+                end_line=r.end_line,
+                score=r.score,
+            )
+            for r in results
+        ]
+
+    def get_status(self, project_root: str) -> ProjectStatusResponse:
+        """Get index stats for a project."""
+        project = self._projects.get(project_root)
+        if project is None:
+            return ProjectStatusResponse(
+                indexing=False, total_chunks=0, total_files=0, languages={}
+            )
+
+        db = project.env.get_context(SQLITE_DB)
+        with db.readonly() as conn:
+            total_chunks = conn.execute("SELECT COUNT(*) FROM code_chunks_vec").fetchone()[0]
+            total_files = conn.execute(
+                "SELECT COUNT(DISTINCT file_path) FROM code_chunks_vec"
+            ).fetchone()[0]
+            lang_rows = conn.execute(
+                "SELECT language, COUNT(*) as cnt FROM code_chunks_vec"
+                " GROUP BY language ORDER BY cnt DESC"
+            ).fetchall()
+
+        return ProjectStatusResponse(
+            indexing=self._indexing.get(project_root, False),
+            total_chunks=total_chunks,
+            total_files=total_files,
+            languages={lang: cnt for lang, cnt in lang_rows},
+        )
+
+    def list_projects(self) -> list[DaemonProjectInfo]:
+        """List all loaded projects with their indexing state."""
+        return [
+            DaemonProjectInfo(
+                project_root=root,
+                indexing=self._indexing.get(root, False),
+            )
+            for root in self._projects
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Connection handler
+# ---------------------------------------------------------------------------
+
+
+async def handle_connection(
+    conn: Connection,
+    registry: ProjectRegistry,
+    start_time: float,
+    shutdown_event: asyncio.Event,
+) -> None:
+    """Handle a single client connection."""
+    loop = asyncio.get_event_loop()
+    handshake_done = False
+
+    try:
+        while not shutdown_event.is_set():
+            try:
+                data: bytes = await loop.run_in_executor(None, conn.recv_bytes)
+            except (EOFError, OSError):
+                break
+
+            try:
+                req = decode_request(data)
+            except Exception as e:
+                resp: Response = ErrorResponse(message=f"Invalid request: {e}")
+                conn.send_bytes(encode_response(resp))
+                continue
+
+            if not handshake_done:
+                if not isinstance(req, HandshakeRequest):
+                    resp = ErrorResponse(message="First message must be a handshake")
+                    conn.send_bytes(encode_response(resp))
+                    break
+
+                ok = req.version == __version__
+                resp = HandshakeResponse(ok=ok, daemon_version=__version__)
+                conn.send_bytes(encode_response(resp))
+                if not ok:
+                    break
+                handshake_done = True
+                continue
+
+            resp = await _dispatch(req, registry, start_time, shutdown_event)
+            conn.send_bytes(encode_response(resp))
+
+            if isinstance(req, StopRequest):
+                break
+    except Exception:
+        logger.exception("Error handling connection")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+async def _dispatch(
+    req: Request,
+    registry: ProjectRegistry,
+    start_time: float,
+    shutdown_event: asyncio.Event,
+) -> Response:
+    """Dispatch a request to the appropriate handler."""
+    try:
+        if isinstance(req, IndexRequest):
+            await registry.update_index(req.project_root)
+            return IndexResponse(success=True)
+
+        if isinstance(req, SearchRequest):
+            if req.refresh:
+                await registry.update_index(req.project_root)
+            results = await registry.search(
+                project_root=req.project_root,
+                query=req.query,
+                languages=req.languages,
+                paths=req.paths,
+                limit=req.limit,
+                offset=req.offset,
+            )
+            return SearchResponse(
+                success=True,
+                results=results,
+                total_returned=len(results),
+                offset=req.offset,
+            )
+
+        if isinstance(req, ProjectStatusRequest):
+            return registry.get_status(req.project_root)
+
+        if isinstance(req, DaemonStatusRequest):
+            return DaemonStatusResponse(
+                version=__version__,
+                uptime_seconds=time.monotonic() - start_time,
+                projects=registry.list_projects(),
+            )
+
+        if isinstance(req, StopRequest):
+            shutdown_event.set()
+            return StopResponse(ok=True)
+
+        return ErrorResponse(message=f"Unknown request type: {type(req).__name__}")
+    except Exception as e:
+        logger.exception("Error dispatching request")
+        return ErrorResponse(message=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Daemon main
+# ---------------------------------------------------------------------------
+
+
+def run_daemon() -> None:
+    """Main entry point for the daemon process (blocking)."""
+    daemon_dir().mkdir(parents=True, exist_ok=True)
+
+    # Load user settings
+    user_settings = load_user_settings()
+
+    # Set environment variables from settings
+    for key, value in user_settings.envs.items():
+        os.environ[key] = value
+
+    # Create embedder
+    embedder = create_embedder(user_settings.embedding)
+
+    # Write PID file
+    pid_path = daemon_pid_path()
+    pid_path.write_text(str(os.getpid()))
+
+    # Set up logging to file
+    log_path = daemon_log_path()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[logging.FileHandler(str(log_path)), logging.StreamHandler()],
+        force=True,
+    )
+
+    logger.info("Daemon starting (PID %d, version %s)", os.getpid(), __version__)
+
+    try:
+        asyncio.run(_async_daemon_main(embedder))
+    finally:
+        # Clean up PID file and socket
+        try:
+            pid_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        sock = daemon_socket_path()
+        try:
+            Path(sock).unlink(missing_ok=True)
+        except Exception:
+            pass
+        logger.info("Daemon stopped")
+
+
+async def _async_daemon_main(embedder: Embedder) -> None:
+    """Async main loop for the daemon."""
+    start_time = time.monotonic()
+    registry = ProjectRegistry(embedder)
+    shutdown_event = asyncio.Event()
+
+    sock_path = daemon_socket_path()
+    # Remove stale socket
+    try:
+        Path(sock_path).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    listener = Listener(sock_path, family="AF_UNIX")
+    logger.info("Listening on %s", sock_path)
+
+    loop = asyncio.get_event_loop()
+
+    # Handle signals for graceful shutdown (only works in main thread)
+    try:
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, shutdown_event.set)
+    except RuntimeError:
+        pass  # Not in main thread (e.g., during tests)
+
+    tasks: set[asyncio.Task[Any]] = set()
+
+    async def _spawn_handler(
+        conn: Connection,
+        reg: ProjectRegistry,
+        st: float,
+        evt: asyncio.Event,
+        task_set: set[asyncio.Task[Any]],
+    ) -> None:
+        task = asyncio.create_task(handle_connection(conn, reg, st, evt))
+        task_set.add(task)
+        task.add_done_callback(task_set.discard)
+
+    # Run accept loop in a thread so we can shut down cleanly
+    def _accept_loop() -> None:
+        while not shutdown_event.is_set():
+            try:
+                listener._listener._socket.settimeout(0.5)  # type: ignore[attr-defined]
+                conn = listener.accept()
+                # Schedule the handler on the event loop
+                asyncio.run_coroutine_threadsafe(
+                    _spawn_handler(conn, registry, start_time, shutdown_event, tasks),
+                    loop,
+                )
+            except OSError:
+                if shutdown_event.is_set():
+                    break
+                # Socket timeout — just retry
+                continue
+
+    accept_thread = threading.Thread(target=_accept_loop, daemon=True)
+    accept_thread.start()
+
+    try:
+        await shutdown_event.wait()
+    finally:
+        accept_thread.join(timeout=2)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        listener.close()

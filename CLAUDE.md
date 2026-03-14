@@ -6,8 +6,8 @@ This is built on top of [CocoIndex v1](https://cocoindex.io/docs-v1/llms.txt).
 This project uses [uv](https://docs.astral.sh/uv/) for project management.
 
 ```bash
-uv run mypy              # Type check Python code
-uv run pytest python/    # Run Python tests (use after both Rust and Python changes)
+uv run mypy .           # Type check Python code
+uv run pytest tests/    # Run Python tests
 ```
 
 ## Code Conventions

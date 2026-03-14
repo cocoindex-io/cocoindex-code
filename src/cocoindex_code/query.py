@@ -1,13 +1,14 @@
 """Query implementation for codebase search."""
 
+from __future__ import annotations
+
 import heapq
 import sqlite3
+from pathlib import Path
 from typing import Any
 
-from .config import config
-from .project import default_project
 from .schema import QueryResult
-from .shared import SQLITE_DB, embedder, query_prompt_name
+from .shared import EMBEDDER, SQLITE_DB, query_prompt_name
 
 
 def _l2_to_score(distance: float) -> float:
@@ -83,6 +84,8 @@ def _full_scan_query(
 
 async def query_codebase(
     query: str,
+    target_sqlite_db_path: Path,
+    env: Any,
     limit: int = 10,
     offset: int = 0,
     languages: list[str] | None = None,
@@ -95,31 +98,27 @@ async def query_codebase(
     Language filtering uses vec0 partition keys for exact index-level filtering.
     Path filtering triggers a full scan with distance computation.
     """
-    if not config.target_sqlite_db_path.exists():
+    if not target_sqlite_db_path.exists():
         raise RuntimeError(
-            f"Index database not found at {config.target_sqlite_db_path}. "
+            f"Index database not found at {target_sqlite_db_path}. "
             "Please run a query with refresh_index=True first."
         )
 
-    coco_proj = await default_project()
-    db = coco_proj.env.get_context(SQLITE_DB)
+    db = env.get_context(SQLITE_DB)
+    embedder = env.get_context(EMBEDDER)
 
     # Generate query embedding.
     query_embedding = await embedder.embed(query, query_prompt_name)
 
     embedding_bytes = query_embedding.astype("float32").tobytes()
 
-    with db.value.readonly() as conn:
+    with db.readonly() as conn:
         if paths:
-            # Path filter → full scan (vec0 can't filter on auxiliary columns).
-            # LIMIT/OFFSET handled in SQL.
             rows = _full_scan_query(conn, embedding_bytes, limit, offset, languages, paths)
         elif not languages or len(languages) == 1:
-            # Single language or no filter: one KNN query.
             lang = languages[0] if languages else None
             rows = _knn_query(conn, embedding_bytes, limit + offset, lang)
         else:
-            # Multiple languages: separate KNN per partition, merge by distance.
             fetch_k = limit + offset
             rows = heapq.nsmallest(
                 fetch_k,
@@ -128,7 +127,7 @@ async def query_codebase(
                     for lang in languages
                     for row in _knn_query(conn, embedding_bytes, fetch_k, lang)
                 ),
-                key=lambda r: r[5],  # distance column
+                key=lambda r: r[5],
             )
 
     if not paths:
