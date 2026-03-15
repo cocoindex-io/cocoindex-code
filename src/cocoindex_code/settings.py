@@ -110,7 +110,8 @@ def default_project_settings() -> ProjectSettings:
 # ---------------------------------------------------------------------------
 
 _SETTINGS_DIR_NAME = ".cocoindex_code"
-_SETTINGS_FILE_NAME = "settings.yml"
+_SETTINGS_FILE_NAME = "settings.yml"  # project-level
+_USER_SETTINGS_FILE_NAME = "global_settings.yml"  # user-level
 
 
 def user_settings_dir() -> Path:
@@ -127,8 +128,8 @@ def user_settings_dir() -> Path:
 
 
 def user_settings_path() -> Path:
-    """Return ``~/.cocoindex_code/settings.yml``."""
-    return user_settings_dir() / _SETTINGS_FILE_NAME
+    """Return ``~/.cocoindex_code/global_settings.yml``."""
+    return user_settings_dir() / _USER_SETTINGS_FILE_NAME
 
 
 def project_settings_path(project_root: Path) -> Path:

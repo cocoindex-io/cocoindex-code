@@ -31,7 +31,7 @@ def test_legacy_entry_creates_settings_from_env_vars(
     )
     monkeypatch.setattr(
         "cocoindex_code.settings.user_settings_path",
-        lambda: tmp_path / "user" / "settings.yml",
+        lambda: tmp_path / "user" / "global_settings.yml",
     )
 
     # Simulate env vars
@@ -56,7 +56,7 @@ def test_legacy_entry_respects_existing_settings(
     )
     monkeypatch.setattr(
         "cocoindex_code.settings.user_settings_path",
-        lambda: tmp_path / "user" / "settings.yml",
+        lambda: tmp_path / "user" / "global_settings.yml",
     )
 
     custom = UserSettings(

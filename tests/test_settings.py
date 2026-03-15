@@ -33,7 +33,7 @@ def _patch_user_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(
         "cocoindex_code.settings.user_settings_path",
-        lambda: tmp_path / ".cocoindex_code" / "settings.yml",
+        lambda: tmp_path / ".cocoindex_code" / "global_settings.yml",
     )
 
 

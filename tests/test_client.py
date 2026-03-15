@@ -43,7 +43,7 @@ def daemon_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, s
     monkeypatch.setattr("cocoindex_code.settings.user_settings_dir", lambda: user_dir)
     monkeypatch.setattr(
         "cocoindex_code.settings.user_settings_path",
-        lambda: user_dir / "settings.yml",
+        lambda: user_dir / "global_settings.yml",
     )
     save_user_settings(default_user_settings())
 
