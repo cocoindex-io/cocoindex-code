@@ -210,10 +210,18 @@ async def handle_connection(
     loop = asyncio.get_event_loop()
     handshake_done = False
 
+    def _recv() -> bytes:
+        """Blocking recv that also checks for shutdown."""
+        # Use poll with a timeout so we can check shutdown_event periodically
+        while not shutdown_event.is_set():
+            if conn.poll(0.5):
+                return conn.recv_bytes()
+        raise EOFError("shutdown")
+
     try:
         while not shutdown_event.is_set():
             try:
-                data: bytes = await loop.run_in_executor(None, conn.recv_bytes)
+                data: bytes = await loop.run_in_executor(None, _recv)
             except (EOFError, OSError):
                 break
 

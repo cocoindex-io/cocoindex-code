@@ -188,7 +188,7 @@ def main() -> None:
         LanguageOverride,
         default_project_settings,
         default_user_settings,
-        find_parent_with_marker,
+        find_legacy_project_root,
         find_project_root,
         project_settings_path,
         save_project_settings,
@@ -216,8 +216,8 @@ def main() -> None:
             project_root = Path(env_root).resolve()
         else:
             # Use marker-based discovery
-            marker_root = find_parent_with_marker(cwd)
-            project_root = marker_root if marker_root is not None else cwd
+            legacy_root = find_legacy_project_root(cwd)
+            project_root = legacy_root if legacy_root is not None else cwd
 
     # --- Auto-create project settings if needed ---
     proj_settings_file = project_settings_path(project_root)

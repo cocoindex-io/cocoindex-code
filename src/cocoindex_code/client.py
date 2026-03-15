@@ -162,26 +162,43 @@ def _find_ccc_executable() -> str | None:
 
 
 def stop_daemon() -> None:
-    """Stop the daemon gracefully."""
+    """Stop the daemon gracefully.
+
+    Sends a StopRequest, waits for the process to exit, falls back to SIGTERM.
+    """
+    # Step 1: try sending StopRequest
     try:
         client = DaemonClient.connect()
         client.handshake()
         client.stop()
         client.close()
-    except (ConnectionRefusedError, OSError):
+    except (ConnectionRefusedError, OSError, RuntimeError):
         pass
 
-    # If daemon doesn't respond, try SIGTERM via PID
+    # Step 2: wait for process to exit (up to 5s)
     pid_path = daemon_pid_path()
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and pid_path.exists():
+        time.sleep(0.1)
+
+    if not pid_path.exists():
+        return  # Clean exit
+
+    # Step 3: if still running, try SIGTERM
     if pid_path.exists():
         try:
             pid = int(pid_path.read_text().strip())
-            if pid != os.getpid():  # Never kill ourselves (happens when daemon runs in a thread)
+            if pid != os.getpid():
                 os.kill(pid, signal.SIGTERM)
         except (ValueError, ProcessLookupError, PermissionError):
             pass
 
-    # Clean up stale files (named pipes on Windows clean up automatically)
+        # Wait a bit more
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and pid_path.exists():
+            time.sleep(0.1)
+
+    # Step 4: clean up stale files
     if sys.platform != "win32":
         sock = daemon_socket_path()
         try:

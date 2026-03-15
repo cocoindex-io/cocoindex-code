@@ -13,6 +13,7 @@ from cocoindex_code.settings import (
     UserSettings,
     default_project_settings,
     default_user_settings,
+    find_legacy_project_root,
     load_project_settings,
     load_user_settings,
     save_project_settings,
@@ -102,6 +103,27 @@ def test_legacy_extra_extensions_conversion(tmp_path: Path) -> None:
     assert "**/*.inc" in loaded.include_patterns
     assert "**/*.yaml" in loaded.include_patterns
     assert "**/*.toml" in loaded.include_patterns
+
+
+def test_legacy_root_discovery_requires_cocoindex_db(tmp_path: Path) -> None:
+    """A .cocoindex_code dir without cocoindex.db should not be matched."""
+    (tmp_path / ".cocoindex_code").mkdir()
+    assert find_legacy_project_root(tmp_path) is None
+
+
+def test_legacy_root_discovery_with_cocoindex_db(tmp_path: Path) -> None:
+    """A .cocoindex_code dir with cocoindex.db should be matched, including from a subdirectory."""
+    idx_dir = tmp_path / ".cocoindex_code"
+    idx_dir.mkdir()
+    (idx_dir / "cocoindex.db").touch()
+
+    # Exact directory
+    assert find_legacy_project_root(tmp_path) == tmp_path
+
+    # From a subdirectory — should walk up and find the root
+    sub = tmp_path / "src" / "pkg"
+    sub.mkdir(parents=True)
+    assert find_legacy_project_root(sub) == tmp_path
 
 
 def test_legacy_excluded_patterns_conversion(tmp_path: Path) -> None:

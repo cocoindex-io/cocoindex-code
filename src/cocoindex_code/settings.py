@@ -151,6 +151,22 @@ def find_project_root(start: Path) -> Path | None:
         current = parent
 
 
+def find_legacy_project_root(start: Path) -> Path | None:
+    """Walk up from *start* looking for a ``.cocoindex_code/`` dir that contains ``cocoindex.db``.
+
+    Used by the backward-compat ``cocoindex-code`` entrypoint to re-anchor to a
+    previously-indexed project tree.  Returns the first matching directory, or ``None``.
+    """
+    current = start.resolve()
+    while True:
+        if (current / _SETTINGS_DIR_NAME / "cocoindex.db").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
 def find_parent_with_marker(start: Path) -> Path | None:
     """Walk up from *start* looking for ``.cocoindex_code/`` or ``.git/``.
 

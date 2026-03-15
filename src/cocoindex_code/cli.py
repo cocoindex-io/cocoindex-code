@@ -287,16 +287,29 @@ def daemon_restart() -> None:
 @daemon_app.command("stop")
 def daemon_stop() -> None:
     """Stop the daemon."""
-    from .client import DaemonClient
+    from .client import stop_daemon
+    from .daemon import daemon_pid_path
 
-    try:
-        client = DaemonClient.connect()
-        client.handshake()
-        client.stop()
-        client.close()
-        _typer.echo("Daemon stopped.")
-    except (ConnectionRefusedError, OSError):
+    pid_path = daemon_pid_path()
+    if not pid_path.exists():
         _typer.echo("Daemon is not running.")
+        return
+
+    stop_daemon()
+
+    # Wait for process to exit
+    import time
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if not pid_path.exists():
+            break
+        time.sleep(0.1)
+
+    if pid_path.exists():
+        _typer.echo("Warning: daemon may not have stopped cleanly.", err=True)
+    else:
+        _typer.echo("Daemon stopped.")
 
 
 @app.command("run-daemon", hidden=True)
