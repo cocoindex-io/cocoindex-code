@@ -256,6 +256,17 @@ class ProjectRegistry:
             gc.collect()
         return was_loaded
 
+    def close_all(self) -> None:
+        """Close all loaded projects and release resources."""
+        import gc
+
+        for project in self._projects.values():
+            project.close()
+        self._projects.clear()
+        self._index_locks.clear()
+        self._indexing.clear()
+        gc.collect()
+
     def list_projects(self) -> list[DaemonProjectInfo]:
         """List all loaded projects with their indexing state."""
         return [
@@ -519,3 +530,4 @@ async def _async_daemon_main(embedder: Embedder) -> None:
         accept_thread.join(timeout=2)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        registry.close_all()
