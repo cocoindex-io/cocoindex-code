@@ -11,7 +11,7 @@ from cocoindex.resources.file import PatternFilePathMatcher
 from cocoindex.resources.id import IdGenerator
 
 from .settings import PROJECT_SETTINGS
-from .shared import CODEBASE_DIR, EMBEDDER, SQLITE_DB, CodeChunk
+from .shared import CODEBASE_DIR, EMBEDDER, EXT_LANG_OVERRIDE_MAP, SQLITE_DB, CodeChunk
 
 # Chunking configuration
 CHUNK_SIZE = 2000
@@ -28,7 +28,6 @@ async def process_file(
     table: sqlite.TableTarget[CodeChunk],
 ) -> None:
     """Process a single file: chunk, embed, and store."""
-    ps = coco.use_context(PROJECT_SETTINGS)
     embedder = coco.use_context(EMBEDDER)
 
     try:
@@ -40,10 +39,9 @@ async def process_file(
         return
 
     suffix = file.file_path.path.suffix
-    # Check language overrides from project settings
-    override_map = {f".{lo.ext}": lo.lang for lo in ps.language_overrides}
+    ext_lang_override_map = coco.use_context(EXT_LANG_OVERRIDE_MAP)
     language = (
-        override_map.get(suffix)
+        ext_lang_override_map.get(suffix)
         or detect_code_language(filename=file.file_path.path.name)
         or "text"
     )
