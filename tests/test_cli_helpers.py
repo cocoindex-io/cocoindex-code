@@ -81,7 +81,7 @@ def test_add_to_gitignore_creates_file(tmp_path: Path) -> None:
     gitignore = tmp_path / ".gitignore"
     assert gitignore.is_file()
     content = gitignore.read_text()
-    assert "# cocoindex-code" in content
+    assert "# CocoIndex Code (ccc)" in content
     assert "/.cocoindex_code/" in content
 
 
@@ -111,11 +111,11 @@ def test_add_to_gitignore_skips_when_no_git(tmp_path: Path) -> None:
 
 def test_remove_from_gitignore(tmp_path: Path) -> None:
     gitignore = tmp_path / ".gitignore"
-    gitignore.write_text("*.pyc\n# cocoindex-code\n/.cocoindex_code/\n__pycache__/\n")
+    gitignore.write_text("*.pyc\n# CocoIndex Code (ccc)\n/.cocoindex_code/\n__pycache__/\n")
     remove_from_gitignore(tmp_path)
     content = gitignore.read_text()
     assert "/.cocoindex_code/" not in content
-    assert "# cocoindex-code" not in content
+    assert "# CocoIndex Code (ccc)" not in content
     assert "*.pyc" in content
     assert "__pycache__/" in content
 

@@ -160,7 +160,7 @@ def _run_index_with_progress(client: DaemonClient, project_root: str) -> None:
         raise _typer.Exit(code=1)
 
 
-_GITIGNORE_COMMENT = "# cocoindex-code"
+_GITIGNORE_COMMENT = "# CocoIndex Code (ccc)"
 _GITIGNORE_ENTRY = "/.cocoindex_code/"
 
 
