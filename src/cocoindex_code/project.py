@@ -12,7 +12,7 @@ from cocoindex.connectors import sqlite
 from .indexer import indexer_main
 from .protocol import IndexingProgress
 from .settings import PROJECT_SETTINGS, ProjectSettings
-from .shared import CODEBASE_DIR, EMBEDDER, SQLITE_DB, Embedder
+from .shared import CODEBASE_DIR, EMBEDDER, EXT_LANG_OVERRIDE_MAP, SQLITE_DB, Embedder
 
 
 class Project:
@@ -86,6 +86,10 @@ class Project:
         context.provide(SQLITE_DB, sqlite.connect(str(target_sqlite_db_path), load_vec=True))
         context.provide(EMBEDDER, embedder)
         context.provide(PROJECT_SETTINGS, project_settings)
+        context.provide(
+            EXT_LANG_OVERRIDE_MAP,
+            {f".{lo.ext}": lo.lang for lo in project_settings.language_overrides},
+        )
 
         env = coco.Environment(settings, context_provider=context)
         app = coco.App(

@@ -31,6 +31,7 @@ Embedder = Union["SentenceTransformerEmbedder", "LiteLLMEmbedder"]
 EMBEDDER = coco.ContextKey[Embedder]("embedder")
 SQLITE_DB = coco.ContextKey[sqlite.ManagedConnection]("index_db", tracked=False)
 CODEBASE_DIR = coco.ContextKey[pathlib.Path]("codebase", tracked=False)
+EXT_LANG_OVERRIDE_MAP = coco.ContextKey[dict[str, str]]("ext_lang_override_map")
 
 # Module-level variable — set by daemon at startup (needed for CodeChunk annotation).
 embedder: Embedder | None = None
