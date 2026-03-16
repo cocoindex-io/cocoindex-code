@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path, PurePath
 from collections.abc import Iterable
+from pathlib import Path, PurePath
 
 import cocoindex as coco
 from cocoindex.connectors import localfs, sqlite
@@ -15,7 +15,14 @@ from cocoindex.resources.id import IdGenerator
 from pathspec import GitIgnoreSpec
 
 from .settings import PROJECT_SETTINGS
-from .shared import CODEBASE_DIR, EMBEDDER, EXT_LANG_OVERRIDE_MAP, GITIGNORE_SPEC, SQLITE_DB, CodeChunk
+from .shared import (
+    CODEBASE_DIR,
+    EMBEDDER,
+    EXT_LANG_OVERRIDE_MAP,
+    GITIGNORE_SPEC,
+    SQLITE_DB,
+    CodeChunk,
+)
 
 # Chunking configuration
 CHUNK_SIZE = 800

@@ -14,9 +14,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from cocoindex.connectors import sqlite as coco_sqlite
 from typer.testing import CliRunner
 
-from cocoindex.connectors import sqlite as coco_sqlite
 from cocoindex_code.cli import app
 from cocoindex_code.client import stop_daemon
 from cocoindex_code.settings import find_parent_with_marker
@@ -319,8 +319,7 @@ def test_session_respects_gitignore(e2e_project: Path) -> None:
     try:
         with conn.readonly() as db:
             file_paths = {
-                row[0]
-                for row in db.execute("SELECT DISTINCT file_path FROM code_chunks_vec")
+                row[0] for row in db.execute("SELECT DISTINCT file_path FROM code_chunks_vec")
             }
     finally:
         conn.close()

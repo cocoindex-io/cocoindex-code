@@ -12,7 +12,14 @@ from cocoindex.connectors import sqlite
 from .indexer import indexer_main
 from .protocol import IndexingProgress
 from .settings import PROJECT_SETTINGS, ProjectSettings, load_gitignore_spec
-from .shared import CODEBASE_DIR, EMBEDDER, EXT_LANG_OVERRIDE_MAP, GITIGNORE_SPEC, SQLITE_DB, Embedder
+from .shared import (
+    CODEBASE_DIR,
+    EMBEDDER,
+    EXT_LANG_OVERRIDE_MAP,
+    GITIGNORE_SPEC,
+    SQLITE_DB,
+    Embedder,
+)
 
 
 class Project:

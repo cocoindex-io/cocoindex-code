@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Annotated, Union
 
 import cocoindex as coco
 from cocoindex.connectors import sqlite
-from pathspec import GitIgnoreSpec
 from numpy.typing import NDArray
+from pathspec import GitIgnoreSpec
 
 if TYPE_CHECKING:
     from cocoindex.ops.litellm import LiteLLMEmbedder
