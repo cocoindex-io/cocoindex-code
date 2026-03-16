@@ -156,6 +156,15 @@ class DaemonClient:
 
 def is_daemon_running() -> bool:
     """Check if the daemon is running."""
+    if sys.platform == "win32":
+        # os.path.exists is unreliable for Windows named pipes;
+        # try connecting instead.
+        try:
+            conn = Client(daemon_socket_path(), family=_connection_family())
+            conn.close()
+            return True
+        except (ConnectionRefusedError, OSError):
+            return False
     return os.path.exists(daemon_socket_path())
 
 
@@ -220,11 +229,14 @@ def stop_daemon() -> None:
         return  # Clean exit
 
     # Step 3: if still running, try SIGTERM
+    pid: int | None = None
     if pid_path.exists():
         try:
             pid = int(pid_path.read_text().strip())
             if pid != os.getpid():
                 os.kill(pid, signal.SIGTERM)
+            else:
+                pid = None
         except (ValueError, ProcessLookupError, PermissionError):
             pass
 
@@ -240,8 +252,21 @@ def stop_daemon() -> None:
             pid = int(pid_path.read_text().strip())
             if pid != os.getpid():
                 os.kill(pid, signal.SIGKILL)
+            else:
+                pid = None
         except (ValueError, ProcessLookupError, PermissionError):
             pass
+
+    # Step 4b: on Windows, wait for the process to fully exit after TerminateProcess
+    # so that named pipe handles are released before starting a new daemon.
+    if sys.platform == "win32" and pid is not None:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)  # Check if process still exists
+                time.sleep(0.1)
+            except (ProcessLookupError, PermissionError, OSError):
+                break  # Process has exited
 
     # Step 5: clean up stale files
     if sys.platform != "win32":
@@ -256,13 +281,24 @@ def stop_daemon() -> None:
         pass
 
 
-def _wait_for_daemon(timeout: float = 10.0) -> None:
+def _wait_for_daemon(timeout: float = 30.0) -> None:
     """Wait for the daemon socket/pipe to become available."""
     deadline = time.monotonic() + timeout
+    sock_path = daemon_socket_path()
     while time.monotonic() < deadline:
-        if os.path.exists(daemon_socket_path()):
-            return
-        time.sleep(0.1)
+        if sys.platform == "win32":
+            # os.path.exists is unreliable for Windows named pipes;
+            # try an actual connection to verify the daemon is listening.
+            try:
+                conn = Client(sock_path, family=_connection_family())
+                conn.close()
+                return
+            except (ConnectionRefusedError, OSError):
+                pass
+        else:
+            if os.path.exists(sock_path):
+                return
+        time.sleep(0.2)
     raise TimeoutError("Daemon did not start in time")
 
 
