@@ -14,9 +14,9 @@ from .settings import PROJECT_SETTINGS
 from .shared import CODEBASE_DIR, EMBEDDER, EXT_LANG_OVERRIDE_MAP, SQLITE_DB, CodeChunk
 
 # Chunking configuration
-CHUNK_SIZE = 2000
-MIN_CHUNK_SIZE = 300
-CHUNK_OVERLAP = 200
+CHUNK_SIZE = 800
+MIN_CHUNK_SIZE = 200
+CHUNK_OVERLAP = 150
 
 # Chunking splitter (stateless, can be module-level)
 splitter = RecursiveSplitter()
