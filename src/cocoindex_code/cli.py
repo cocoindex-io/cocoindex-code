@@ -91,6 +91,11 @@ def _format_progress(progress: IndexingProgress) -> str:
     )
 
 
+def print_project_header(project_root: str) -> None:
+    """Print the project root directory."""
+    _typer.echo(f"Project: {project_root}")
+
+
 def print_index_stats(status: ProjectStatusResponse) -> None:
     """Print formatted index statistics."""
     if status.progress is not None:
@@ -261,6 +266,7 @@ def init(
 def index() -> None:
     """Create/update index for the codebase."""
     client, project_root = require_daemon_for_project()
+    print_project_header(project_root)
 
     _run_index_with_progress(client, project_root)
 
@@ -310,6 +316,7 @@ def search(
 def status() -> None:
     """Show project status."""
     client, project_root = require_daemon_for_project()
+    print_project_header(project_root)
     resp = client.project_status(project_root)
     print_index_stats(resp)
 
