@@ -55,6 +55,10 @@ Issues = "https://github.com/cocoindex-io/cocoindex-code/issues"
 
 [tool.hatch.version]
 source = "vcs"
+fallback-version = "999.0.0"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/cocoindex_code/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cocoindex_code"]

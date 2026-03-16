@@ -41,5 +41,8 @@ htmlcov/
 .pytest_cache/
 .mypy_cache/
 
+# Generated version file
+src/cocoindex_code/_version.py
+
 # CocoIndex
 .cocoindex_code/
