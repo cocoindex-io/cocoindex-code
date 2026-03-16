@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -230,8 +229,11 @@ def test_session_reset_databases(e2e_project: Path) -> None:
     assert not (e2e_project / ".cocoindex_code" / "cocoindex.db").exists()
     assert not (e2e_project / ".cocoindex_code" / "target_sqlite.db").exists()
 
-    # Allow daemon time to release LMDB handles (deferred refcounting on 3.14t)
-    time.sleep(1)
+    # Restart daemon to fully release LMDB handles.
+    # On free-threaded Python (3.14t), deferred refcounting in the daemon
+    # process prevents the Rust LMDB environment from being freed promptly
+    # after remove_project; restarting is the reliable way to ensure cleanup.
+    runner.invoke(app, ["daemon", "restart"], catch_exceptions=False)
 
     # Re-index — project is still initialized, just databases gone
     result = runner.invoke(app, ["index"], catch_exceptions=False)
@@ -278,8 +280,8 @@ def test_session_reset_then_full_reinit(e2e_project: Path) -> None:
     # Reset everything
     runner.invoke(app, ["reset", "--all", "-f"], catch_exceptions=False)
 
-    # Allow daemon time to release LMDB handles (deferred refcounting on 3.14t)
-    time.sleep(1)
+    # Restart daemon to fully release LMDB handles (see test_session_reset_databases).
+    runner.invoke(app, ["daemon", "restart"], catch_exceptions=False)
 
     # Re-init from scratch
     result = runner.invoke(app, ["init"], catch_exceptions=False)

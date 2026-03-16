@@ -246,7 +246,7 @@ def stop_daemon() -> None:
         pass
 
 
-def _wait_for_daemon(timeout: float = 5.0) -> None:
+def _wait_for_daemon(timeout: float = 10.0) -> None:
     """Wait for the daemon socket/pipe to become available."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
