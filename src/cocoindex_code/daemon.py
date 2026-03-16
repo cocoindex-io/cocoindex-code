@@ -244,10 +244,19 @@ class ProjectRegistry:
 
     def remove_project(self, project_root: str) -> bool:
         """Remove a project from the registry. Returns True if it was loaded."""
+        import gc
+
         was_loaded = project_root in self._projects
-        self._projects.pop(project_root, None)
+        project = self._projects.pop(project_root, None)
         self._index_locks.pop(project_root, None)
         self._indexing.pop(project_root, None)
+        if project is not None:
+            project.close()
+            del project
+            # Force GC to release Rust LMDB environment promptly —
+            # required on free-threaded Python (3.14t) and Windows where
+            # deferred reference counting / file locking prevents reuse.
+            gc.collect()
         return was_loaded
 
     def list_projects(self) -> list[DaemonProjectInfo]:
@@ -314,8 +323,12 @@ async def handle_connection(
 
             result = await _dispatch(req, registry, start_time, shutdown_event)
             if isinstance(result, AsyncIterator):
-                async for resp in result:
-                    conn.send_bytes(encode_response(resp))
+                try:
+                    async for resp in result:
+                        conn.send_bytes(encode_response(resp))
+                except Exception as exc:
+                    logger.exception("Error during streaming response")
+                    conn.send_bytes(encode_response(ErrorResponse(message=str(exc))))
             else:
                 conn.send_bytes(encode_response(result))
 

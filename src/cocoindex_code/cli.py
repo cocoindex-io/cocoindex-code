@@ -217,7 +217,7 @@ def auto_init_project() -> Path:
     """
     from .settings import project_settings_path
 
-    cwd = Path.cwd()
+    cwd = Path.cwd().resolve()
     settings_file = project_settings_path(cwd)
 
     if not settings_file.is_file():
@@ -250,7 +250,7 @@ def init(
     """Initialize a project for cocoindex-code."""
     from .settings import project_settings_path as _project_settings_path
 
-    cwd = Path.cwd()
+    cwd = Path.cwd().resolve()
     settings_file = _project_settings_path(cwd)
 
     # Check if already initialized

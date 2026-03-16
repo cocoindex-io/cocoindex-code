@@ -22,6 +22,14 @@ class Project:
     _initial_index_done: bool = False
     _indexing_stats: IndexingProgress | None = None
 
+    def close(self) -> None:
+        """Close project resources to release file handles (LMDB, SQLite)."""
+        try:
+            db = self._env.get_context(SQLITE_DB)
+            db.close()
+        except Exception:
+            pass
+
     async def update_index(
         self,
         *,

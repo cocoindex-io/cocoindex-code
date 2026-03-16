@@ -74,7 +74,10 @@ class DaemonClient:
         """Request indexing with streaming progress. Blocks until complete."""
         self._conn.send_bytes(encode_request(IndexRequest(project_root=project_root)))
         while True:
-            data = self._conn.recv_bytes()
+            try:
+                data = self._conn.recv_bytes()
+            except EOFError:
+                raise RuntimeError("Connection to daemon lost during indexing")
             resp = decode_response(data)
             if isinstance(resp, ErrorResponse):
                 raise RuntimeError(f"Daemon error: {resp.message}")
