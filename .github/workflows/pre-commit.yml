@@ -30,4 +30,4 @@ jobs:
         run: uv sync --python ${{ matrix.python-version }} --python-preference only-managed
 
       - name: Run prek
-        run: uv run prek run --all-files
+        run: uv run prek run --all-files --verbose --show-diff-on-failure
