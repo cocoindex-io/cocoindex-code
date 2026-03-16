@@ -233,8 +233,9 @@ def stop_daemon() -> None:
         while time.monotonic() < deadline and pid_path.exists():
             time.sleep(0.1)
 
-    # Step 4: if still running, escalate to SIGKILL
-    if pid_path.exists():
+    # Step 4: if still running, escalate to SIGKILL (Unix only;
+    # on Windows SIGTERM already calls TerminateProcess)
+    if sys.platform != "win32" and pid_path.exists():
         try:
             pid = int(pid_path.read_text().strip())
             if pid != os.getpid():
