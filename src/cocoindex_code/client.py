@@ -205,12 +205,36 @@ def _find_ccc_executable() -> str | None:
     return None
 
 
+def _pid_alive(pid: int) -> bool:
+    """Return True if *pid* is still running."""
+    try:
+        os.kill(pid, 0)  # signal 0: check existence without killing
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # process exists but we can't signal it
+
+
 def stop_daemon() -> None:
     """Stop the daemon gracefully.
 
-    Sends a StopRequest, waits for the process to exit, falls back to SIGTERM.
+    Sends a StopRequest, waits for the process to exit, falls back to
+    SIGTERM → SIGKILL.  Only removes the PID file after confirming that
+    the specific PID is no longer alive.
     """
-    # Step 1: try sending StopRequest
+    pid_path = daemon_pid_path()
+
+    # Read the PID early so we can track the actual process.
+    pid: int | None = None
+    try:
+        pid = int(pid_path.read_text().strip())
+        if pid == os.getpid():
+            pid = None  # safety: never kill ourselves
+    except (FileNotFoundError, ValueError):
+        pass
+
+    # Step 1: try sending StopRequest via socket
     try:
         client = DaemonClient.connect()
         client.handshake()
@@ -220,65 +244,78 @@ def stop_daemon() -> None:
         pass
 
     # Step 2: wait for process to exit (up to 5s)
-    pid_path = daemon_pid_path()
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline and pid_path.exists():
-        time.sleep(0.1)
-
-    if not pid_path.exists():
-        return  # Clean exit
+    if pid is not None:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and _pid_alive(pid):
+            time.sleep(0.1)
+        if not _pid_alive(pid):
+            _cleanup_stale_files(pid_path, pid)
+            return
 
     # Step 3: if still running, try SIGTERM
-    pid: int | None = None
-    if pid_path.exists():
+    if pid is not None and _pid_alive(pid):
         try:
-            pid = int(pid_path.read_text().strip())
-            if pid != os.getpid():
-                os.kill(pid, signal.SIGTERM)
-            else:
-                pid = None
-        except (ValueError, ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
             pass
 
-        # Wait a bit more
         deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and pid_path.exists():
+        while time.monotonic() < deadline and _pid_alive(pid):
             time.sleep(0.1)
 
-    # Step 4: if still running, escalate to SIGKILL (Unix only;
+        if not _pid_alive(pid):
+            _cleanup_stale_files(pid_path, pid)
+            return
+
+    # Step 4: escalate to SIGKILL (Unix only;
     # on Windows SIGTERM already calls TerminateProcess)
-    if sys.platform != "win32" and pid_path.exists():
+    if sys.platform != "win32" and pid is not None and _pid_alive(pid):
         try:
-            pid = int(pid_path.read_text().strip())
-            if pid != os.getpid():
-                os.kill(pid, signal.SIGKILL)
-            else:
-                pid = None
-        except (ValueError, ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
             pass
+
+        # SIGKILL is async; give the kernel a moment to reap
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and _pid_alive(pid):
+            time.sleep(0.1)
 
     # Step 4b: on Windows, wait for the process to fully exit after TerminateProcess
     # so that named pipe handles are released before starting a new daemon.
     if sys.platform == "win32" and pid is not None:
         deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            try:
-                os.kill(pid, 0)  # Check if process still exists
-                time.sleep(0.1)
-            except (ProcessLookupError, PermissionError, OSError):
-                break  # Process has exited
+        while time.monotonic() < deadline and _pid_alive(pid):
+            time.sleep(0.1)
 
     # Step 5: clean up stale files
+    _cleanup_stale_files(pid_path, pid)
+
+
+def _cleanup_stale_files(pid_path: Path, pid: int | None) -> None:
+    """Remove socket and PID file after the daemon has exited.
+
+    Only removes the PID file when *pid* matches what is on disk, to
+    avoid accidentally deleting a newer daemon's PID file.
+    """
     if sys.platform != "win32":
         sock = daemon_socket_path()
         try:
             Path(sock).unlink(missing_ok=True)
         except Exception:
             pass
-    try:
-        pid_path.unlink(missing_ok=True)
-    except Exception:
-        pass
+    if pid is not None:
+        try:
+            stored = pid_path.read_text().strip()
+            if stored == str(pid):
+                pid_path.unlink(missing_ok=True)
+        except (FileNotFoundError, ValueError):
+            pass
+    else:
+        # No PID known — cautiously remove if file exists
+        try:
+            pid_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def _wait_for_daemon(timeout: float = 30.0) -> None:

@@ -467,26 +467,26 @@ def daemon_restart() -> None:
 @daemon_app.command("stop")
 def daemon_stop() -> None:
     """Stop the daemon."""
-    from .client import stop_daemon
+    from .client import is_daemon_running, stop_daemon
     from .daemon import daemon_pid_path
 
     pid_path = daemon_pid_path()
-    if not pid_path.exists():
+    if not pid_path.exists() and not is_daemon_running():
         _typer.echo("Daemon is not running.")
         return
 
     stop_daemon()
 
-    # Wait for process to exit
+    # Wait for process to exit (check both pid file and socket)
     import time
 
     deadline = time.monotonic() + 5.0
     while time.monotonic() < deadline:
-        if not pid_path.exists():
+        if not pid_path.exists() and not is_daemon_running():
             break
         time.sleep(0.1)
 
-    if pid_path.exists():
+    if pid_path.exists() or is_daemon_running():
         _typer.echo("Warning: daemon may not have stopped cleanly.", err=True)
     else:
         _typer.echo("Daemon stopped.")

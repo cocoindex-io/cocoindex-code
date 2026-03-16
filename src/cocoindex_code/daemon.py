@@ -447,17 +447,24 @@ def run_daemon() -> None:
     try:
         asyncio.run(_async_daemon_main(embedder))
     finally:
-        # Clean up PID file and socket (named pipes on Windows clean up automatically)
-        try:
-            pid_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        # Clean up socket first, then PID file last.
+        # The PID file is the authoritative "daemon is alive" indicator, so it
+        # must be the very last thing removed to avoid races where a client
+        # sees the PID gone but the socket (or process) is still lingering.
         if sys.platform != "win32":
             sock = daemon_socket_path()
             try:
                 Path(sock).unlink(missing_ok=True)
             except Exception:
                 pass
+        # Only remove the PID file if it still contains *our* PID.
+        # A new daemon may have already overwritten it during a restart race.
+        try:
+            stored = pid_path.read_text().strip()
+            if stored == str(os.getpid()):
+                pid_path.unlink(missing_ok=True)
+        except Exception:
+            pass
         logger.info("Daemon stopped")
 
 
