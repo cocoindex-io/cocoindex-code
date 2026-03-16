@@ -23,34 +23,11 @@ class Project:
     _indexing_stats: IndexingProgress | None = None
 
     def close(self) -> None:
-        """Close project resources to release file handles (LMDB, SQLite).
-
-        Explicitly breaks internal references to the Rust LMDB environment so
-        that it can be freed even on free-threaded Python (3.14t) where
-        deferred reference counting delays cleanup.
-        """
+        """Close project resources to release file handles (LMDB, SQLite)."""
         try:
             db = self._env.get_context(SQLITE_DB)
             db.close()
         except Exception:
-            pass
-
-        # Clear the core App → core.Environment reference chain
-        try:
-            self._app._core_env_app = None
-        except AttributeError:
-            pass
-
-        # Clear ContextProvider → core.Environment reference
-        try:
-            self._env._context_provider._core_env = None
-        except AttributeError:
-            pass
-
-        # Clear Environment → core.Environment reference
-        try:
-            self._env._core_env = None  # type: ignore[assignment]
-        except AttributeError:
             pass
 
     async def update_index(

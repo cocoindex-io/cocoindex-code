@@ -253,9 +253,13 @@ class ProjectRegistry:
         if project is not None:
             project.close()
             del project
-            # Force GC to release Rust LMDB environment promptly —
-            # required on free-threaded Python (3.14t) and Windows where
-            # deferred reference counting / file locking prevents reuse.
+            # Force GC to release Rust LMDB environment promptly.
+            # On free-threaded Python (3.14t), deferred refcount decrements
+            # propagate in layers: the first gc.collect() frees the Python
+            # wrappers, whose Rust Drop implementations issue further deferred
+            # Py_DECREF calls on core.Environment; the second gc.collect()
+            # flushes those and actually drops the LMDB handle.
+            gc.collect()
             gc.collect()
         return was_loaded
 
