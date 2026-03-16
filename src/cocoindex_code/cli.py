@@ -392,11 +392,7 @@ def reset(
             _typer.echo("Aborted.")
             raise _typer.Exit(code=0)
 
-    # Delete files
-    for f in to_delete:
-        f.unlink(missing_ok=True)
-
-    # Remove project from daemon (without auto-starting)
+    # Remove project from daemon first so it releases file handles
     try:
         from .client import DaemonClient
 
@@ -406,6 +402,15 @@ def reset(
         client.close()
     except (ConnectionRefusedError, OSError, RuntimeError):
         pass  # Daemon not running — that's fine
+
+    # Delete files/directories
+    import shutil as _shutil
+
+    for f in to_delete:
+        if f.is_dir():
+            _shutil.rmtree(f)
+        else:
+            f.unlink(missing_ok=True)
 
     if all_:
         # Remove .cocoindex_code/ if empty
