@@ -220,6 +220,19 @@ def _find_ccc_executable() -> str | None:
 
 def _pid_alive(pid: int) -> bool:
     """Return True if *pid* is still running."""
+    if sys.platform == "win32":
+        # Avoid os.kill(pid, 0) on Windows — it has a CPython bug that corrupts
+        # the C-level exception state, causing subsequent C function calls
+        # (time.monotonic, time.sleep) to raise SystemError even after the
+        # OSError is caught.  Use OpenProcess via ctypes instead.
+        import ctypes
+
+        kernel32 = getattr(ctypes, "windll").kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+        return False
     try:
         os.kill(pid, 0)  # signal 0: check existence without killing
         return True
@@ -227,11 +240,6 @@ def _pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True  # process exists but we can't signal it
-    except (OSError, SystemError):
-        # On Windows, os.kill(pid, 0) can raise SystemError or unexpected OSError
-        # variants (e.g. WinError 87 "The parameter is incorrect") for PIDs that
-        # have exited but whose handles haven't been fully released.
-        return False
 
 
 def stop_daemon() -> None:
