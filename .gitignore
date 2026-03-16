@@ -44,7 +44,5 @@ htmlcov/
 # Generated version file
 src/cocoindex_code/_version.py
 
-# CocoIndex
-.cocoindex_code/
 # CocoIndex Code (ccc)
 /.cocoindex_code/

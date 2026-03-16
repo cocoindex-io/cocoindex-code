@@ -209,35 +209,6 @@ def remove_from_gitignore(project_root: Path) -> None:
     gitignore.write_text("".join(new_lines))
 
 
-def auto_init_project() -> Path:
-    """Auto-initialize project from CWD.
-
-    Runs core ``init`` logic without parent-directory confirmation and without
-    the "run ``ccc index``" prompt.  Returns the project root (CWD).
-    """
-    from .settings import project_settings_path
-
-    cwd = Path.cwd().resolve()
-    settings_file = project_settings_path(cwd)
-
-    if not settings_file.is_file():
-        # Create user settings if missing
-        user_path = user_settings_path()
-        if not user_path.is_file():
-            save_user_settings(default_user_settings())
-            _typer.echo(f"Created user settings: {user_path}")
-
-        # Create project settings
-        save_project_settings(cwd, default_project_settings())
-        _typer.echo(f"Created project settings: {settings_file}")
-        _typer.echo("You can edit the settings files to customize indexing behavior.")
-
-        # Update .gitignore
-        add_to_gitignore(cwd)
-
-    return cwd
-
-
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -289,19 +260,7 @@ def init(
 @app.command()
 def index() -> None:
     """Create/update index for the codebase."""
-    from .client import ensure_daemon
-
-    # Auto-init if not in an initialized project
-    root = find_project_root(Path.cwd())
-    if root is None:
-        root = auto_init_project()
-
-    try:
-        client = ensure_daemon()
-    except Exception as e:
-        _typer.echo(f"Error: Failed to connect to daemon: {e}", err=True)
-        raise _typer.Exit(code=1)
-    project_root = str(root)
+    client, project_root = require_daemon_for_project()
 
     _run_index_with_progress(client, project_root)
 

@@ -8,7 +8,6 @@ import pytest
 
 from cocoindex_code.cli import (
     add_to_gitignore,
-    auto_init_project,
     remove_from_gitignore,
     require_project_root,
     resolve_default_path,
@@ -126,24 +125,3 @@ def test_remove_from_gitignore_no_entry(tmp_path: Path) -> None:
     gitignore.write_text(original)
     remove_from_gitignore(tmp_path)
     assert gitignore.read_text() == original
-
-
-def test_auto_init_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    (tmp_path / ".git").mkdir()
-    monkeypatch.chdir(tmp_path)
-    # Monkeypatch user settings dir to avoid touching real home
-    monkeypatch.setattr(
-        "cocoindex_code.cli.user_settings_path",
-        lambda: tmp_path / ".cocoindex_code_user" / "global_settings.yml",
-    )
-    monkeypatch.setattr(
-        "cocoindex_code.settings.user_settings_dir",
-        lambda: tmp_path / ".cocoindex_code_user",
-    )
-
-    result = auto_init_project()
-
-    assert result == tmp_path
-    assert (tmp_path / ".cocoindex_code" / "settings.yml").is_file()
-    assert (tmp_path / ".gitignore").is_file()
-    assert "/.cocoindex_code/" in (tmp_path / ".gitignore").read_text()
