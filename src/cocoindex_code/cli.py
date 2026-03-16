@@ -70,7 +70,7 @@ def require_daemon_for_project() -> tuple[DaemonClient, str]:
 
 def resolve_default_path(project_root: Path) -> str | None:
     """Compute default ``--path`` filter from CWD relative to project root."""
-    cwd = Path.cwd()
+    cwd = Path.cwd().resolve()
     try:
         rel = cwd.relative_to(project_root)
     except ValueError:
