@@ -21,7 +21,10 @@ from cocoindex_code.daemon import _connection_family
 from cocoindex_code.protocol import (
     DaemonStatusRequest,
     HandshakeRequest,
+    IndexProgressUpdate,
     IndexRequest,
+    IndexResponse,
+    IndexWaitingNotice,
     ProjectStatusRequest,
     Response,
     SearchRequest,
@@ -95,6 +98,21 @@ def daemon_sock() -> Iterator[str]:
         os.environ["COCOINDEX_CODE_DIR"] = old_env
 
 
+def _recv_index_response(conn: Connection) -> tuple[list[IndexProgressUpdate], IndexResponse]:
+    """Read streaming index responses until the final IndexResponse arrives."""
+    progress_updates: list[IndexProgressUpdate] = []
+    while True:
+        resp = decode_response(conn.recv_bytes())
+        if isinstance(resp, IndexProgressUpdate):
+            progress_updates.append(resp)
+            continue
+        if isinstance(resp, IndexWaitingNotice):
+            continue
+        if isinstance(resp, IndexResponse):
+            return progress_updates, resp
+        raise AssertionError(f"Unexpected response during indexing: {type(resp).__name__}")
+
+
 @pytest.fixture(scope="session")
 def daemon_project(daemon_sock: str) -> str:
     """Create and index a project once for the session. Returns project_root str."""
@@ -106,7 +124,8 @@ def daemon_project(daemon_sock: str) -> str:
     conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
     decode_response(conn.recv_bytes())
     conn.send_bytes(encode_request(IndexRequest(project_root=str(project))))
-    decode_response(conn.recv_bytes())
+    _updates, final = _recv_index_response(conn)
+    assert final.success is True
     conn.close()
 
     return str(project)
@@ -160,3 +179,20 @@ def test_daemon_search_after_index(daemon_sock: str, daemon_project: str) -> Non
     assert len(resp.results) > 0  # type: ignore[union-attr]
     assert "main.py" in resp.results[0].file_path  # type: ignore[union-attr]
     conn.close()
+
+
+def test_index_streams_progress(daemon_sock: str) -> None:
+    """Indexing a new project should stream IndexProgressUpdate before IndexResponse."""
+    project = Path(tempfile.mkdtemp(prefix="ccc_strm_"))
+    save_project_settings(project, default_project_settings())
+    (project / "main.py").write_text(SAMPLE_MAIN_PY)
+
+    conn, _ = _connect_and_handshake(daemon_sock)
+    conn.send_bytes(encode_request(IndexRequest(project_root=str(project))))
+    updates, final = _recv_index_response(conn)
+    conn.close()
+
+    assert final.success is True
+    assert len(updates) > 0, "Expected at least one IndexProgressUpdate"
+    for u in updates:
+        assert u.progress.num_execution_starts >= 0

@@ -63,6 +63,29 @@ class IndexResponse(_msgspec.Struct, tag="index"):
     message: str | None = None
 
 
+class IndexingProgress(_msgspec.Struct):
+    """Indexing stats snapshot, shared between progress updates and status responses."""
+
+    num_execution_starts: int
+    num_unchanged: int
+    num_adds: int
+    num_deletes: int
+    num_reprocesses: int
+    num_errors: int
+
+
+class IndexProgressUpdate(_msgspec.Struct, tag="index_progress"):
+    """Streamed during indexing — one per stats change, before the final IndexResponse."""
+
+    progress: IndexingProgress
+
+
+class IndexWaitingNotice(_msgspec.Struct, tag="index_waiting"):
+    """Sent when another indexing is already in progress and the client must wait."""
+
+    pass
+
+
 class SearchResult(_msgspec.Struct):
     file_path: str
     language: str
@@ -85,6 +108,7 @@ class ProjectStatusResponse(_msgspec.Struct, tag="project_status"):
     total_chunks: int
     total_files: int
     languages: dict[str, int]
+    progress: IndexingProgress | None = None
 
 
 class DaemonProjectInfo(_msgspec.Struct):
@@ -109,12 +133,16 @@ class ErrorResponse(_msgspec.Struct, tag="error"):
 Response = (
     HandshakeResponse
     | IndexResponse
+    | IndexProgressUpdate
+    | IndexWaitingNotice
     | SearchResponse
     | ProjectStatusResponse
     | DaemonStatusResponse
     | StopResponse
     | ErrorResponse
 )
+
+IndexStreamResponse = IndexProgressUpdate | IndexWaitingNotice | IndexResponse | ErrorResponse
 
 # ---------------------------------------------------------------------------
 # Encode / decode helpers (msgpack binary)

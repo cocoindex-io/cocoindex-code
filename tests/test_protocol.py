@@ -8,8 +8,11 @@ from cocoindex_code.protocol import (
     DaemonStatusResponse,
     ErrorResponse,
     HandshakeRequest,
+    IndexingProgress,
+    IndexProgressUpdate,
     IndexRequest,
     IndexResponse,
+    IndexWaitingNotice,
     ProjectStatusRequest,
     ProjectStatusResponse,
     Request,
@@ -141,9 +144,85 @@ def test_all_request_types_round_trip() -> None:
         assert type(decoded) is type(req)
 
 
+def test_encode_decode_index_waiting_notice() -> None:
+    resp = IndexWaitingNotice()
+    data = encode_response(resp)
+    decoded = decode_response(data)
+    assert isinstance(decoded, IndexWaitingNotice)
+
+
+def test_encode_decode_index_progress_update() -> None:
+    progress = IndexingProgress(
+        num_execution_starts=10,
+        num_unchanged=3,
+        num_adds=5,
+        num_deletes=1,
+        num_reprocesses=0,
+        num_errors=1,
+    )
+    resp = IndexProgressUpdate(progress=progress)
+    data = encode_response(resp)
+    decoded = decode_response(data)
+    assert isinstance(decoded, IndexProgressUpdate)
+    assert decoded.progress.num_execution_starts == 10
+    assert decoded.progress.num_unchanged == 3
+    assert decoded.progress.num_adds == 5
+    assert decoded.progress.num_deletes == 1
+    assert decoded.progress.num_reprocesses == 0
+    assert decoded.progress.num_errors == 1
+
+
+def test_encode_decode_project_status_with_progress() -> None:
+    progress = IndexingProgress(
+        num_execution_starts=7,
+        num_unchanged=2,
+        num_adds=4,
+        num_deletes=0,
+        num_reprocesses=1,
+        num_errors=0,
+    )
+    resp = ProjectStatusResponse(
+        indexing=True,
+        total_chunks=50,
+        total_files=10,
+        languages={"python": 50},
+        progress=progress,
+    )
+    data = encode_response(resp)
+    decoded = decode_response(data)
+    assert isinstance(decoded, ProjectStatusResponse)
+    assert decoded.progress is not None
+    assert decoded.progress.num_execution_starts == 7
+    assert decoded.progress.num_adds == 4
+
+
+def test_encode_decode_project_status_without_progress() -> None:
+    resp = ProjectStatusResponse(
+        indexing=False,
+        total_chunks=50,
+        total_files=10,
+        languages={"python": 50},
+    )
+    data = encode_response(resp)
+    decoded = decode_response(data)
+    assert isinstance(decoded, ProjectStatusResponse)
+    assert decoded.progress is None
+
+
 def test_all_response_types_round_trip() -> None:
     responses: list[Response] = [
         IndexResponse(success=True),
+        IndexProgressUpdate(
+            progress=IndexingProgress(
+                num_execution_starts=0,
+                num_unchanged=0,
+                num_adds=0,
+                num_deletes=0,
+                num_reprocesses=0,
+                num_errors=0,
+            )
+        ),
+        IndexWaitingNotice(),
         SearchResponse(success=True),
         ProjectStatusResponse(indexing=False, total_chunks=0, total_files=0, languages={}),
         DaemonStatusResponse(version="1.0.0", uptime_seconds=0.0, projects=[]),

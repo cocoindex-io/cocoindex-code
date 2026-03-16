@@ -21,6 +21,8 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from .client import DaemonClient
 
+from .protocol import IndexingProgress
+
 _MCP_INSTRUCTIONS = (
     "Code search and codebase understanding tools."
     "\n"
@@ -274,8 +276,38 @@ def main() -> None:
 
     # --- Delegate to daemon ---
     if args.command == "index":
+        import sys
+
+        from rich.console import Console
+        from rich.live import Live
+        from rich.spinner import Spinner
+
+        from .cli import _format_progress
+
         client = ensure_daemon()
-        resp = client.index(str(project_root))
+        err_console = Console(stderr=True)
+        last_progress_line: str | None = None
+
+        with Live(Spinner("dots", "Indexing..."), console=err_console, transient=True) as live:
+
+            def _on_waiting() -> None:
+                live.update(
+                    Spinner(
+                        "dots",
+                        "Another indexing is ongoing, waiting for it to finish...",
+                    )
+                )
+
+            def _on_progress(progress: IndexingProgress) -> None:
+                nonlocal last_progress_line
+                last_progress_line = f"Indexing: {_format_progress(progress)}"
+                live.update(Spinner("dots", last_progress_line))
+
+            resp = client.index(str(project_root), on_progress=_on_progress, on_waiting=_on_waiting)
+
+        if last_progress_line is not None:
+            print(last_progress_line, file=sys.stderr)
+
         if resp.success:
             status = client.project_status(str(project_root))
             print("\nIndex stats:")

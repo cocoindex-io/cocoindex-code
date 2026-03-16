@@ -192,6 +192,14 @@ class TestCLIEndToEnd:
         assert result.exit_code == 0, result.output
         assert "Daemon version:" in result.output
 
+    def test_index_shows_stats(self, e2e_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Indexing should complete and show final stats."""
+        monkeypatch.chdir(e2e_env)
+        result = runner.invoke(app, ["index"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        assert "Chunks:" in result.output
+        assert "Files:" in result.output
+
     def test_incremental_index_new_file(
         self, e2e_env: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

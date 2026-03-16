@@ -9,6 +9,7 @@ import signal
 import sys
 import threading
 import time
+from collections.abc import AsyncIterator
 from multiprocessing.connection import Connection, Listener
 from pathlib import Path
 from typing import Any
@@ -22,8 +23,12 @@ from .protocol import (
     ErrorResponse,
     HandshakeRequest,
     HandshakeResponse,
+    IndexingProgress,
+    IndexProgressUpdate,
     IndexRequest,
     IndexResponse,
+    IndexStreamResponse,
+    IndexWaitingNotice,
     ProjectStatusRequest,
     ProjectStatusResponse,
     Request,
@@ -113,14 +118,43 @@ class ProjectRegistry:
             self._indexing[project_root] = False
         return self._projects[project_root]
 
-    async def update_index(self, project_root: str) -> None:
-        """Update index for project, serialized by per-project lock."""
+    async def update_index(self, project_root: str) -> AsyncIterator[IndexStreamResponse]:
+        """Update index, yielding progress updates and a final IndexResponse."""
         project = await self.get_project(project_root)
         lock = self._index_locks[project_root]
+
+        # If lock is already held, notify the client and block until released
+        if lock.locked():
+            yield IndexWaitingNotice()
+
         async with lock:
             self._indexing[project_root] = True
             try:
-                await project.update_index()
+                progress_queue: asyncio.Queue[IndexingProgress] = asyncio.Queue()
+
+                def on_progress(progress: IndexingProgress) -> None:
+                    progress_queue.put_nowait(progress)
+
+                update_task = asyncio.create_task(project.update_index(on_progress=on_progress))
+
+                # Drain the queue until the update completes
+                while not update_task.done():
+                    try:
+                        progress = await asyncio.wait_for(progress_queue.get(), timeout=0.1)
+                        yield IndexProgressUpdate(progress=progress)
+                    except TimeoutError:
+                        continue
+
+                # Drain any remaining items
+                while not progress_queue.empty():
+                    yield IndexProgressUpdate(progress=progress_queue.get_nowait())
+
+                # Propagate any exception from the update task
+                update_task.result()
+
+                yield IndexResponse(success=True)
+            except Exception as e:
+                yield IndexResponse(success=False, message=str(e))
             finally:
                 self._indexing[project_root] = False
 
@@ -177,11 +211,14 @@ class ProjectRegistry:
                 " GROUP BY language ORDER BY cnt DESC"
             ).fetchall()
 
+        is_indexing = self._indexing.get(project_root, False)
+        progress = project.indexing_stats if is_indexing else None
         return ProjectStatusResponse(
-            indexing=self._indexing.get(project_root, False),
+            indexing=is_indexing,
             total_chunks=total_chunks,
             total_files=total_files,
             languages={lang: cnt for lang, cnt in lang_rows},
+            progress=progress,
         )
 
     def list_projects(self) -> list[DaemonProjectInfo]:
@@ -246,8 +283,12 @@ async def handle_connection(
                 handshake_done = True
                 continue
 
-            resp = await _dispatch(req, registry, start_time, shutdown_event)
-            conn.send_bytes(encode_response(resp))
+            result = await _dispatch(req, registry, start_time, shutdown_event)
+            if isinstance(result, AsyncIterator):
+                async for resp in result:
+                    conn.send_bytes(encode_response(resp))
+            else:
+                conn.send_bytes(encode_response(result))
 
             if isinstance(req, StopRequest):
                 break
@@ -265,16 +306,21 @@ async def _dispatch(
     registry: ProjectRegistry,
     start_time: float,
     shutdown_event: asyncio.Event,
-) -> Response:
-    """Dispatch a request to the appropriate handler."""
+) -> Response | AsyncIterator[IndexStreamResponse]:
+    """Dispatch a request to the appropriate handler.
+
+    Returns a single Response for most requests, or an AsyncIterator for
+    streaming requests (IndexRequest).
+    """
     try:
         if isinstance(req, IndexRequest):
-            await registry.update_index(req.project_root)
-            return IndexResponse(success=True)
+            return registry.update_index(req.project_root)
 
         if isinstance(req, SearchRequest):
             if req.refresh:
-                await registry.update_index(req.project_root)
+                # Consume the index stream silently for refresh
+                async for _ in registry.update_index(req.project_root):
+                    pass
             results = await registry.search(
                 project_root=req.project_root,
                 query=req.query,

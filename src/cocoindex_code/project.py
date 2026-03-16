@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 
 import cocoindex as coco
 from cocoindex.connectors import sqlite
 
 from .indexer import indexer_main
+from .protocol import IndexingProgress
 from .settings import PROJECT_SETTINGS, ProjectSettings
 from .shared import CODEBASE_DIR, EMBEDDER, SQLITE_DB, Embedder
 
@@ -18,14 +20,43 @@ class Project:
     _app: coco.App[[], None]
     _index_lock: asyncio.Lock
     _initial_index_done: bool = False
+    _indexing_stats: IndexingProgress | None = None
 
-    async def update_index(self, *, report_to_stdout: bool = False) -> None:
-        """Update the index, serializing concurrent calls via lock."""
-        async with self._index_lock:
-            try:
-                await self._app.update(report_to_stdout=report_to_stdout)
-            finally:
-                self._initial_index_done = True
+    async def update_index(
+        self,
+        *,
+        on_progress: Callable[[IndexingProgress], None] | None = None,
+    ) -> None:
+        """Update the index, streaming progress via callback.
+
+        The lock is NOT acquired here — callers (e.g. ProjectRegistry) are
+        responsible for serialization so they can inspect lock state and
+        yield one-shot snapshots before blocking.
+        """
+        try:
+            handle = self._app.update()
+            async for snapshot in handle.watch():
+                file_stats = snapshot.stats.by_processor.get("process_file")
+                if file_stats is not None:
+                    progress = IndexingProgress(
+                        num_execution_starts=file_stats.num_execution_starts,
+                        num_unchanged=file_stats.num_unchanged,
+                        num_adds=file_stats.num_adds,
+                        num_deletes=file_stats.num_deletes,
+                        num_reprocesses=file_stats.num_reprocesses,
+                        num_errors=file_stats.num_errors,
+                    )
+                    self._indexing_stats = progress
+                    if on_progress is not None:
+                        on_progress(progress)
+                    await asyncio.sleep(0.1)
+        finally:
+            self._indexing_stats = None
+            self._initial_index_done = True
+
+    @property
+    def indexing_stats(self) -> IndexingProgress | None:
+        return self._indexing_stats
 
     @property
     def env(self) -> coco.Environment:

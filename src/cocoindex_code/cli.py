@@ -10,7 +10,7 @@ import typer as _typer
 if TYPE_CHECKING:
     from .client import DaemonClient
 
-from .protocol import ProjectStatusResponse, SearchResponse
+from .protocol import IndexingProgress, ProjectStatusResponse, SearchResponse
 from .settings import (
     default_project_settings,
     default_user_settings,
@@ -80,8 +80,21 @@ def resolve_default_path(project_root: Path) -> str | None:
     return f"{rel.as_posix()}/*"
 
 
+def _format_progress(progress: IndexingProgress) -> str:
+    """Format an IndexingProgress snapshot as a human-readable string."""
+    return (
+        f"{progress.num_execution_starts} files listed"
+        f" | {progress.num_adds} added, {progress.num_deletes} deleted,"
+        f" {progress.num_reprocesses} reprocessed,"
+        f" {progress.num_unchanged} unchanged,"
+        f" error: {progress.num_errors}"
+    )
+
+
 def print_index_stats(status: ProjectStatusResponse) -> None:
     """Print formatted index statistics."""
+    if status.progress is not None:
+        _typer.echo(f"Indexing in progress: {_format_progress(status.progress)}")
     _typer.echo("\nIndex stats:")
     _typer.echo(f"  Chunks: {status.total_chunks}")
     _typer.echo(f"  Files:  {status.total_files}")
@@ -153,13 +166,40 @@ def init(
 @app.command()
 def index() -> None:
     """Create/update index for the codebase."""
+    from rich.console import Console as _Console
+    from rich.live import Live as _Live
+    from rich.spinner import Spinner as _Spinner
+
     client, project_root = require_daemon_for_project()
-    _typer.echo("Indexing...")
-    try:
-        resp = client.index(project_root)
-    except RuntimeError as e:
-        _typer.echo(f"Indexing failed: {e}", err=True)
-        raise _typer.Exit(code=1)
+    err_console = _Console(stderr=True)
+    last_progress_line: str | None = None
+
+    with _Live(_Spinner("dots", "Indexing..."), console=err_console, transient=True) as live:
+
+        def _on_waiting() -> None:
+            live.update(
+                _Spinner(
+                    "dots",
+                    "Another indexing is ongoing, waiting for it to finish...",
+                )
+            )
+
+        def _on_progress(progress: IndexingProgress) -> None:
+            nonlocal last_progress_line
+            last_progress_line = f"Indexing: {_format_progress(progress)}"
+            live.update(_Spinner("dots", last_progress_line))
+
+        try:
+            resp = client.index(project_root, on_progress=_on_progress, on_waiting=_on_waiting)
+        except RuntimeError as e:
+            live.stop()
+            _typer.echo(f"Indexing failed: {e}", err=True)
+            raise _typer.Exit(code=1)
+
+    # Print the final progress line so it remains visible after the spinner clears
+    if last_progress_line is not None:
+        _typer.echo(last_progress_line, err=True)
+
     if not resp.success:
         _typer.echo(f"Indexing failed: {resp.message}", err=True)
         raise _typer.Exit(code=1)

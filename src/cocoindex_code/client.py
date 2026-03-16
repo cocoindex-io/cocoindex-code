@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from multiprocessing.connection import Client, Connection
 from pathlib import Path
 
@@ -18,8 +19,11 @@ from .protocol import (
     ErrorResponse,
     HandshakeRequest,
     HandshakeResponse,
+    IndexingProgress,
+    IndexProgressUpdate,
     IndexRequest,
     IndexResponse,
+    IndexWaitingNotice,
     ProjectStatusRequest,
     ProjectStatusResponse,
     Request,
@@ -59,9 +63,30 @@ class DaemonClient:
         """Send version handshake."""
         return self._send(HandshakeRequest(version=__version__))  # type: ignore[return-value]
 
-    def index(self, project_root: str) -> IndexResponse:
-        """Request indexing. Blocks until complete."""
-        return self._send(IndexRequest(project_root=project_root))  # type: ignore[return-value]
+    def index(
+        self,
+        project_root: str,
+        on_progress: Callable[[IndexingProgress], None] | None = None,
+        on_waiting: Callable[[], None] | None = None,
+    ) -> IndexResponse:
+        """Request indexing with streaming progress. Blocks until complete."""
+        self._conn.send_bytes(encode_request(IndexRequest(project_root=project_root)))
+        while True:
+            data = self._conn.recv_bytes()
+            resp = decode_response(data)
+            if isinstance(resp, ErrorResponse):
+                raise RuntimeError(f"Daemon error: {resp.message}")
+            if isinstance(resp, IndexWaitingNotice):
+                if on_waiting is not None:
+                    on_waiting()
+                continue
+            if isinstance(resp, IndexProgressUpdate):
+                if on_progress is not None:
+                    on_progress(resp.progress)
+                continue
+            if isinstance(resp, IndexResponse):
+                return resp
+            raise RuntimeError(f"Unexpected response: {type(resp).__name__}")
 
     def search(
         self,
