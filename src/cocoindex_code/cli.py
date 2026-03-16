@@ -32,7 +32,7 @@ app.add_typer(daemon_app, name="daemon")
 
 
 # ---------------------------------------------------------------------------
-# Shared CLI helpers (G1)
+# Shared CLI helpers
 # ---------------------------------------------------------------------------
 
 
@@ -120,57 +120,12 @@ def print_search_results(response: SearchResponse) -> None:
         _typer.echo(r.content)
 
 
-# ---------------------------------------------------------------------------
-# Commands (G2-G5)
-# ---------------------------------------------------------------------------
-
-
-@app.command()
-def init(
-    force: bool = _typer.Option(False, "-f", "--force", help="Skip parent directory warning"),
-) -> None:
-    """Initialize a project for cocoindex-code."""
-    from .settings import project_settings_path
-
-    cwd = Path.cwd()
-    settings_file = project_settings_path(cwd)
-
-    # Check if already initialized
-    if settings_file.is_file():
-        _typer.echo("Project already initialized.")
-        return
-
-    # Check parent directories for markers
-    if not force:
-        parent = find_parent_with_marker(cwd)
-        if parent is not None and parent != cwd:
-            _typer.echo(
-                f"Warning: A parent directory has a project marker: {parent}\n"
-                "You might want to run `ccc init` there instead.\n"
-                "Use `ccc init -f` to initialize here anyway."
-            )
-            raise _typer.Exit(code=1)
-
-    # Create user settings if missing
-    user_path = user_settings_path()
-    if not user_path.is_file():
-        save_user_settings(default_user_settings())
-        _typer.echo(f"Created user settings: {user_path}")
-
-    # Create project settings
-    save_project_settings(cwd, default_project_settings())
-    _typer.echo(f"Created project settings: {settings_file}")
-    _typer.echo("Project initialized. Run `ccc index` to build the index.")
-
-
-@app.command()
-def index() -> None:
-    """Create/update index for the codebase."""
+def _run_index_with_progress(client: DaemonClient, project_root: str) -> None:
+    """Run indexing with streaming progress display. Exits on failure."""
     from rich.console import Console as _Console
     from rich.live import Live as _Live
     from rich.spinner import Spinner as _Spinner
 
-    client, project_root = require_daemon_for_project()
     err_console = _Console(stderr=True)
     last_progress_line: str | None = None
 
@@ -204,6 +159,152 @@ def index() -> None:
         _typer.echo(f"Indexing failed: {resp.message}", err=True)
         raise _typer.Exit(code=1)
 
+
+_GITIGNORE_COMMENT = "# cocoindex-code"
+_GITIGNORE_ENTRY = "/.cocoindex_code/"
+
+
+def add_to_gitignore(project_root: Path) -> None:
+    """Add ``/.cocoindex_code/`` to ``.gitignore`` if ``.git`` exists.
+
+    Creates ``.gitignore`` if it doesn't exist.  Skips if the entry is already
+    present.
+    """
+    if not (project_root / ".git").is_dir():
+        return
+
+    gitignore = project_root / ".gitignore"
+    if gitignore.is_file():
+        content = gitignore.read_text()
+        if _GITIGNORE_ENTRY in content.splitlines():
+            return  # already present
+        # Ensure a trailing newline before appending
+        if content and not content.endswith("\n"):
+            content += "\n"
+        content += f"{_GITIGNORE_COMMENT}\n{_GITIGNORE_ENTRY}\n"
+        gitignore.write_text(content)
+    else:
+        gitignore.write_text(f"{_GITIGNORE_COMMENT}\n{_GITIGNORE_ENTRY}\n")
+
+
+def remove_from_gitignore(project_root: Path) -> None:
+    """Remove ``/.cocoindex_code/`` entry and its comment from ``.gitignore``."""
+    gitignore = project_root / ".gitignore"
+    if not gitignore.is_file():
+        return
+
+    lines = gitignore.read_text().splitlines(keepends=True)
+    new_lines: list[str] = []
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].rstrip("\n\r")
+        if stripped == _GITIGNORE_ENTRY:
+            # Skip this line; also remove preceding comment if it matches
+            if new_lines and new_lines[-1].rstrip("\n\r") == _GITIGNORE_COMMENT:
+                new_lines.pop()
+            i += 1
+            continue
+        new_lines.append(lines[i])
+        i += 1
+    gitignore.write_text("".join(new_lines))
+
+
+def auto_init_project() -> Path:
+    """Auto-initialize project from CWD.
+
+    Runs core ``init`` logic without parent-directory confirmation and without
+    the "run ``ccc index``" prompt.  Returns the project root (CWD).
+    """
+    from .settings import project_settings_path
+
+    cwd = Path.cwd()
+    settings_file = project_settings_path(cwd)
+
+    if not settings_file.is_file():
+        # Create user settings if missing
+        user_path = user_settings_path()
+        if not user_path.is_file():
+            save_user_settings(default_user_settings())
+            _typer.echo(f"Created user settings: {user_path}")
+
+        # Create project settings
+        save_project_settings(cwd, default_project_settings())
+        _typer.echo(f"Created project settings: {settings_file}")
+        _typer.echo("You can edit the settings files to customize indexing behavior.")
+
+        # Update .gitignore
+        add_to_gitignore(cwd)
+
+    return cwd
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def init(
+    force: bool = _typer.Option(False, "-f", "--force", help="Skip parent directory warning"),
+) -> None:
+    """Initialize a project for cocoindex-code."""
+    from .settings import project_settings_path as _project_settings_path
+
+    cwd = Path.cwd()
+    settings_file = _project_settings_path(cwd)
+
+    # Check if already initialized
+    if settings_file.is_file():
+        _typer.echo("Project already initialized.")
+        return
+
+    # Check parent directories for markers
+    if not force:
+        parent = find_parent_with_marker(cwd)
+        if parent is not None and parent != cwd:
+            _typer.echo(
+                f"Warning: A parent directory has a project marker: {parent}\n"
+                "You might want to run `ccc init` there instead.\n"
+                "Use `ccc init -f` to initialize here anyway."
+            )
+            raise _typer.Exit(code=1)
+
+    # Create user settings if missing
+    user_path = user_settings_path()
+    if not user_path.is_file():
+        save_user_settings(default_user_settings())
+        _typer.echo(f"Created user settings: {user_path}")
+
+    # Create project settings
+    save_project_settings(cwd, default_project_settings())
+    _typer.echo(f"Created project settings: {settings_file}")
+
+    # Add to .gitignore
+    add_to_gitignore(cwd)
+
+    _typer.echo("You can edit the settings files to customize indexing behavior.")
+    _typer.echo("Run `ccc index` to build the index.")
+
+
+@app.command()
+def index() -> None:
+    """Create/update index for the codebase."""
+    from .client import ensure_daemon
+
+    # Auto-init if not in an initialized project
+    root = find_project_root(Path.cwd())
+    if root is None:
+        root = auto_init_project()
+
+    try:
+        client = ensure_daemon()
+    except Exception as e:
+        _typer.echo(f"Error: Failed to connect to daemon: {e}", err=True)
+        raise _typer.Exit(code=1)
+    project_root = str(root)
+
+    _run_index_with_progress(client, project_root)
+
     status = client.project_status(project_root)
     print_index_stats(status)
 
@@ -221,6 +322,10 @@ def search(
     client, project_root = require_daemon_for_project()
     query_str = " ".join(query)
 
+    # Refresh index with progress display before searching
+    if refresh:
+        _run_index_with_progress(client, project_root)
+
     # Default path filter from CWD
     paths: list[str] | None = None
     if path is not None:
@@ -237,7 +342,7 @@ def search(
         paths=paths,
         limit=limit,
         offset=offset,
-        refresh=refresh,
+        refresh=False,
     )
     print_search_results(resp)
 
@@ -248,6 +353,77 @@ def status() -> None:
     client, project_root = require_daemon_for_project()
     resp = client.project_status(project_root)
     print_index_stats(resp)
+
+
+@app.command()
+def reset(
+    all_: bool = _typer.Option(False, "--all", help="Also remove settings and .gitignore entry"),
+    force: bool = _typer.Option(False, "-f", "--force", help="Skip confirmation"),
+) -> None:
+    """Reset project databases and optionally remove settings."""
+    project_root = require_project_root()
+    cocoindex_dir = project_root / ".cocoindex_code"
+
+    db_files = [
+        cocoindex_dir / "cocoindex.db",
+        cocoindex_dir / "target_sqlite.db",
+    ]
+    settings_file = cocoindex_dir / "settings.yml"
+
+    # Determine what will be deleted
+    to_delete = [f for f in db_files if f.exists()]
+    if all_:
+        if settings_file.exists():
+            to_delete.append(settings_file)
+
+    if not to_delete and not all_:
+        _typer.echo("Nothing to reset.")
+        return
+
+    # Show what will be deleted
+    if to_delete:
+        _typer.echo("The following files will be deleted:")
+        for f in to_delete:
+            _typer.echo(f"  {f}")
+
+    # Confirm
+    if not force:
+        if not _typer.confirm("Proceed?"):
+            _typer.echo("Aborted.")
+            raise _typer.Exit(code=0)
+
+    # Delete files
+    for f in to_delete:
+        f.unlink(missing_ok=True)
+
+    # Remove project from daemon (without auto-starting)
+    try:
+        from .client import DaemonClient
+
+        client = DaemonClient.connect()
+        client.handshake()
+        client.remove_project(str(project_root))
+        client.close()
+    except (ConnectionRefusedError, OSError, RuntimeError):
+        pass  # Daemon not running — that's fine
+
+    if all_:
+        # Remove .cocoindex_code/ if empty
+        try:
+            cocoindex_dir.rmdir()
+        except OSError:
+            pass  # Not empty
+
+        # Remove from .gitignore
+        remove_from_gitignore(project_root)
+        _typer.echo("Project fully reset.")
+    else:
+        _typer.echo("Databases deleted.")
+        if settings_file.exists():
+            _typer.echo(
+                "Settings file still exists. Run `ccc reset --all` to remove it too,\n"
+                "or edit it manually."
+            )
 
 
 @app.command()
@@ -279,7 +455,7 @@ async def _bg_index(client, project_root: str) -> None:  # type: ignore[no-untyp
         pass
 
 
-# --- Daemon subcommands (G5) ---
+# --- Daemon subcommands ---
 
 
 @daemon_app.command("status")

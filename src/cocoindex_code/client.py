@@ -26,6 +26,8 @@ from .protocol import (
     IndexWaitingNotice,
     ProjectStatusRequest,
     ProjectStatusResponse,
+    RemoveProjectRequest,
+    RemoveProjectResponse,
     Request,
     Response,
     SearchRequest,
@@ -120,6 +122,11 @@ class DaemonClient:
         from .protocol import DaemonStatusRequest
 
         return self._send(DaemonStatusRequest())  # type: ignore[return-value]
+
+    def remove_project(self, project_root: str) -> RemoveProjectResponse:
+        return self._send(  # type: ignore[return-value]
+            RemoveProjectRequest(project_root=project_root)
+        )
 
     def stop(self) -> StopResponse:
         return self._send(StopRequest())  # type: ignore[return-value]

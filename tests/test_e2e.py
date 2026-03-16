@@ -214,12 +214,14 @@ class TestCLIEndToEnd:
         assert result.exit_code == 0
         assert "app.js" in result.output
 
-    def test_not_initialized_errors(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Running commands outside an initialized project should fail."""
+    def test_not_initialized_errors_for_search(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Running search outside an initialized project should fail."""
         standalone = tmp_path / "standalone"
         standalone.mkdir()
         monkeypatch.chdir(standalone)
-        result = runner.invoke(app, ["index"])
+        result = runner.invoke(app, ["search", "hello"])
         assert result.exit_code != 0
         assert "ccc init" in result.output
 

@@ -15,6 +15,8 @@ from cocoindex_code.protocol import (
     IndexWaitingNotice,
     ProjectStatusRequest,
     ProjectStatusResponse,
+    RemoveProjectRequest,
+    RemoveProjectResponse,
     Request,
     Response,
     SearchRequest,
@@ -136,6 +138,7 @@ def test_all_request_types_round_trip() -> None:
         SearchRequest(project_root="/tmp", query="test"),
         ProjectStatusRequest(project_root="/tmp"),
         DaemonStatusRequest(),
+        RemoveProjectRequest(project_root="/tmp"),
         StopRequest(),
     ]
     for req in requests:
@@ -226,6 +229,7 @@ def test_all_response_types_round_trip() -> None:
         SearchResponse(success=True),
         ProjectStatusResponse(indexing=False, total_chunks=0, total_files=0, languages={}),
         DaemonStatusResponse(version="1.0.0", uptime_seconds=0.0, projects=[]),
+        RemoveProjectResponse(ok=True),
         StopResponse(ok=True),
         ErrorResponse(message="err"),
     ]

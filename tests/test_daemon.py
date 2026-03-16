@@ -26,6 +26,7 @@ from cocoindex_code.protocol import (
     IndexResponse,
     IndexWaitingNotice,
     ProjectStatusRequest,
+    RemoveProjectRequest,
     Response,
     SearchRequest,
     decode_response,
@@ -196,3 +197,27 @@ def test_index_streams_progress(daemon_sock: str) -> None:
     assert len(updates) > 0, "Expected at least one IndexProgressUpdate"
     for u in updates:
         assert u.progress.num_execution_starts >= 0
+
+
+def test_daemon_remove_project(daemon_sock: str, daemon_project: str) -> None:
+    """Removing a loaded project should make it disappear from the status list."""
+    conn, _ = _connect_and_handshake(daemon_sock)
+    conn.send_bytes(encode_request(RemoveProjectRequest(project_root=daemon_project)))
+    resp = decode_response(conn.recv_bytes())
+    assert resp.ok is True  # type: ignore[union-attr]
+
+    # Verify project is gone from daemon status
+    conn.send_bytes(encode_request(DaemonStatusRequest()))
+    status = decode_response(conn.recv_bytes())
+    project_roots = [p.project_root for p in status.projects]  # type: ignore[union-attr]
+    assert daemon_project not in project_roots
+    conn.close()
+
+
+def test_daemon_remove_project_not_loaded(daemon_sock: str) -> None:
+    """Removing a non-existent project should succeed (idempotent)."""
+    conn, _ = _connect_and_handshake(daemon_sock)
+    conn.send_bytes(encode_request(RemoveProjectRequest(project_root="/nonexistent/path")))
+    resp = decode_response(conn.recv_bytes())
+    assert resp.ok is True  # type: ignore[union-attr]
+    conn.close()

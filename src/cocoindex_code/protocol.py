@@ -35,6 +35,10 @@ class DaemonStatusRequest(_msgspec.Struct, tag="daemon_status"):
     pass
 
 
+class RemoveProjectRequest(_msgspec.Struct, tag="remove_project"):
+    project_root: str
+
+
 class StopRequest(_msgspec.Struct, tag="stop"):
     pass
 
@@ -45,6 +49,7 @@ Request = (
     | SearchRequest
     | ProjectStatusRequest
     | DaemonStatusRequest
+    | RemoveProjectRequest
     | StopRequest
 )
 
@@ -122,6 +127,10 @@ class DaemonStatusResponse(_msgspec.Struct, tag="daemon_status"):
     projects: list[DaemonProjectInfo]
 
 
+class RemoveProjectResponse(_msgspec.Struct, tag="remove_project"):
+    ok: bool
+
+
 class StopResponse(_msgspec.Struct, tag="stop"):
     ok: bool
 
@@ -138,6 +147,7 @@ Response = (
     | SearchResponse
     | ProjectStatusResponse
     | DaemonStatusResponse
+    | RemoveProjectResponse
     | StopResponse
     | ErrorResponse
 )

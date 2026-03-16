@@ -31,6 +31,8 @@ from .protocol import (
     IndexWaitingNotice,
     ProjectStatusRequest,
     ProjectStatusResponse,
+    RemoveProjectRequest,
+    RemoveProjectResponse,
     Request,
     Response,
     SearchRequest,
@@ -107,8 +109,14 @@ class ProjectRegistry:
         self._indexing = {}
         self._embedder = embedder
 
-    async def get_project(self, project_root: str) -> Project:
-        """Get or create a Project for the given root. Lazy initialization."""
+    async def get_project(self, project_root: str, *, suppress_auto_index: bool = False) -> Project:
+        """Get or create a Project for the given root. Lazy initialization.
+
+        When a project is newly loaded and *suppress_auto_index* is False,
+        a background indexing task is fired so the project is indexed
+        immediately.  Callers that will index right away (e.g. IndexRequest,
+        SearchRequest with refresh) should pass ``suppress_auto_index=True``.
+        """
         if project_root not in self._projects:
             root = Path(project_root)
             project_settings = load_project_settings(root)
@@ -116,11 +124,24 @@ class ProjectRegistry:
             self._projects[project_root] = project
             self._index_locks[project_root] = asyncio.Lock()
             self._indexing[project_root] = False
+
+            if not suppress_auto_index:
+                asyncio.create_task(self._auto_index(project_root))
         return self._projects[project_root]
 
-    async def update_index(self, project_root: str) -> AsyncIterator[IndexStreamResponse]:
+    async def _auto_index(self, project_root: str) -> None:
+        """Background auto-index, consuming the update_index stream."""
+        try:
+            async for _ in self.update_index(project_root):
+                pass
+        except Exception:
+            logger.exception("Auto-index failed for %s", project_root)
+
+    async def update_index(
+        self, project_root: str, *, suppress_auto_index: bool = True
+    ) -> AsyncIterator[IndexStreamResponse]:
         """Update index, yielding progress updates and a final IndexResponse."""
-        project = await self.get_project(project_root)
+        project = await self.get_project(project_root, suppress_auto_index=suppress_auto_index)
         lock = self._index_locks[project_root]
 
         # If lock is already held, notify the client and block until released
@@ -220,6 +241,14 @@ class ProjectRegistry:
             languages={lang: cnt for lang, cnt in lang_rows},
             progress=progress,
         )
+
+    def remove_project(self, project_root: str) -> bool:
+        """Remove a project from the registry. Returns True if it was loaded."""
+        was_loaded = project_root in self._projects
+        self._projects.pop(project_root, None)
+        self._index_locks.pop(project_root, None)
+        self._indexing.pop(project_root, None)
+        return was_loaded
 
     def list_projects(self) -> list[DaemonProjectInfo]:
         """List all loaded projects with their indexing state."""
@@ -345,6 +374,10 @@ async def _dispatch(
                 uptime_seconds=time.monotonic() - start_time,
                 projects=registry.list_projects(),
             )
+
+        if isinstance(req, RemoveProjectRequest):
+            registry.remove_project(req.project_root)
+            return RemoveProjectResponse(ok=True)
 
         if isinstance(req, StopRequest):
             shutdown_event.set()
