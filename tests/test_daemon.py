@@ -29,6 +29,7 @@ from cocoindex_code.protocol import (
     RemoveProjectRequest,
     Response,
     SearchRequest,
+    StopRequest,
     decode_response,
     encode_request,
 )
@@ -91,6 +92,18 @@ def daemon_sock() -> Iterator[str]:
         raise TimeoutError("Daemon did not start")
 
     yield sock_path
+
+    # Gracefully shut down the daemon thread so named pipes are released on Windows
+    try:
+        conn = Client(sock_path, family=_connection_family())
+        conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
+        conn.recv_bytes()
+        conn.send_bytes(encode_request(StopRequest()))
+        conn.recv_bytes()
+        conn.close()
+    except Exception:
+        pass
+    thread.join(timeout=5)
 
     # Restore patches and env var
     dm.create_embedder = _orig_create_embedder  # type: ignore[attr-defined]

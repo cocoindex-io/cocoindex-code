@@ -183,13 +183,26 @@ def start_daemon() -> None:
         cmd = [sys.executable, "-m", "cocoindex_code.cli", "run-daemon"]
 
     log_fd = open(log_path, "a")
-    subprocess.Popen(
-        cmd,
-        start_new_session=True,
-        stdout=log_fd,
-        stderr=log_fd,
-        stdin=subprocess.DEVNULL,
-    )
+    if sys.platform == "win32":
+        # DETACHED_PROCESS fully detaches the daemon from the parent console,
+        # preventing its exit code from leaking back to the calling shell.
+        _create_new_process_group = 0x00000200
+        _detached_process = 0x00000008
+        subprocess.Popen(
+            cmd,
+            stdout=log_fd,
+            stderr=log_fd,
+            stdin=subprocess.DEVNULL,
+            creationflags=_create_new_process_group | _detached_process,
+        )
+    else:
+        subprocess.Popen(
+            cmd,
+            start_new_session=True,
+            stdout=log_fd,
+            stderr=log_fd,
+            stdin=subprocess.DEVNULL,
+        )
     log_fd.close()
 
 
@@ -214,6 +227,8 @@ def _pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True  # process exists but we can't signal it
+    except OSError:
+        return False  # assume dead on unexpected OS errors (e.g. Windows edge cases)
 
 
 def stop_daemon() -> None:
