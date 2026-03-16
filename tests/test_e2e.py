@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from cocoindex.connectors import sqlite as coco_sqlite
 from cocoindex_code.cli import app
 from cocoindex_code.client import stop_daemon
 from cocoindex_code.settings import find_parent_with_marker
@@ -296,6 +297,37 @@ def test_session_reset_then_full_reinit(e2e_project: Path) -> None:
     result = runner.invoke(app, ["search", "fibonacci"], catch_exceptions=False)
     assert result.exit_code == 0
     assert "main.py" in result.output
+
+
+def test_session_respects_gitignore(e2e_project: Path) -> None:
+    """Indexing should skip files ignored by .gitignore while honoring negations."""
+    gitignore_path = e2e_project / ".gitignore"
+    gitignore_path.write_text("ignored.py\nignored_dir/\n!important.py\n")
+
+    (e2e_project / "ignored.py").write_text("IGNORED_TOKEN = True\n")
+    ignored_dir = e2e_project / "ignored_dir"
+    ignored_dir.mkdir()
+    (ignored_dir / "nested.py").write_text("NESTED_IGNORED = True\n")
+    (e2e_project / "important.py").write_text("IMPORTANT_TOKEN = True\n")
+
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    result = runner.invoke(app, ["index"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+    db_path = e2e_project / ".cocoindex_code" / "target_sqlite.db"
+    conn = coco_sqlite.connect(str(db_path), load_vec=True)
+    try:
+        with conn.readonly() as db:
+            file_paths = {
+                row[0]
+                for row in db.execute("SELECT DISTINCT file_path FROM code_chunks_vec")
+            }
+    finally:
+        conn.close()
+
+    assert "ignored.py" not in file_paths
+    assert "ignored_dir/nested.py" not in file_paths
+    assert "important.py" in file_paths
 
 
 @pytest.mark.usefixtures("e2e_project")

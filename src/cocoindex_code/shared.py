@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Union
 
 import cocoindex as coco
 from cocoindex.connectors import sqlite
+from pathspec import GitIgnoreSpec
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
@@ -31,6 +32,7 @@ Embedder = Union["SentenceTransformerEmbedder", "LiteLLMEmbedder"]
 EMBEDDER = coco.ContextKey[Embedder]("embedder")
 SQLITE_DB = coco.ContextKey[sqlite.ManagedConnection]("index_db", tracked=False)
 CODEBASE_DIR = coco.ContextKey[pathlib.Path]("codebase", tracked=False)
+GITIGNORE_SPEC = coco.ContextKey[GitIgnoreSpec | None]("gitignore_spec", tracked=False)
 EXT_LANG_OVERRIDE_MAP = coco.ContextKey[dict[str, str]]("ext_lang_override_map")
 
 # Module-level variable — set by daemon at startup (needed for CodeChunk annotation).

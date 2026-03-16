@@ -11,8 +11,8 @@ from cocoindex.connectors import sqlite
 
 from .indexer import indexer_main
 from .protocol import IndexingProgress
-from .settings import PROJECT_SETTINGS, ProjectSettings
-from .shared import CODEBASE_DIR, EMBEDDER, EXT_LANG_OVERRIDE_MAP, SQLITE_DB, Embedder
+from .settings import PROJECT_SETTINGS, ProjectSettings, load_gitignore_spec
+from .shared import CODEBASE_DIR, EMBEDDER, EXT_LANG_OVERRIDE_MAP, GITIGNORE_SPEC, SQLITE_DB, Embedder
 
 
 class Project:
@@ -88,6 +88,7 @@ class Project:
         target_sqlite_db_path = index_dir / "target_sqlite.db"
 
         settings = coco.Settings.from_env(cocoindex_db_path)
+        gitignore_spec = load_gitignore_spec(project_root)
 
         context = coco.ContextProvider()
         context.provide(CODEBASE_DIR, project_root)
@@ -98,6 +99,7 @@ class Project:
             EXT_LANG_OVERRIDE_MAP,
             {f".{lo.ext}": lo.lang for lo in project_settings.language_overrides},
         )
+        context.provide(GITIGNORE_SPEC, gitignore_spec)
 
         env = coco.Environment(settings, context_provider=context)
         app = coco.App(

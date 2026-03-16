@@ -8,6 +8,7 @@ from typing import Any
 
 import cocoindex as _coco
 import yaml as _yaml
+from pathspec import GitIgnoreSpec
 
 # ---------------------------------------------------------------------------
 # Default file patterns (moved from indexer.py)
@@ -187,6 +188,20 @@ def find_parent_with_marker(start: Path) -> Path | None:
         if (current / _SETTINGS_DIR_NAME).is_dir() or (current / ".git").is_dir():
             return current
         current = parent
+
+
+def load_gitignore_spec(project_root: Path) -> GitIgnoreSpec | None:
+    """Load a GitIgnoreSpec for the project's ``.gitignore`` if present."""
+    gitignore = project_root / ".gitignore"
+    if not gitignore.is_file():
+        return None
+    try:
+        lines = gitignore.read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not lines:
+        return None
+    return GitIgnoreSpec.from_lines(lines)
 
 
 # ---------------------------------------------------------------------------
