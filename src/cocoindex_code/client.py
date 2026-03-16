@@ -227,8 +227,11 @@ def _pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True  # process exists but we can't signal it
-    except OSError:
-        return False  # assume dead on unexpected OS errors (e.g. Windows edge cases)
+    except (OSError, SystemError):
+        # On Windows, os.kill(pid, 0) can raise SystemError or unexpected OSError
+        # variants (e.g. WinError 87 "The parameter is incorrect") for PIDs that
+        # have exited but whose handles haven't been fully released.
+        return False
 
 
 def stop_daemon() -> None:
