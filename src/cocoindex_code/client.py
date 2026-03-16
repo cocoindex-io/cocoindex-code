@@ -302,20 +302,37 @@ def _wait_for_daemon(timeout: float = 30.0) -> None:
     raise TimeoutError("Daemon did not start in time")
 
 
+def _needs_restart(resp: HandshakeResponse) -> bool:
+    """Check if the daemon needs to be restarted.
+
+    Returns True if the version mismatches or if global_settings.yml has been
+    modified since the daemon loaded it.
+    """
+    if not resp.ok:
+        return True
+    from .settings import global_settings_mtime_us
+
+    current_mtime = global_settings_mtime_us()
+    if current_mtime != resp.global_settings_mtime_us:
+        return True
+    return False
+
+
 def ensure_daemon() -> DaemonClient:
     """Connect to daemon, starting or restarting as needed.
 
     1. Try to connect to existing daemon.
     2. If connection refused: start daemon, retry connect with backoff.
-    3. If connected but version mismatch: stop old daemon, start new one.
+    3. If connected but version mismatch or global settings changed:
+       stop old daemon, start new one.
     """
     # Try connecting to existing daemon
     try:
         client = DaemonClient.connect()
         resp = client.handshake()
-        if resp.ok:
+        if not _needs_restart(resp):
             return client
-        # Version mismatch — restart
+        # Version or settings mismatch — restart
         client.close()
         stop_daemon()
     except (ConnectionRefusedError, OSError):
@@ -326,14 +343,15 @@ def ensure_daemon() -> DaemonClient:
     _wait_for_daemon()
 
     # Connect with retries
-    for attempt in range(10):
+    for _attempt in range(10):
         try:
             client = DaemonClient.connect()
             resp = client.handshake()
-            if resp.ok:
+            if not _needs_restart(resp):
                 return client
             raise RuntimeError(
-                f"Daemon version mismatch: expected {__version__}, got {resp.daemon_version}"
+                f"Daemon mismatch after fresh start: version={resp.daemon_version}, "
+                f"settings_mtime={resp.global_settings_mtime_us}"
             )
         except (ConnectionRefusedError, OSError):
             time.sleep(0.5)

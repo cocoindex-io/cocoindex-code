@@ -61,6 +61,7 @@ Request = (
 class HandshakeResponse(_msgspec.Struct, tag="handshake"):
     ok: bool
     daemon_version: str
+    global_settings_mtime_us: int | None = None
 
 
 class IndexResponse(_msgspec.Struct, tag="index"):

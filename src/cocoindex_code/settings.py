@@ -195,6 +195,19 @@ def find_parent_with_marker(start: Path) -> Path | None:
         current = parent
 
 
+def global_settings_mtime_us() -> int | None:
+    """Return the mtime of ``global_settings.yml`` as integer microseconds.
+
+    Returns ``None`` if the file does not exist.  Used by the daemon to record
+    the mtime at startup and by the client to detect staleness.
+    """
+    path = user_settings_path()
+    try:
+        return int(path.stat().st_mtime * 1_000_000)
+    except FileNotFoundError:
+        return None
+
+
 def load_gitignore_spec(project_root: Path) -> GitIgnoreSpec | None:
     """Load a GitIgnoreSpec for the project's ``.gitignore`` if present."""
     gitignore = project_root / ".gitignore"

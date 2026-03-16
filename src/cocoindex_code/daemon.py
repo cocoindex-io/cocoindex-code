@@ -45,6 +45,7 @@ from .protocol import (
 )
 from .query import query_codebase
 from .settings import (
+    global_settings_mtime_us,
     load_project_settings,
     load_user_settings,
     user_settings_dir,
@@ -288,6 +289,7 @@ async def handle_connection(
     registry: ProjectRegistry,
     start_time: float,
     shutdown_event: asyncio.Event,
+    settings_mtime_us: int | None,
 ) -> None:
     """Handle a single client connection."""
     loop = asyncio.get_event_loop()
@@ -322,7 +324,11 @@ async def handle_connection(
                     break
 
                 ok = req.version == __version__
-                resp = HandshakeResponse(ok=ok, daemon_version=__version__)
+                resp = HandshakeResponse(
+                    ok=ok,
+                    daemon_version=__version__,
+                    global_settings_mtime_us=settings_mtime_us,
+                )
                 conn.send_bytes(encode_response(resp))
                 if not ok:
                     break
@@ -419,8 +425,9 @@ def run_daemon() -> None:
     """Main entry point for the daemon process (blocking)."""
     daemon_dir().mkdir(parents=True, exist_ok=True)
 
-    # Load user settings
+    # Load user settings and record mtime for staleness detection
     user_settings = load_user_settings()
+    settings_mtime_us = global_settings_mtime_us()
 
     # Set environment variables from settings
     for key, value in user_settings.envs.items():
@@ -445,7 +452,7 @@ def run_daemon() -> None:
     logger.info("Daemon starting (PID %d, version %s)", os.getpid(), __version__)
 
     try:
-        asyncio.run(_async_daemon_main(embedder))
+        asyncio.run(_async_daemon_main(embedder, settings_mtime_us))
     finally:
         # Clean up PID file and socket (named pipes on Windows clean up automatically)
         try:
@@ -461,7 +468,7 @@ def run_daemon() -> None:
         logger.info("Daemon stopped")
 
 
-async def _async_daemon_main(embedder: Embedder) -> None:
+async def _async_daemon_main(embedder: Embedder, settings_mtime_us: int | None) -> None:
     """Async main loop for the daemon."""
     start_time = time.monotonic()
     registry = ProjectRegistry(embedder)
@@ -496,7 +503,7 @@ async def _async_daemon_main(embedder: Embedder) -> None:
         evt: asyncio.Event,
         task_set: set[asyncio.Task[Any]],
     ) -> None:
-        task = asyncio.create_task(handle_connection(conn, reg, st, evt))
+        task = asyncio.create_task(handle_connection(conn, reg, st, evt, settings_mtime_us))
         task_set.add(task)
         task.add_done_callback(task_set.discard)
 
