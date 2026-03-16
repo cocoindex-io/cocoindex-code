@@ -66,14 +66,14 @@ DEFAULT_EXCLUDED_PATTERNS: list[str] = [
 
 @dataclass
 class EmbeddingSettings:
-    provider: str = "sentence-transformers"
-    model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    model: str
+    provider: str = "litellm"
     device: str | None = None
 
 
 @dataclass
 class UserSettings:
-    embedding: EmbeddingSettings = field(default_factory=EmbeddingSettings)
+    embedding: EmbeddingSettings
     envs: dict[str, str] = field(default_factory=dict)
 
 
@@ -99,7 +99,12 @@ PROJECT_SETTINGS = _coco.ContextKey[ProjectSettings]("project_settings")
 
 
 def default_user_settings() -> UserSettings:
-    return UserSettings()
+    return UserSettings(
+        embedding=EmbeddingSettings(
+            provider="sentence-transformers",
+            model="sentence-transformers/all-MiniLM-L6-v2",
+        )
+    )
 
 
 def default_project_settings() -> ProjectSettings:
@@ -211,27 +216,29 @@ def load_gitignore_spec(project_root: Path) -> GitIgnoreSpec | None:
 
 def _user_settings_to_dict(settings: UserSettings) -> dict[str, Any]:
     d: dict[str, Any] = {}
-    emb: dict[str, Any] = {}
-    if settings.embedding.provider != "sentence-transformers":
-        emb["provider"] = settings.embedding.provider
-    if settings.embedding.model != "sentence-transformers/all-MiniLM-L6-v2":
-        emb["model"] = settings.embedding.model
+    emb: dict[str, Any] = {
+        "provider": settings.embedding.provider,
+        "model": settings.embedding.model,
+    }
     if settings.embedding.device is not None:
         emb["device"] = settings.embedding.device
-    if emb:
-        d["embedding"] = emb
+    d["embedding"] = emb
     if settings.envs:
         d["envs"] = dict(settings.envs)
     return d
 
 
 def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
-    emb_dict = d.get("embedding", {})
-    embedding = EmbeddingSettings(
-        provider=emb_dict.get("provider", "sentence-transformers"),
-        model=emb_dict.get("model", "sentence-transformers/all-MiniLM-L6-v2"),
-        device=emb_dict.get("device"),
-    )
+    emb_dict = d.get("embedding")
+    if not emb_dict or "model" not in emb_dict:
+        raise ValueError("global_settings.yml must contain 'embedding' with at least 'model' field")
+    # Only pass keys that are present; provider uses dataclass default ("litellm") if omitted
+    emb_kwargs: dict[str, Any] = {"model": emb_dict["model"]}
+    if "provider" in emb_dict:
+        emb_kwargs["provider"] = emb_dict["provider"]
+    if "device" in emb_dict:
+        emb_kwargs["device"] = emb_dict["device"]
+    embedding = EmbeddingSettings(**emb_kwargs)
     envs = d.get("envs", {})
     return UserSettings(embedding=embedding, envs=envs)
 
@@ -265,14 +272,17 @@ def _project_settings_from_dict(d: dict[str, Any]) -> ProjectSettings:
 
 
 def load_user_settings() -> UserSettings:
-    """Read ``~/.cocoindex_code/settings.yml``, return defaults if missing."""
+    """Read ``~/.cocoindex_code/global_settings.yml``.
+
+    Raises ``FileNotFoundError`` if missing, ``ValueError`` if incomplete.
+    """
     path = user_settings_path()
     if not path.is_file():
-        return default_user_settings()
+        raise FileNotFoundError(f"User settings not found: {path}")
     with open(path) as f:
         data = _yaml.safe_load(f)
     if not data:
-        return default_user_settings()
+        raise ValueError(f"User settings file is empty: {path}")
     return _user_settings_from_dict(data)
 
 

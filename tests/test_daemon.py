@@ -54,11 +54,12 @@ def calculate_fibonacci(n: int) -> int:
 def daemon_sock() -> Iterator[str]:
     """Start a daemon once per session and return the socket path."""
     import cocoindex_code.daemon as dm
-    from cocoindex_code.settings import EmbeddingSettings
     from cocoindex_code.shared import create_embedder
     from cocoindex_code.shared import embedder as shared_emb
 
-    emb = shared_emb if shared_emb is not None else create_embedder(EmbeddingSettings())
+    emb = (
+        shared_emb if shared_emb is not None else create_embedder(default_user_settings().embedding)
+    )
 
     # Use a short path to stay within AF_UNIX limit
     user_dir = Path(tempfile.mkdtemp(prefix="ccc_d_"))

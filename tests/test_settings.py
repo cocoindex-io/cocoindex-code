@@ -86,12 +86,47 @@ def test_save_and_load_project_settings(tmp_path: Path) -> None:
 
 
 @pytest.mark.usefixtures("_patch_user_dir")
-def test_load_user_settings_missing_file_returns_defaults() -> None:
-    loaded = load_user_settings()
-    expected = default_user_settings()
-    assert loaded.embedding.provider == expected.embedding.provider
-    assert loaded.embedding.model == expected.embedding.model
-    assert loaded.envs == expected.envs
+def test_load_user_settings_missing_file_raises() -> None:
+    with pytest.raises(FileNotFoundError):
+        load_user_settings()
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_load_user_settings_empty_file_raises(tmp_path: Path) -> None:
+    path = tmp_path / ".cocoindex_code" / "global_settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n")
+    with pytest.raises(ValueError):
+        load_user_settings()
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_load_user_settings_missing_model_raises(tmp_path: Path) -> None:
+    path = tmp_path / ".cocoindex_code" / "global_settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("embedding:\n  provider: litellm\n")
+    with pytest.raises(ValueError):
+        load_user_settings()
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_from_dict_missing_provider_defaults_to_litellm() -> None:
+    from cocoindex_code.settings import _user_settings_from_dict
+
+    settings = _user_settings_from_dict({"embedding": {"model": "some/model"}})
+    assert settings.embedding.provider == "litellm"
+    assert settings.embedding.model == "some/model"
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_save_default_settings_writes_explicit_embedding() -> None:
+    from cocoindex_code.settings import user_settings_path
+
+    save_user_settings(default_user_settings())
+    content = user_settings_path().read_text()
+    assert "provider:" in content
+    assert "model:" in content
+    assert "sentence-transformers" in content
 
 
 def test_load_project_settings_missing_file_raises(tmp_path: Path) -> None:
