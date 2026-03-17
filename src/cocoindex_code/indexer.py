@@ -25,8 +25,8 @@ from .shared import (
 )
 
 # Chunking configuration
-CHUNK_SIZE = 800
-MIN_CHUNK_SIZE = 200
+CHUNK_SIZE = 1000
+MIN_CHUNK_SIZE = 250
 CHUNK_OVERLAP = 150
 
 # Chunking splitter (stateless, can be module-level)
