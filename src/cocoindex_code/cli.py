@@ -100,6 +100,9 @@ def print_index_stats(status: ProjectStatusResponse) -> None:
     """Print formatted index statistics."""
     if status.progress is not None:
         _typer.echo(f"Indexing in progress: {_format_progress(status.progress)}")
+    if not status.index_exists:
+        _typer.echo("\nIndex not created yet. Run `ccc index` to build the index.")
+        return
     _typer.echo("\nIndex stats:")
     _typer.echo(f"  Chunks: {status.total_chunks}")
     _typer.echo(f"  Files:  {status.total_files}")

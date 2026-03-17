@@ -114,6 +114,7 @@ class ProjectStatusResponse(_msgspec.Struct, tag="project_status"):
     total_files: int
     languages: dict[str, int]
     progress: IndexingProgress | None = None
+    index_exists: bool = True
 
 
 class DaemonProjectInfo(_msgspec.Struct):

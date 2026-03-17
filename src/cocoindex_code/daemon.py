@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import signal
+import sqlite3
 import sys
 import threading
 import time
@@ -279,15 +280,22 @@ class ProjectRegistry:
             )
 
         db = project.env.get_context(SQLITE_DB)
-        with db.readonly() as conn:
-            total_chunks = conn.execute("SELECT COUNT(*) FROM code_chunks_vec").fetchone()[0]
-            total_files = conn.execute(
-                "SELECT COUNT(DISTINCT file_path) FROM code_chunks_vec"
-            ).fetchone()[0]
-            lang_rows = conn.execute(
-                "SELECT language, COUNT(*) as cnt FROM code_chunks_vec"
-                " GROUP BY language ORDER BY cnt DESC"
-            ).fetchall()
+        index_exists = True
+        try:
+            with db.readonly() as conn:
+                total_chunks = conn.execute("SELECT COUNT(*) FROM code_chunks_vec").fetchone()[0]
+                total_files = conn.execute(
+                    "SELECT COUNT(DISTINCT file_path) FROM code_chunks_vec"
+                ).fetchone()[0]
+                lang_rows = conn.execute(
+                    "SELECT language, COUNT(*) as cnt FROM code_chunks_vec"
+                    " GROUP BY language ORDER BY cnt DESC"
+                ).fetchall()
+        except sqlite3.OperationalError:
+            index_exists = False
+            total_chunks = 0
+            total_files = 0
+            lang_rows = []
 
         lock = self._index_locks.get(project_root)
         is_indexing = lock is not None and lock.locked()
@@ -298,6 +306,7 @@ class ProjectRegistry:
             total_files=total_files,
             languages={lang: cnt for lang, cnt in lang_rows},
             progress=progress,
+            index_exists=index_exists,
         )
 
     def remove_project(self, project_root: str) -> bool:
