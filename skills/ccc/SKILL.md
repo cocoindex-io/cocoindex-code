@@ -62,6 +62,10 @@ Search results include file paths and line ranges. To explore a result in more d
 - Use the editor's built-in file reading capabilities (e.g., the `Read` tool) to load the matched file and read lines around the returned range for full context.
 - When working in a terminal without a file-reading tool, use `sed -n '<start>,<end>p' <file>` to extract a specific line range.
 
+## Settings
+
+To view or edit embedding model configuration, include/exclude patterns, or language overrides, see [settings.md](references/settings.md).
+
 ## Management & Troubleshooting
 
 For installation, initialization, daemon management, troubleshooting, and cleanup commands, see [management.md](references/management.md).

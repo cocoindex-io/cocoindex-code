@@ -32,7 +32,7 @@ If `.git` exists in the directory, `.cocoindex_code/` is automatically added to 
 
 Use `-f` to skip the confirmation prompt if `ccc init` detects a potential parent project root.
 
-After initialization, edit the settings files if needed, then run `ccc index` to build the initial index.
+After initialization, edit the settings files if needed (see [settings.md](settings.md) for format details), then run `ccc index` to build the initial index.
 
 ## Troubleshooting
 
