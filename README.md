@@ -55,17 +55,9 @@ Using [uv](https://docs.astral.sh/uv/getting-started/installation/):
 uv tool install --upgrade cocoindex-code --prerelease explicit --with "cocoindex>=1.0.0a24"
 ```
 
-### Init, Index, Search
+The default embedding model runs locally ([sentence-transformers/all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)) — no API key required, completely free.
 
-```bash
-ccc init                                # initialize project (creates settings)
-ccc index                               # build the index
-ccc search "authentication logic"       # search!
-```
-
-That's it! The background daemon starts automatically on first use. The default embedding model runs locally ([sentence-transformers/all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)) — no API key required, completely free.
-
-> **Tip:** `ccc index` auto-initializes if you haven't run `ccc init` yet, so you can skip straight to indexing.
+Next, set up your [coding agent integration](#coding-agent-integration) — or jump to [Manual CLI Usage](#manual-cli-usage) if you prefer direct control.
 
 ## Coding Agent Integration
 
@@ -77,7 +69,9 @@ Install the `ccc` skill so your coding agent automatically uses semantic search 
 npx skills add cocoindex-io/cocoindex-code
 ```
 
-This installs the skill into your project's `.claude/skills/` directory. Once installed, the agent automatically triggers semantic code search when it would be helpful — no manual prompting required.
+That's it — no `ccc init` or `ccc index` needed. The skill teaches the agent to handle initialization, indexing, and searching on its own. It will automatically keep the index up to date as you work.
+
+The agent uses semantic search automatically when it would be helpful. You can also nudge it explicitly — just ask it to search the codebase, e.g. *"find how user sessions are managed"*, or type `/ccc` to invoke the skill directly.
 
 Works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and other skill-compatible agents.
 
@@ -152,14 +146,21 @@ search(
 Returns matching code chunks with file path, language, code content, line numbers, and similarity score.
 </details>
 
-## Features
-- **Semantic Code Search**: Find relevant code using natural language queries when grep doesn't work well, and save tokens immediately.
-- **Ultra Performant**: ⚡ Built on top of ultra performant [Rust indexing engine](https://github.com/cocoindex-io/cocoindex). Only re-indexes changed files for fast updates.
-- **Multi-Language Support**: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++, C#, SQL, Shell, and more.
-- **Embedded**: Portable and just works, no database setup required!
-- **Flexible Embeddings**: Local SentenceTransformers by default (free!) or 100+ cloud providers via LiteLLM.
+## Manual CLI Usage
 
-## CLI Reference
+You can also use the CLI directly — useful for manual control, running indexing after changing settings, checking status, or searching outside an agent.
+
+```bash
+ccc init                                # initialize project (creates settings)
+ccc index                               # build the index
+ccc search "authentication logic"       # search!
+```
+
+The background daemon starts automatically on first use.
+
+> **Tip:** `ccc index` auto-initializes if you haven't run `ccc init` yet, so you can skip straight to indexing.
+
+### CLI Reference
 
 | Command | Description |
 |---------|-------------|
@@ -184,6 +185,13 @@ ccc search --refresh database schema                 # update index first, then 
 ```
 
 By default, `ccc search` scopes results to your current working directory (relative to the project root). Use `--path` to override.
+
+## Features
+- **Semantic Code Search**: Find relevant code using natural language queries when grep doesn't work well, and save tokens immediately.
+- **Ultra Performant**: ⚡ Built on top of ultra performant [Rust indexing engine](https://github.com/cocoindex-io/cocoindex). Only re-indexes changed files for fast updates.
+- **Multi-Language Support**: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++, C#, SQL, Shell, and more.
+- **Embedded**: Portable and just works, no database setup required!
+- **Flexible Embeddings**: Local SentenceTransformers by default (free!) or 100+ cloud providers via LiteLLM.
 
 ## Configuration
 
