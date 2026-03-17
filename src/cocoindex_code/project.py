@@ -51,7 +51,7 @@ class Project:
         try:
             handle = self._app.update()
             async for snapshot in handle.watch():
-                file_stats = snapshot.stats.by_processor.get("process_file")
+                file_stats = snapshot.stats.by_component.get("process_file")
                 if file_stats is not None:
                     progress = IndexingProgress(
                         num_execution_starts=file_stats.num_execution_starts,
