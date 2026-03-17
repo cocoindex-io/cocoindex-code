@@ -38,6 +38,7 @@ from .protocol import (
     SearchRequest,
     SearchResponse,
     SearchResult,
+    SearchStreamResponse,
     StopRequest,
     StopResponse,
     decode_request,
@@ -108,15 +109,17 @@ class ProjectRegistry:
         self._projects = {}
         self._index_locks = {}
         self._indexing = {}
+        self._load_time_done: dict[str, asyncio.Event] = {}
         self._embedder = embedder
 
     async def get_project(self, project_root: str, *, suppress_auto_index: bool = False) -> Project:
         """Get or create a Project for the given root. Lazy initialization.
 
         When a project is newly loaded and *suppress_auto_index* is False,
-        a background indexing task is fired so the project is indexed
-        immediately.  Callers that will index right away (e.g. IndexRequest,
-        SearchRequest with refresh) should pass ``suppress_auto_index=True``.
+        a background indexing task (load-time indexing) is fired so the project
+        is indexed immediately.  Callers that will index right away (e.g.
+        IndexRequest, SearchRequest with refresh) should pass
+        ``suppress_auto_index=True``.
         """
         if project_root not in self._projects:
             root = Path(project_root)
@@ -126,17 +129,36 @@ class ProjectRegistry:
             self._index_locks[project_root] = asyncio.Lock()
             self._indexing[project_root] = False
 
-            if not suppress_auto_index:
-                asyncio.create_task(self._auto_index(project_root))
+            event = asyncio.Event()
+            self._load_time_done[project_root] = event
+            if suppress_auto_index:
+                event.set()
+            else:
+                asyncio.create_task(self._load_time_index(project_root))
         return self._projects[project_root]
 
-    async def _auto_index(self, project_root: str) -> None:
-        """Background auto-index, consuming the update_index stream."""
+    def is_load_time_indexing(self, project_root: str) -> bool:
+        """Check if load-time indexing is in progress."""
+        event = self._load_time_done.get(project_root)
+        return event is not None and not event.is_set()
+
+    async def wait_for_load_time_indexing(self, project_root: str) -> None:
+        """Wait for load-time indexing to complete. Returns immediately if not in progress."""
+        event = self._load_time_done.get(project_root)
+        if event is not None:
+            await event.wait()
+
+    async def _load_time_index(self, project_root: str) -> None:
+        """Background load-time indexing, consuming the update_index stream."""
         try:
             async for _ in self.update_index(project_root):
                 pass
         except Exception:
-            logger.exception("Auto-index failed for %s", project_root)
+            logger.exception("Load-time indexing failed for %s", project_root)
+        finally:
+            event = self._load_time_done.get(project_root)
+            if event is not None:
+                event.set()
 
     async def update_index(
         self, project_root: str, *, suppress_auto_index: bool = True
@@ -251,6 +273,7 @@ class ProjectRegistry:
         project = self._projects.pop(project_root, None)
         self._index_locks.pop(project_root, None)
         self._indexing.pop(project_root, None)
+        self._load_time_done.pop(project_root, None)
         if project is not None:
             project.close()
             del project
@@ -266,6 +289,7 @@ class ProjectRegistry:
         self._projects.clear()
         self._index_locks.clear()
         self._indexing.clear()
+        self._load_time_done.clear()
         gc.collect()
 
     def list_projects(self) -> list[DaemonProjectInfo]:
@@ -357,26 +381,55 @@ async def handle_connection(
             pass
 
 
+async def _search_with_wait(
+    registry: ProjectRegistry, req: SearchRequest
+) -> AsyncIterator[SearchStreamResponse]:
+    """Stream search response, waiting for load-time indexing first."""
+    yield IndexWaitingNotice()
+    await registry.wait_for_load_time_indexing(req.project_root)
+    try:
+        results = await registry.search(
+            project_root=req.project_root,
+            query=req.query,
+            languages=req.languages,
+            paths=req.paths,
+            limit=req.limit,
+            offset=req.offset,
+        )
+        yield SearchResponse(
+            success=True,
+            results=results,
+            total_returned=len(results),
+            offset=req.offset,
+        )
+    except Exception as e:
+        yield ErrorResponse(message=str(e))
+
+
 async def _dispatch(
     req: Request,
     registry: ProjectRegistry,
     start_time: float,
     shutdown_event: asyncio.Event,
-) -> Response | AsyncIterator[IndexStreamResponse]:
+) -> Response | AsyncIterator[IndexStreamResponse] | AsyncIterator[SearchStreamResponse]:
     """Dispatch a request to the appropriate handler.
 
     Returns a single Response for most requests, or an AsyncIterator for
-    streaming requests (IndexRequest).
+    streaming requests (IndexRequest, or SearchRequest when waiting for
+    load-time indexing).
     """
     try:
         if isinstance(req, IndexRequest):
             return registry.update_index(req.project_root)
 
         if isinstance(req, SearchRequest):
-            if req.refresh:
-                # Consume the index stream silently for refresh
-                async for _ in registry.update_index(req.project_root):
-                    pass
+            # Ensure the project is loaded (may trigger load-time indexing)
+            await registry.get_project(req.project_root)
+
+            # If load-time indexing is in progress, return a streaming response
+            if registry.is_load_time_indexing(req.project_root):
+                return _search_with_wait(registry, req)
+
             results = await registry.search(
                 project_root=req.project_root,
                 query=req.query,

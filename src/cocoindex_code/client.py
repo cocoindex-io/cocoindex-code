@@ -101,20 +101,41 @@ class DaemonClient:
         paths: list[str] | None = None,
         limit: int = 5,
         offset: int = 0,
-        refresh: bool = False,
+        on_waiting: Callable[[], None] | None = None,
     ) -> SearchResponse:
-        """Search the codebase."""
-        return self._send(  # type: ignore[return-value]
-            SearchRequest(
-                project_root=project_root,
-                query=query,
-                languages=languages,
-                paths=paths,
-                limit=limit,
-                offset=offset,
-                refresh=refresh,
+        """Search the codebase.
+
+        If the daemon sends ``IndexWaitingNotice`` (load-time indexing in
+        progress), calls *on_waiting* (if provided) then continues reading
+        until the final ``SearchResponse``.
+        """
+        self._conn.send_bytes(
+            encode_request(
+                SearchRequest(
+                    project_root=project_root,
+                    query=query,
+                    languages=languages,
+                    paths=paths,
+                    limit=limit,
+                    offset=offset,
+                )
             )
         )
+        while True:
+            try:
+                data = self._conn.recv_bytes()
+            except EOFError:
+                raise RuntimeError("Connection to daemon lost during search")
+            resp = decode_response(data)
+            if isinstance(resp, ErrorResponse):
+                raise RuntimeError(f"Daemon error: {resp.message}")
+            if isinstance(resp, IndexWaitingNotice):
+                if on_waiting is not None:
+                    on_waiting()
+                continue
+            if isinstance(resp, SearchResponse):
+                return resp
+            raise RuntimeError(f"Unexpected response: {type(resp).__name__}")
 
     def project_status(self, project_root: str) -> ProjectStatusResponse:
         return self._send(  # type: ignore[return-value]

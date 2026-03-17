@@ -127,6 +127,8 @@ def create_mcp_server(client: DaemonClient, project_root: str) -> FastMCP:
         """Query the codebase index via the daemon."""
         loop = asyncio.get_event_loop()
         try:
+            if refresh_index:
+                await loop.run_in_executor(None, lambda: client.index(project_root))
             resp = await loop.run_in_executor(
                 None,
                 lambda: client.search(
@@ -136,7 +138,6 @@ def create_mcp_server(client: DaemonClient, project_root: str) -> FastMCP:
                     paths=paths,
                     limit=limit,
                     offset=offset,
-                    refresh=refresh_index,
                 ),
             )
             return SearchResultModel(

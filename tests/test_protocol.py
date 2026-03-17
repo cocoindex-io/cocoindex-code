@@ -47,7 +47,6 @@ def test_encode_decode_search_request_with_defaults() -> None:
     assert decoded.languages is None
     assert decoded.limit == 5
     assert decoded.offset == 0
-    assert decoded.refresh is False
 
 
 def test_encode_decode_search_request_with_all_fields() -> None:
@@ -58,7 +57,6 @@ def test_encode_decode_search_request_with_all_fields() -> None:
         paths=["src/*"],
         limit=20,
         offset=5,
-        refresh=True,
     )
     data = encode_request(req)
     decoded = decode_request(data)
@@ -69,7 +67,6 @@ def test_encode_decode_search_request_with_all_fields() -> None:
     assert decoded.paths == ["src/*"]
     assert decoded.limit == 20
     assert decoded.offset == 5
-    assert decoded.refresh is True
 
 
 def test_encode_decode_search_response_with_results() -> None:

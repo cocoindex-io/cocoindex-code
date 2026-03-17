@@ -165,6 +165,44 @@ def _run_index_with_progress(client: DaemonClient, project_root: str) -> None:
         raise _typer.Exit(code=1)
 
 
+def _search_with_wait_spinner(
+    client: DaemonClient,
+    project_root: str,
+    query: str,
+    languages: list[str] | None = None,
+    paths: list[str] | None = None,
+    limit: int = 10,
+    offset: int = 0,
+) -> SearchResponse:
+    """Run search, showing a spinner if waiting for load-time indexing."""
+    from rich.console import Console as _Console
+    from rich.live import Live as _Live
+    from rich.spinner import Spinner as _Spinner
+
+    err_console = _Console(stderr=True)
+    waiting = False
+
+    # Use Live context so the spinner is cleaned up regardless of outcome
+    with _Live(console=err_console, transient=True) as live:
+
+        def _on_waiting() -> None:
+            nonlocal waiting
+            waiting = True
+            live.update(_Spinner("dots", "Waiting for indexing to complete..."))
+
+        resp = client.search(
+            project_root=project_root,
+            query=query,
+            languages=languages,
+            paths=paths,
+            limit=limit,
+            offset=offset,
+            on_waiting=_on_waiting,
+        )
+
+    return resp
+
+
 _GITIGNORE_COMMENT = "# CocoIndex Code (ccc)"
 _GITIGNORE_ENTRY = "/.cocoindex_code/"
 
@@ -300,14 +338,14 @@ def search(
         if default is not None:
             paths = [default]
 
-    resp = client.search(
+    resp = _search_with_wait_spinner(
+        client,
         project_root=project_root,
         query=query_str,
         languages=lang or None,
         paths=paths,
         limit=limit,
         offset=offset,
-        refresh=False,
     )
     print_search_results(resp)
 

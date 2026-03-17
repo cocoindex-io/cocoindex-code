@@ -24,7 +24,6 @@ class SearchRequest(_msgspec.Struct, tag="search"):
     paths: list[str] | None = None
     limit: int = 5
     offset: int = 0
-    refresh: bool = False
 
 
 class ProjectStatusRequest(_msgspec.Struct, tag="project_status"):
@@ -154,6 +153,7 @@ Response = (
 )
 
 IndexStreamResponse = IndexProgressUpdate | IndexWaitingNotice | IndexResponse | ErrorResponse
+SearchStreamResponse = IndexWaitingNotice | SearchResponse | ErrorResponse
 
 # ---------------------------------------------------------------------------
 # Encode / decode helpers (msgpack binary)

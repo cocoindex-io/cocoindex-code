@@ -29,6 +29,7 @@ from cocoindex_code.protocol import (
     RemoveProjectRequest,
     Response,
     SearchRequest,
+    SearchResponse,
     StopRequest,
     decode_response,
     encode_request,
@@ -234,4 +235,45 @@ def test_daemon_remove_project_not_loaded(daemon_sock: str) -> None:
     conn.send_bytes(encode_request(RemoveProjectRequest(project_root="/nonexistent/path")))
     resp = decode_response(conn.recv_bytes())
     assert resp.ok is True  # type: ignore[union-attr]
+    conn.close()
+
+
+def test_daemon_search_waits_for_load_time_indexing(daemon_sock: str) -> None:
+    """Search on a fresh project should wait for load-time indexing, sending IndexWaitingNotice."""
+    # Create a new project that the daemon hasn't seen — its first load will
+    # trigger load-time indexing in the background.
+    project = Path(tempfile.mkdtemp(prefix="ccc_wait_"))
+    save_project_settings(project, default_project_settings())
+    (project / "main.py").write_text(SAMPLE_MAIN_PY)
+
+    conn, _ = _connect_and_handshake(daemon_sock)
+
+    # Send SearchRequest without prior explicit indexing.
+    # The daemon should trigger load-time indexing, detect it's in progress,
+    # and send IndexWaitingNotice before the final SearchResponse.
+    conn.send_bytes(encode_request(SearchRequest(project_root=str(project), query="fibonacci")))
+
+    got_waiting = False
+    final_resp: SearchResponse | None = None
+    while True:
+        resp = decode_response(conn.recv_bytes())
+        if isinstance(resp, IndexWaitingNotice):
+            got_waiting = True
+            continue
+        if isinstance(resp, SearchResponse):
+            final_resp = resp
+            break
+        raise AssertionError(f"Unexpected response: {type(resp).__name__}")
+
+    assert got_waiting, "Expected IndexWaitingNotice before SearchResponse"
+    assert final_resp is not None
+    assert final_resp.success is True
+    assert len(final_resp.results) > 0
+    assert "main.py" in final_resp.results[0].file_path
+
+    # Second search — load-time indexing is done, no waiting expected
+    conn.send_bytes(encode_request(SearchRequest(project_root=str(project), query="fibonacci")))
+    resp2 = decode_response(conn.recv_bytes())
+    assert isinstance(resp2, SearchResponse)
+    assert resp2.success is True
     conn.close()
