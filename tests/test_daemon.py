@@ -238,6 +238,53 @@ def test_daemon_remove_project_not_loaded(daemon_sock: str) -> None:
     conn.close()
 
 
+def test_daemon_search_waits_during_explicit_index(daemon_sock: str) -> None:
+    """When IndexRequest is in progress, a concurrent SearchRequest should receive
+    IndexWaitingNotice (Path B: index first, then search)."""
+    # Use enough files to ensure indexing takes long enough for the search to
+    # arrive while it's still in progress.
+    project = Path(tempfile.mkdtemp(prefix="ccc_idx_then_search_"))
+    save_project_settings(project, default_project_settings())
+    for i in range(20):
+        (project / f"module_{i}.py").write_text(
+            f'"""Module {i}."""\n\ndef func_{i}(x: int) -> int:\n'
+            f'    """Compute something for module {i}."""\n'
+            f"    return x * {i} + {i}\n"
+        )
+
+    # Connection 1: start indexing (don't wait for completion)
+    conn1, _ = _connect_and_handshake(daemon_sock)
+    conn1.send_bytes(encode_request(IndexRequest(project_root=str(project))))
+
+    # Send the search request immediately — the daemon processes requests
+    # concurrently across connections, and _run_index needs to acquire the
+    # lock before indexing starts, so a prompt SearchRequest will arrive
+    # while the event is still unset.
+    conn2, _ = _connect_and_handshake(daemon_sock)
+    conn2.send_bytes(encode_request(SearchRequest(project_root=str(project), query="compute")))
+
+    got_waiting = False
+    final_resp: SearchResponse | None = None
+    while True:
+        resp = decode_response(conn2.recv_bytes())
+        if isinstance(resp, IndexWaitingNotice):
+            got_waiting = True
+            continue
+        if isinstance(resp, SearchResponse):
+            final_resp = resp
+            break
+        raise AssertionError(f"Unexpected response on search conn: {type(resp).__name__}")
+
+    assert got_waiting, "Expected IndexWaitingNotice before SearchResponse"
+    assert final_resp is not None
+    assert final_resp.success is True
+
+    # Drain the index stream on connection 1
+    _recv_index_response(conn1)
+    conn1.close()
+    conn2.close()
+
+
 def test_daemon_search_waits_for_load_time_indexing(daemon_sock: str) -> None:
     """Search on a fresh project should wait for load-time indexing, sending IndexWaitingNotice."""
     # Create a new project that the daemon hasn't seen — its first load will

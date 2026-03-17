@@ -180,15 +180,14 @@ def _search_with_wait_spinner(
     from rich.spinner import Spinner as _Spinner
 
     err_console = _Console(stderr=True)
-    waiting = False
 
-    # Use Live context so the spinner is cleaned up regardless of outcome
-    with _Live(console=err_console, transient=True) as live:
+    with _Live(_Spinner("dots", "Searching..."), console=err_console, transient=True) as live:
 
         def _on_waiting() -> None:
-            nonlocal waiting
-            waiting = True
-            live.update(_Spinner("dots", "Waiting for indexing to complete..."))
+            live.update(
+                _Spinner("dots", "Waiting for indexing to complete..."),
+                refresh=True,
+            )
 
         resp = client.search(
             project_root=project_root,

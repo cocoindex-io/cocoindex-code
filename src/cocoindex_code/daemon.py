@@ -9,7 +9,7 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from multiprocessing.connection import Connection, Listener
 from pathlib import Path
 from typing import Any
@@ -102,13 +102,11 @@ class ProjectRegistry:
 
     _projects: dict[str, Project]
     _index_locks: dict[str, asyncio.Lock]
-    _indexing: dict[str, bool]
     _embedder: Embedder
 
     def __init__(self, embedder: Embedder) -> None:
         self._projects = {}
         self._index_locks = {}
-        self._indexing = {}
         self._load_time_done: dict[str, asyncio.Event] = {}
         self._embedder = embedder
 
@@ -127,80 +125,116 @@ class ProjectRegistry:
             project = await Project.create(root, project_settings, self._embedder)
             self._projects[project_root] = project
             self._index_locks[project_root] = asyncio.Lock()
-            self._indexing[project_root] = False
-
-            event = asyncio.Event()
-            self._load_time_done[project_root] = event
-            if suppress_auto_index:
-                event.set()
-            else:
-                asyncio.create_task(self._load_time_index(project_root))
+            self._load_time_done[project_root] = asyncio.Event()
+            if not suppress_auto_index:
+                asyncio.create_task(self._run_index(project_root))
         return self._projects[project_root]
 
-    def is_load_time_indexing(self, project_root: str) -> bool:
-        """Check if load-time indexing is in progress."""
+    def should_wait_for_indexing(self, project_root: str) -> bool:
+        """Check if search should wait before querying.
+
+        Returns True if the index lock is held (indexing actively running)
+        or the initial indexing hasn't completed yet (covers the window
+        between task creation and lock acquisition).
+        """
+        lock = self._index_locks.get(project_root)
+        if lock is not None and lock.locked():
+            return True
         event = self._load_time_done.get(project_root)
         return event is not None and not event.is_set()
 
-    async def wait_for_load_time_indexing(self, project_root: str) -> None:
-        """Wait for load-time indexing to complete. Returns immediately if not in progress."""
+    async def wait_for_indexing_done(self, project_root: str) -> None:
+        """Wait until no indexing is in progress and initial indexing is complete."""
+        # Wait for the initial indexing to complete (if pending)
         event = self._load_time_done.get(project_root)
         if event is not None:
             await event.wait()
+        # Wait for any ongoing indexing to finish (lock released)
+        lock = self._index_locks.get(project_root)
+        if lock is not None and lock.locked():
+            await lock.acquire()
+            lock.release()
 
-    async def _load_time_index(self, project_root: str) -> None:
-        """Background load-time indexing, consuming the update_index stream."""
+    async def _run_index(
+        self,
+        project_root: str,
+        on_progress: Callable[[IndexingProgress], None] | None = None,
+    ) -> None:
+        """Run indexing for a project, acquiring and releasing the per-project lock.
+
+        This is the single place where indexing actually happens.  It is used
+        both as a fire-and-forget background task (load-time indexing) and as a
+        spawned task inside ``update_index`` (client-driven indexing).
+
+        On completion (success or failure) it marks load-time as done
+        (idempotent) and releases the lock.
+        """
+        project = self._projects[project_root]
+        lock = self._index_locks[project_root]
+
+        await lock.acquire()
         try:
-            async for _ in self.update_index(project_root):
-                pass
+            await project.update_index(
+                on_progress=on_progress,
+            )
         except Exception:
-            logger.exception("Load-time indexing failed for %s", project_root)
+            logger.exception("Indexing failed for %s", project_root)
         finally:
             event = self._load_time_done.get(project_root)
             if event is not None:
                 event.set()
+            lock.release()
 
     async def update_index(
         self, project_root: str, *, suppress_auto_index: bool = True
     ) -> AsyncIterator[IndexStreamResponse]:
-        """Update index, yielding progress updates and a final IndexResponse."""
-        project = await self.get_project(project_root, suppress_auto_index=suppress_auto_index)
+        """Update index, yielding progress updates and a final IndexResponse.
+
+        Streams ``IndexProgressUpdate`` messages while indexing is in progress,
+        ending with a terminal ``IndexResponse``.  If the lock is already held,
+        yields ``IndexWaitingNotice`` first.
+
+        The actual indexing runs in a separate task (``_run_index``) so that
+        client disconnects (``GeneratorExit``) do not abort the indexing.
+        """
+        await self.get_project(project_root, suppress_auto_index=suppress_auto_index)
         lock = self._index_locks[project_root]
 
-        # If lock is already held, notify the client and block until released
+        # If lock is already held, notify the client before blocking
         if lock.locked():
             yield IndexWaitingNotice()
 
-        async with lock:
-            self._indexing[project_root] = True
-            try:
-                progress_queue: asyncio.Queue[IndexingProgress] = asyncio.Queue()
+        progress_queue: asyncio.Queue[IndexingProgress] = asyncio.Queue()
+        index_task = asyncio.create_task(
+            self._run_index(
+                project_root,
+                on_progress=lambda p: progress_queue.put_nowait(p),
+            )
+        )
 
-                def on_progress(progress: IndexingProgress) -> None:
-                    progress_queue.put_nowait(progress)
+        try:
+            # Drain the queue until the task completes
+            while not index_task.done():
+                try:
+                    progress = await asyncio.wait_for(progress_queue.get(), timeout=0.1)
+                    yield IndexProgressUpdate(progress=progress)
+                except TimeoutError:
+                    continue
 
-                update_task = asyncio.create_task(project.update_index(on_progress=on_progress))
+            # Drain any remaining items
+            while not progress_queue.empty():
+                yield IndexProgressUpdate(progress=progress_queue.get_nowait())
 
-                # Drain the queue until the update completes
-                while not update_task.done():
-                    try:
-                        progress = await asyncio.wait_for(progress_queue.get(), timeout=0.1)
-                        yield IndexProgressUpdate(progress=progress)
-                    except TimeoutError:
-                        continue
+            # Propagate any exception from the index task
+            index_task.result()
 
-                # Drain any remaining items
-                while not progress_queue.empty():
-                    yield IndexProgressUpdate(progress=progress_queue.get_nowait())
-
-                # Propagate any exception from the update task
-                update_task.result()
-
-                yield IndexResponse(success=True)
-            except Exception as e:
-                yield IndexResponse(success=False, message=str(e))
-            finally:
-                self._indexing[project_root] = False
+            yield IndexResponse(success=True)
+        except GeneratorExit:
+            # Client disconnected — _run_index continues in background and
+            # handles cleanup (release lock, clear _indexing) when done.
+            return
+        except Exception as e:
+            yield IndexResponse(success=False, message=str(e))
 
     async def search(
         self,
@@ -255,7 +289,8 @@ class ProjectRegistry:
                 " GROUP BY language ORDER BY cnt DESC"
             ).fetchall()
 
-        is_indexing = self._indexing.get(project_root, False)
+        lock = self._index_locks.get(project_root)
+        is_indexing = lock is not None and lock.locked()
         progress = project.indexing_stats if is_indexing else None
         return ProjectStatusResponse(
             indexing=is_indexing,
@@ -272,7 +307,6 @@ class ProjectRegistry:
         was_loaded = project_root in self._projects
         project = self._projects.pop(project_root, None)
         self._index_locks.pop(project_root, None)
-        self._indexing.pop(project_root, None)
         self._load_time_done.pop(project_root, None)
         if project is not None:
             project.close()
@@ -288,7 +322,6 @@ class ProjectRegistry:
             project.close()
         self._projects.clear()
         self._index_locks.clear()
-        self._indexing.clear()
         self._load_time_done.clear()
         gc.collect()
 
@@ -297,7 +330,7 @@ class ProjectRegistry:
         return [
             DaemonProjectInfo(
                 project_root=root,
-                indexing=self._indexing.get(root, False),
+                indexing=self._index_locks[root].locked(),
             )
             for root in self._projects
         ]
@@ -384,9 +417,9 @@ async def handle_connection(
 async def _search_with_wait(
     registry: ProjectRegistry, req: SearchRequest
 ) -> AsyncIterator[SearchStreamResponse]:
-    """Stream search response, waiting for load-time indexing first."""
+    """Stream search response, waiting for ongoing indexing first."""
     yield IndexWaitingNotice()
-    await registry.wait_for_load_time_indexing(req.project_root)
+    await registry.wait_for_indexing_done(req.project_root)
     try:
         results = await registry.search(
             project_root=req.project_root,
@@ -427,7 +460,7 @@ async def _dispatch(
             await registry.get_project(req.project_root)
 
             # If load-time indexing is in progress, return a streaming response
-            if registry.is_load_time_indexing(req.project_root):
+            if registry.should_wait_for_indexing(req.project_root):
                 return _search_with_wait(registry, req)
 
             results = await registry.search(
