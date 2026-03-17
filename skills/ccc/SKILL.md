@@ -7,9 +7,13 @@ description: "This skill should be used when code search is needed (whether expl
 
 `ccc` is the CLI for CocoIndex Code, providing semantic search over the current codebase and index management.
 
-## Prerequisites
+## Ownership
 
-The current project must be initialized before `ccc search` or `ccc index` can be used. If either command fails with an error about missing initialization or the tool not being found, refer to [management.md](references/management.md) for installation and initialization instructions.
+The agent owns the `ccc` lifecycle for the current project — initialization, indexing, and searching. Do not ask the user to perform these steps; handle them automatically.
+
+- **Initialization**: If `ccc search` or `ccc index` fails with an initialization error (e.g., "Not in an initialized project directory"), run `ccc init` from the project root directory, then `ccc index` to build the index, then retry the original command.
+- **Index freshness**: Keep the index up to date by running `ccc index` (or `ccc search --refresh`) when the index may be stale — e.g., at the start of a session, or after making significant code changes (new files, refactors, renamed modules). There is no need to re-index between consecutive searches if no code was changed in between.
+- **Installation**: If `ccc` itself is not found (command not found), refer to [management.md](references/management.md) for installation instructions and inform the user.
 
 ## Searching the Codebase
 
@@ -51,34 +55,12 @@ ccc search --offset 5 --limit 5 database schema
 
 If all returned results look relevant, use `--offset` to fetch the next page — there are likely more useful matches beyond the first page.
 
-### Refreshing the Index Before Search
-
-To ensure the index reflects the latest code changes before searching:
-
-```bash
-ccc search --refresh <query terms>
-```
-
-This is equivalent to running `ccc index` followed by `ccc search`.
-
 ### Working with Search Results
 
 Search results include file paths and line ranges. To explore a result in more detail:
 
 - Use the editor's built-in file reading capabilities (e.g., the `Read` tool) to load the matched file and read lines around the returned range for full context.
 - When working in a terminal without a file-reading tool, use `sed -n '<start>,<end>p' <file>` to extract a specific line range.
-
-## Updating the Index
-
-After making code changes, update the index to keep search results current:
-
-```bash
-ccc index
-```
-
-This blocks until indexing completes, showing progress. If indexing is already in progress, it waits for completion.
-
-Run `ccc index` proactively after significant code changes (new files, refactors, renamed modules) to ensure subsequent searches return accurate results.
 
 ## Management & Troubleshooting
 
