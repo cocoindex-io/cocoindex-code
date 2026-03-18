@@ -205,16 +205,16 @@ def start_daemon() -> None:
 
     log_fd = open(log_path, "a")
     if sys.platform == "win32":
-        # DETACHED_PROCESS fully detaches the daemon from the parent console,
-        # preventing its exit code from leaking back to the calling shell.
-        _create_new_process_group = 0x00000200
-        _detached_process = 0x00000008
+        # CREATE_NO_WINDOW prevents the daemon from showing a visible
+        # console window.  DETACHED_PROCESS alone is not sufficient —
+        # it detaches from the parent console but still creates a new one.
+        _create_no_window = 0x08000000
         subprocess.Popen(
             cmd,
             stdout=log_fd,
             stderr=log_fd,
             stdin=subprocess.DEVNULL,
-            creationflags=_create_new_process_group | _detached_process,
+            creationflags=_create_no_window,
         )
     else:
         subprocess.Popen(
