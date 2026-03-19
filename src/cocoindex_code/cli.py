@@ -449,19 +449,34 @@ def mcp() -> None:
 
         mcp_server = create_mcp_server(client, project_root)
         # Trigger initial indexing in background
-        asyncio.create_task(_bg_index(client, project_root))
+        asyncio.create_task(_bg_index(project_root))
         await mcp_server.run_stdio_async()
 
     asyncio.run(_run_mcp())
 
 
-async def _bg_index(client, project_root: str) -> None:  # type: ignore[no-untyped-def]
-    """Index in background, swallowing errors."""
+async def _bg_index(project_root: str) -> None:
+    """Index in background using a dedicated daemon connection.
+
+    A fresh DaemonClient is used so that background indexing does not share
+    the multiprocessing connection used by foreground MCP requests, which
+    would corrupt data ("Input data was truncated").
+    """
     import asyncio
 
+    from .client import ensure_daemon
+
     loop = asyncio.get_event_loop()
+
+    def _run_index() -> None:
+        bg_client = ensure_daemon()
+        try:
+            bg_client.index(project_root)
+        finally:
+            bg_client.close()
+
     try:
-        await loop.run_in_executor(None, client.index, project_root)
+        await loop.run_in_executor(None, _run_index)
     except Exception:
         pass
 
