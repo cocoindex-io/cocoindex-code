@@ -6,7 +6,6 @@ import asyncio
 import logging
 import os
 import signal
-import sqlite3
 import sys
 import threading
 import time
@@ -24,34 +23,28 @@ from .protocol import (
     ErrorResponse,
     HandshakeRequest,
     HandshakeResponse,
-    IndexingProgress,
-    IndexProgressUpdate,
     IndexRequest,
-    IndexResponse,
     IndexStreamResponse,
     IndexWaitingNotice,
     ProjectStatusRequest,
-    ProjectStatusResponse,
     RemoveProjectRequest,
     RemoveProjectResponse,
     Request,
     Response,
     SearchRequest,
     SearchResponse,
-    SearchResult,
     SearchStreamResponse,
     StopRequest,
     StopResponse,
     decode_request,
     encode_response,
 )
-from .query import query_codebase
 from .settings import (
     global_settings_mtime_us,
     load_user_settings,
     user_settings_dir,
 )
-from .shared import SQLITE_DB, Embedder, create_embedder
+from .shared import Embedder, create_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +91,7 @@ def daemon_log_path() -> Path:
 
 
 class ProjectRegistry:
-    """Manages loaded projects and their indexes."""
+    """Cache of loaded projects, keyed by project root path."""
 
     _projects: dict[str, Project]
     _embedder: Embedder
@@ -108,174 +101,12 @@ class ProjectRegistry:
         self._embedder = embedder
 
     async def get_project(self, project_root: str) -> Project:
-        """Get or create a Project for the given root. Lazy initialization.
-
-        Only loads the project — does **not** trigger indexing.  Callers
-        that need indexing should call ``ensure_indexing_started`` (for
-        background auto-index) or ``update_index`` (for explicit streaming
-        index) separately.
-        """
+        """Get or create a Project for the given root. Lazy initialization."""
         if project_root not in self._projects:
             root = Path(project_root)
             project = await Project.create(root, self._embedder)
             self._projects[project_root] = project
         return self._projects[project_root]
-
-    async def ensure_indexing_started(self, project_root: str) -> None:
-        """Kick off background indexing and wait until it has actually started.
-
-        Returns once the indexing task holds the lock.  Safe to call multiple
-        times — only the first call spawns a task; subsequent calls return
-        immediately.
-
-        ``IndexRequest`` callers should skip this and use ``update_index``
-        instead so they can stream progress.
-        """
-        project = self._projects[project_root]
-        if project._initial_index_done.is_set() or project._index_lock.locked():
-            return
-        started = asyncio.Event()
-        asyncio.create_task(project.run_index(on_started=started))
-        await started.wait()
-
-    def should_wait_for_indexing(self, project_root: str) -> bool:
-        """Check if search should wait before querying.
-
-        Returns True if indexing has been started but not yet completed.
-        """
-        project = self._projects.get(project_root)
-        return project is not None and not project._initial_index_done.is_set()
-
-    async def wait_for_indexing_done(self, project_root: str) -> None:
-        """Wait until initial indexing is complete and no indexing is running."""
-        project = self._projects.get(project_root)
-        if project is None:
-            return
-        await project._initial_index_done.wait()
-        if project._index_lock.locked():
-            async with project._index_lock:
-                pass
-
-    async def update_index(
-        self,
-        project_root: str,
-    ) -> AsyncIterator[IndexStreamResponse]:
-        """Update index, yielding progress updates and a final IndexResponse.
-
-        Streams ``IndexProgressUpdate`` messages while indexing is in progress,
-        ending with a terminal ``IndexResponse``.  If the lock is already held,
-        yields ``IndexWaitingNotice`` first.
-
-        The actual indexing runs in a separate task (``_run_index``) so that
-        client disconnects (``GeneratorExit``) do not abort the indexing.
-        """
-        project = await self.get_project(project_root)
-
-        # If lock is already held, notify the client before blocking
-        if project._index_lock.locked():
-            yield IndexWaitingNotice()
-
-        progress_queue: asyncio.Queue[IndexingProgress] = asyncio.Queue()
-        index_task = asyncio.create_task(
-            project.run_index(
-                on_progress=lambda p: progress_queue.put_nowait(p),
-            )
-        )
-
-        try:
-            # Drain the queue until the task completes
-            while not index_task.done():
-                try:
-                    progress = await asyncio.wait_for(progress_queue.get(), timeout=0.1)
-                    yield IndexProgressUpdate(progress=progress)
-                except TimeoutError:
-                    continue
-
-            # Drain any remaining items
-            while not progress_queue.empty():
-                yield IndexProgressUpdate(progress=progress_queue.get_nowait())
-
-            # Propagate any exception from the index task
-            index_task.result()
-
-            yield IndexResponse(success=True)
-        except GeneratorExit:
-            # Client disconnected — _run_index continues in background and
-            # handles cleanup (release lock, clear _indexing) when done.
-            return
-        except Exception as e:
-            yield IndexResponse(success=False, message=str(e))
-
-    async def search(
-        self,
-        project_root: str,
-        query: str,
-        languages: list[str] | None = None,
-        paths: list[str] | None = None,
-        limit: int = 5,
-        offset: int = 0,
-    ) -> list[SearchResult]:
-        """Search within a project."""
-        project = await self.get_project(project_root)
-        root = Path(project_root)
-        target_db = root / ".cocoindex_code" / "target_sqlite.db"
-        results = await query_codebase(
-            query=query,
-            target_sqlite_db_path=target_db,
-            env=project.env,
-            limit=limit,
-            offset=offset,
-            languages=languages,
-            paths=paths,
-        )
-        return [
-            SearchResult(
-                file_path=r.file_path,
-                language=r.language,
-                content=r.content,
-                start_line=r.start_line,
-                end_line=r.end_line,
-                score=r.score,
-            )
-            for r in results
-        ]
-
-    def get_status(self, project_root: str) -> ProjectStatusResponse:
-        """Get index stats for a project."""
-        project = self._projects.get(project_root)
-        if project is None:
-            return ProjectStatusResponse(
-                indexing=False, total_chunks=0, total_files=0, languages={}
-            )
-
-        db = project.env.get_context(SQLITE_DB)
-        index_exists = True
-        try:
-            with db.readonly() as conn:
-                total_chunks = conn.execute("SELECT COUNT(*) FROM code_chunks_vec").fetchone()[0]
-                total_files = conn.execute(
-                    "SELECT COUNT(DISTINCT file_path) FROM code_chunks_vec"
-                ).fetchone()[0]
-                lang_rows = conn.execute(
-                    "SELECT language, COUNT(*) as cnt FROM code_chunks_vec"
-                    " GROUP BY language ORDER BY cnt DESC"
-                ).fetchall()
-        except sqlite3.OperationalError:
-            index_exists = False
-            total_chunks = 0
-            total_files = 0
-            lang_rows = []
-
-        is_indexing = project._index_lock.locked()
-        progress = project.indexing_stats if is_indexing else None
-        return ProjectStatusResponse(
-            indexing=is_indexing,
-            total_chunks=total_chunks,
-            total_files=total_files,
-            languages={lang: cnt for lang, cnt in lang_rows},
-            progress=progress,
-            index_exists=index_exists,
-        )
 
     def remove_project(self, project_root: str) -> bool:
         """Remove a project from the registry. Returns True if it was loaded."""
@@ -377,14 +208,13 @@ async def handle_connection(
 
 
 async def _search_with_wait(
-    registry: ProjectRegistry, req: SearchRequest
+    project: Project, req: SearchRequest
 ) -> AsyncIterator[SearchStreamResponse]:
     """Stream search response, waiting for ongoing indexing first."""
     yield IndexWaitingNotice()
-    await registry.wait_for_indexing_done(req.project_root)
+    await project.wait_for_indexing_done()
     try:
-        results = await registry.search(
-            project_root=req.project_root,
+        results = await project.search(
             query=req.query,
             languages=req.languages,
             paths=req.paths,
@@ -415,18 +245,17 @@ async def _dispatch(
     """
     try:
         if isinstance(req, IndexRequest):
-            return registry.update_index(req.project_root)
+            project = await registry.get_project(req.project_root)
+            return project.stream_index()
 
         if isinstance(req, SearchRequest):
-            await registry.get_project(req.project_root)
-            await registry.ensure_indexing_started(req.project_root)
+            project = await registry.get_project(req.project_root)
+            await project.ensure_indexing_started()
 
-            # If indexing is in progress, return a streaming response
-            if registry.should_wait_for_indexing(req.project_root):
-                return _search_with_wait(registry, req)
+            if project.should_wait_for_indexing:
+                return _search_with_wait(project, req)
 
-            results = await registry.search(
-                project_root=req.project_root,
+            results = await project.search(
                 query=req.query,
                 languages=req.languages,
                 paths=req.paths,
@@ -441,9 +270,9 @@ async def _dispatch(
             )
 
         if isinstance(req, ProjectStatusRequest):
-            await registry.get_project(req.project_root)
-            await registry.ensure_indexing_started(req.project_root)
-            return registry.get_status(req.project_root)
+            project = await registry.get_project(req.project_root)
+            await project.ensure_indexing_started()
+            return project.get_status()
 
         if isinstance(req, DaemonStatusRequest):
             return DaemonStatusResponse(
