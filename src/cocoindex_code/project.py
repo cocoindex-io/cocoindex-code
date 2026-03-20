@@ -23,7 +23,7 @@ class Project:
     _env: coco.Environment
     _app: coco.App[[], None]
     _index_lock: asyncio.Lock
-    _initial_index_done: bool = False
+    _initial_index_done: asyncio.Event
     _indexing_stats: IndexingProgress | None = None
 
     def close(self) -> None:
@@ -34,17 +34,35 @@ class Project:
         except Exception:
             pass
 
-    async def update_index(
+    async def run_index(
         self,
-        *,
+        on_progress: Callable[[IndexingProgress], None] | None = None,
+        on_started: asyncio.Event | None = None,
+    ) -> None:
+        """Acquire the index lock, run indexing, and release.
+
+        If *on_started* is provided, it is set once the lock is acquired
+        (i.e. indexing has truly begun).  On completion (success or failure)
+        ``_initial_index_done`` is set.
+        """
+        async with self._index_lock:
+            self._indexing_stats = IndexingProgress(
+                num_execution_starts=0,
+                num_unchanged=0,
+                num_adds=0,
+                num_deletes=0,
+                num_reprocesses=0,
+                num_errors=0,
+            )
+            if on_started is not None:
+                on_started.set()
+            await self._update_index(on_progress=on_progress)
+
+    async def _update_index(
+        self,
         on_progress: Callable[[IndexingProgress], None] | None = None,
     ) -> None:
-        """Update the index, streaming progress via callback.
-
-        The lock is NOT acquired here — callers (e.g. ProjectRegistry) are
-        responsible for serialization so they can inspect lock state and
-        yield one-shot snapshots before blocking.
-        """
+        """Run indexing (lock must already be held)."""
         try:
             handle = self._app.update()
             async for snapshot in handle.watch():
@@ -63,8 +81,8 @@ class Project:
                         on_progress(progress)
                     await asyncio.sleep(0.1)
         finally:
+            self._initial_index_done.set()
             self._indexing_stats = None
-            self._initial_index_done = True
 
     @property
     def indexing_stats(self) -> IndexingProgress | None:
@@ -73,10 +91,6 @@ class Project:
     @property
     def env(self) -> coco.Environment:
         return self._env
-
-    @property
-    def is_initial_index_done(self) -> bool:
-        return self._initial_index_done
 
     @staticmethod
     async def create(
@@ -115,4 +129,5 @@ class Project:
         result._env = env
         result._app = app
         result._index_lock = asyncio.Lock()
+        result._initial_index_done = asyncio.Event()
         return result
