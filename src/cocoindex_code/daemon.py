@@ -48,7 +48,6 @@ from .protocol import (
 from .query import query_codebase
 from .settings import (
     global_settings_mtime_us,
-    load_project_settings,
     load_user_settings,
     user_settings_dir,
 )
@@ -122,8 +121,7 @@ class ProjectRegistry:
         """
         if project_root not in self._projects:
             root = Path(project_root)
-            project_settings = load_project_settings(root)
-            project = await Project.create(root, project_settings, self._embedder)
+            project = await Project.create(root, self._embedder)
             self._projects[project_root] = project
             self._index_locks[project_root] = asyncio.Lock()
             self._load_time_done[project_root] = asyncio.Event()
@@ -354,66 +352,55 @@ async def handle_connection(
     conn: Connection,
     registry: ProjectRegistry,
     start_time: float,
-    shutdown_event: asyncio.Event,
+    on_shutdown: Callable[[], None],
     settings_mtime_us: int | None,
 ) -> None:
-    """Handle a single client connection."""
+    """Handle a single client connection (per-request model).
+
+    Reads exactly two messages: a ``HandshakeRequest`` followed by one
+    ``Request``.  Sends the response(s) and closes the connection.
+    """
     loop = asyncio.get_event_loop()
-    handshake_done = False
-
-    def _recv() -> bytes:
-        """Blocking recv that also checks for shutdown."""
-        # Use poll with a timeout so we can check shutdown_event periodically
-        while not shutdown_event.is_set():
-            if conn.poll(0.5):
-                return conn.recv_bytes()
-        raise EOFError("shutdown")
-
     try:
-        while not shutdown_event.is_set():
-            try:
-                data: bytes = await loop.run_in_executor(None, _recv)
-            except (EOFError, OSError):
-                break
+        # 1. Handshake
+        data: bytes = await loop.run_in_executor(None, conn.recv_bytes)
+        req = decode_request(data)
 
-            try:
-                req = decode_request(data)
-            except Exception as e:
-                resp: Response = ErrorResponse(message=f"Invalid request: {e}")
-                conn.send_bytes(encode_response(resp))
-                continue
+        if not isinstance(req, HandshakeRequest):
+            conn.send_bytes(
+                encode_response(ErrorResponse(message="First message must be a handshake"))
+            )
+            return
 
-            if not handshake_done:
-                if not isinstance(req, HandshakeRequest):
-                    resp = ErrorResponse(message="First message must be a handshake")
-                    conn.send_bytes(encode_response(resp))
-                    break
-
-                ok = req.version == __version__
-                resp = HandshakeResponse(
+        ok = req.version == __version__
+        conn.send_bytes(
+            encode_response(
+                HandshakeResponse(
                     ok=ok,
                     daemon_version=__version__,
                     global_settings_mtime_us=settings_mtime_us,
                 )
-                conn.send_bytes(encode_response(resp))
-                if not ok:
-                    break
-                handshake_done = True
-                continue
+            )
+        )
+        if not ok:
+            return
 
-            result = await _dispatch(req, registry, start_time, shutdown_event)
-            if isinstance(result, AsyncIterator):
-                try:
-                    async for resp in result:
-                        conn.send_bytes(encode_response(resp))
-                except Exception as exc:
-                    logger.exception("Error during streaming response")
-                    conn.send_bytes(encode_response(ErrorResponse(message=str(exc))))
-            else:
-                conn.send_bytes(encode_response(result))
+        # 2. Single request
+        data = await loop.run_in_executor(None, conn.recv_bytes)
+        req = decode_request(data)
 
-            if isinstance(req, StopRequest):
-                break
+        result = await _dispatch(req, registry, start_time, on_shutdown)
+        if isinstance(result, AsyncIterator):
+            try:
+                async for resp in result:
+                    conn.send_bytes(encode_response(resp))
+            except Exception as exc:
+                logger.exception("Error during streaming response")
+                conn.send_bytes(encode_response(ErrorResponse(message=str(exc))))
+        else:
+            conn.send_bytes(encode_response(result))
+    except (EOFError, OSError, asyncio.CancelledError):
+        pass
     except Exception:
         logger.exception("Error handling connection")
     finally:
@@ -452,7 +439,7 @@ async def _dispatch(
     req: Request,
     registry: ProjectRegistry,
     start_time: float,
-    shutdown_event: asyncio.Event,
+    on_shutdown: Callable[[], None],
 ) -> Response | AsyncIterator[IndexStreamResponse] | AsyncIterator[SearchStreamResponse]:
     """Dispatch a request to the appropriate handler.
 
@@ -502,7 +489,7 @@ async def _dispatch(
             return RemoveProjectResponse(ok=True)
 
         if isinstance(req, StopRequest):
-            shutdown_event.set()
+            on_shutdown()
             return StopResponse(ok=True)
 
         return ErrorResponse(message=f"Unknown request type: {type(req).__name__}")
@@ -517,7 +504,12 @@ async def _dispatch(
 
 
 def run_daemon() -> None:
-    """Main entry point for the daemon process (blocking)."""
+    """Main entry point for the daemon process (blocking).
+
+    Sets up the listener, runs the asyncio event loop (``loop.run_forever``)
+    to serve connections, and performs cleanup when shutdown is requested via
+    ``StopRequest`` or a signal (SIGTERM / SIGINT).
+    """
     daemon_dir().mkdir(parents=True, exist_ok=True)
 
     # Load user settings and record mtime for staleness detection
@@ -540,44 +532,16 @@ def run_daemon() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        handlers=[logging.FileHandler(str(log_path)), logging.StreamHandler()],
+        handlers=[logging.FileHandler(str(log_path), mode="w"), logging.StreamHandler()],
         force=True,
     )
 
     logger.info("Daemon starting (PID %d, version %s)", os.getpid(), __version__)
 
-    try:
-        asyncio.run(_async_daemon_main(embedder, settings_mtime_us))
-    finally:
-        # Clean up socket first, then PID file last.
-        # The PID file is the authoritative "daemon is alive" indicator, so it
-        # must be the very last thing removed to avoid races where a client
-        # sees the PID gone but the socket (or process) is still lingering.
-        if sys.platform != "win32":
-            sock = daemon_socket_path()
-            try:
-                Path(sock).unlink(missing_ok=True)
-            except Exception:
-                pass
-        # Only remove the PID file if it still contains *our* PID.
-        # A new daemon may have already overwritten it during a restart race.
-        try:
-            stored = pid_path.read_text().strip()
-            if stored == str(os.getpid()):
-                pid_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        logger.info("Daemon stopped")
-
-
-async def _async_daemon_main(embedder: Embedder, settings_mtime_us: int | None) -> None:
-    """Async main loop for the daemon."""
     start_time = time.monotonic()
     registry = ProjectRegistry(embedder)
-    shutdown_event = asyncio.Event()
 
     sock_path = daemon_socket_path()
-    # Remove stale socket (not applicable for Windows named pipes)
     if sys.platform != "win32":
         try:
             Path(sock_path).unlink(missing_ok=True)
@@ -587,56 +551,82 @@ async def _async_daemon_main(embedder: Embedder, settings_mtime_us: int | None) 
     listener = Listener(sock_path, family=_connection_family())
     logger.info("Listening on %s", sock_path)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    tasks: set[asyncio.Task[Any]] = set()
 
-    # Handle signals for graceful shutdown (not supported on all platforms/contexts)
+    def _request_shutdown() -> None:
+        """Trigger daemon shutdown — called by StopRequest or signal handler."""
+        loop.stop()
+
+    def _spawn_handler(conn: Connection) -> None:
+        task = loop.create_task(
+            handle_connection(
+                conn,
+                registry,
+                start_time,
+                _request_shutdown,
+                settings_mtime_us,
+            )
+        )
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    # Handle signals for graceful shutdown
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, shutdown_event.set)
+            loop.add_signal_handler(sig, _request_shutdown)
     except (RuntimeError, NotImplementedError):
         pass  # Not in main thread, or not supported on this platform (e.g. Windows)
 
-    tasks: set[asyncio.Task[Any]] = set()
-
-    async def _spawn_handler(
-        conn: Connection,
-        reg: ProjectRegistry,
-        st: float,
-        evt: asyncio.Event,
-        task_set: set[asyncio.Task[Any]],
-    ) -> None:
-        task = asyncio.create_task(handle_connection(conn, reg, st, evt, settings_mtime_us))
-        task_set.add(task)
-        task.add_done_callback(task_set.discard)
-
-    # Run accept loop in a thread so we can shut down cleanly
+    # Accept loop runs in a background thread; new connections are dispatched
+    # to the event loop via call_soon_threadsafe.  The loop exits when
+    # listener.close() (called during shutdown) causes accept() to raise.
     def _accept_loop() -> None:
-        while not shutdown_event.is_set():
+        while True:
             try:
-                try:
-                    listener._listener._socket.settimeout(0.5)  # type: ignore[attr-defined]
-                except AttributeError:
-                    pass  # AF_PIPE (Windows) doesn't expose ._socket
                 conn = listener.accept()
-                # Schedule the handler on the event loop
-                asyncio.run_coroutine_threadsafe(
-                    _spawn_handler(conn, registry, start_time, shutdown_event, tasks),
-                    loop,
-                )
+                loop.call_soon_threadsafe(_spawn_handler, conn)
             except OSError:
-                if shutdown_event.is_set():
-                    break
-                # Socket timeout — just retry
-                continue
+                break
 
     accept_thread = threading.Thread(target=_accept_loop, daemon=True)
     accept_thread.start()
 
+    # --- Serve until shutdown ---
     try:
-        await shutdown_event.wait()
+        loop.run_forever()
     finally:
+        # 1. Stop accepting new connections.
         listener.close()
-        accept_thread.join(timeout=2)
+
+        # 2. Cancel handler tasks (they may be blocked in run_in_executor).
+        for task in tasks:
+            task.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+
+        # 3. Release project resources.
         registry.close_all()
+        loop.close()
+
+        # 4. Remove socket and PID file.
+        if sys.platform != "win32":
+            try:
+                Path(sock_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+        try:
+            stored = pid_path.read_text().strip()
+            if stored == str(os.getpid()):
+                pid_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        logger.info("Daemon stopped")
+
+        # 5. Hard-exit to avoid slow Python teardown (torch, threadpool, etc.).
+        #    All resources are already cleaned up above.  Only do this when
+        #    running as the main entry point (not when the daemon is started
+        #    in-process for testing).
+        if threading.current_thread() is threading.main_thread():
+            os._exit(0)

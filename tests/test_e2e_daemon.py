@@ -1,8 +1,8 @@
 """End-to-end tests for the CLI → daemon subprocess flow.
 
 These tests start a real daemon subprocess via ``start_daemon()`` and interact
-with it through ``DaemonClient``, mirroring how ``ccc index`` / ``ccc search``
-actually work.
+with it through the per-request client functions, mirroring how ``ccc index`` /
+``ccc search`` actually work.
 """
 
 from __future__ import annotations
@@ -15,8 +15,9 @@ from pathlib import Path
 
 import pytest
 
+from cocoindex_code import client
 from cocoindex_code._version import __version__
-from cocoindex_code.client import DaemonClient, start_daemon, stop_daemon
+from cocoindex_code.client import start_daemon, stop_daemon
 from cocoindex_code.daemon import daemon_socket_path
 from cocoindex_code.settings import (
     default_project_settings,
@@ -79,20 +80,14 @@ def e2e_daemon() -> Iterator[tuple[str, Path]]:
 
 
 def test_daemon_subprocess_starts(e2e_daemon: tuple[str, Path]) -> None:
-    """The daemon should be reachable via DaemonClient after start_daemon()."""
-    client = DaemonClient.connect()
-    resp = client.handshake()
-    assert resp.ok
-    assert resp.daemon_version == __version__
-    client.close()
+    """The daemon should be reachable via a fresh connection after start_daemon()."""
+    resp = client.daemon_status()
+    assert resp.version == __version__
 
 
 def test_index_and_search_via_client(e2e_daemon: tuple[str, Path]) -> None:
     """Index a project and search via the client, same as ccc index / ccc search."""
     _, project_dir = e2e_daemon
-
-    client = DaemonClient.connect()
-    client.handshake()
 
     resp = client.index(str(project_dir))
     assert resp.success
@@ -105,23 +100,3 @@ def test_index_and_search_via_client(e2e_daemon: tuple[str, Path]) -> None:
     assert search_resp.success
     assert len(search_resp.results) > 0
     assert "main.py" in search_resp.results[0].file_path
-
-    client.close()
-
-
-def test_daemon_survives_client_disconnect(e2e_daemon: tuple[str, Path]) -> None:
-    """Daemon should keep running after a client disconnects."""
-    _, project_dir = e2e_daemon
-
-    c1 = DaemonClient.connect()
-    c1.handshake()
-    c1.search(str(project_dir), query="fibonacci")
-    c1.close()
-
-    c2 = DaemonClient.connect()
-    resp = c2.handshake()
-    assert resp.ok
-    search_resp = c2.search(str(project_dir), query="fibonacci")
-    assert search_resp.success
-    assert len(search_resp.results) > 0
-    c2.close()

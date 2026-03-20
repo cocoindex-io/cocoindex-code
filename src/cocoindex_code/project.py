@@ -11,12 +11,9 @@ from cocoindex.connectors import sqlite
 
 from .indexer import indexer_main
 from .protocol import IndexingProgress
-from .settings import PROJECT_SETTINGS, ProjectSettings, load_gitignore_spec
 from .shared import (
     CODEBASE_DIR,
     EMBEDDER,
-    EXT_LANG_OVERRIDE_MAP,
-    GITIGNORE_SPEC,
     SQLITE_DB,
     Embedder,
 )
@@ -84,10 +81,14 @@ class Project:
     @staticmethod
     async def create(
         project_root: Path,
-        project_settings: ProjectSettings,
         embedder: Embedder,
     ) -> Project:
-        """Create a project with explicit settings and embedder."""
+        """Create a project with explicit embedder.
+
+        Project-level settings and .gitignore are NOT cached here — the
+        indexer loads them fresh from disk on every run so that user edits
+        take effect without restarting the daemon.
+        """
         index_dir = project_root / ".cocoindex_code"
         index_dir.mkdir(parents=True, exist_ok=True)
 
@@ -95,18 +96,11 @@ class Project:
         target_sqlite_db_path = index_dir / "target_sqlite.db"
 
         settings = coco.Settings.from_env(cocoindex_db_path)
-        gitignore_spec = load_gitignore_spec(project_root)
 
         context = coco.ContextProvider()
         context.provide(CODEBASE_DIR, project_root)
         context.provide(SQLITE_DB, sqlite.connect(str(target_sqlite_db_path), load_vec=True))
         context.provide(EMBEDDER, embedder)
-        context.provide(PROJECT_SETTINGS, project_settings)
-        context.provide(
-            EXT_LANG_OVERRIDE_MAP,
-            {f".{lo.ext}": lo.lang for lo in project_settings.language_overrides},
-        )
-        context.provide(GITIGNORE_SPEC, gitignore_spec)
 
         env = coco.Environment(settings, context_provider=context)
         app = coco.App(

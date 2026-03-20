@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import cocoindex as _coco
 import yaml as _yaml
 from pathspec import GitIgnoreSpec
 
@@ -89,9 +88,6 @@ class ProjectSettings:
     exclude_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDED_PATTERNS))
     language_overrides: list[LanguageOverride] = field(default_factory=list)
 
-
-# CocoIndex context key for project settings
-PROJECT_SETTINGS = _coco.ContextKey[ProjectSettings]("project_settings")
 
 # ---------------------------------------------------------------------------
 # Default factories

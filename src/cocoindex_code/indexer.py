@@ -14,12 +14,10 @@ from cocoindex.resources.file import FilePathMatcher, PatternFilePathMatcher
 from cocoindex.resources.id import IdGenerator
 from pathspec import GitIgnoreSpec
 
-from .settings import PROJECT_SETTINGS
+from .settings import load_gitignore_spec, load_project_settings
 from .shared import (
     CODEBASE_DIR,
     EMBEDDER,
-    EXT_LANG_OVERRIDE_MAP,
-    GITIGNORE_SPEC,
     SQLITE_DB,
     CodeChunk,
 )
@@ -151,9 +149,11 @@ async def process_file(
         return
 
     suffix = file.file_path.path.suffix
-    ext_lang_override_map = coco.use_context(EXT_LANG_OVERRIDE_MAP)
+    project_root = coco.use_context(CODEBASE_DIR)
+    ps = load_project_settings(project_root)
+    ext_lang_map = {f".{lo.ext}": lo.lang for lo in ps.language_overrides}
     language = (
-        ext_lang_override_map.get(suffix)
+        ext_lang_map.get(suffix)
         or detect_code_language(filename=file.file_path.path.name)
         or "text"
     )
@@ -187,9 +187,9 @@ async def process_file(
 @coco.fn
 async def indexer_main() -> None:
     """Main indexing function - walks files and processes each."""
-    ps = coco.use_context(PROJECT_SETTINGS)
-    gitignore_spec = coco.use_context(GITIGNORE_SPEC)
     project_root = coco.use_context(CODEBASE_DIR)
+    ps = load_project_settings(project_root)
+    gitignore_spec = load_gitignore_spec(project_root)
 
     table = await sqlite.mount_table_target(
         db=SQLITE_DB,

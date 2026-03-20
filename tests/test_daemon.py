@@ -220,13 +220,15 @@ def test_daemon_remove_project(daemon_sock: str, daemon_project: str) -> None:
     conn.send_bytes(encode_request(RemoveProjectRequest(project_root=daemon_project)))
     resp = decode_response(conn.recv_bytes())
     assert resp.ok is True  # type: ignore[union-attr]
+    conn.close()
 
-    # Verify project is gone from daemon status
-    conn.send_bytes(encode_request(DaemonStatusRequest()))
-    status = decode_response(conn.recv_bytes())
+    # Verify project is gone from daemon status (fresh connection)
+    conn2, _ = _connect_and_handshake(daemon_sock)
+    conn2.send_bytes(encode_request(DaemonStatusRequest()))
+    status = decode_response(conn2.recv_bytes())
     project_roots = [p.project_root for p in status.projects]  # type: ignore[union-attr]
     assert daemon_project not in project_roots
-    conn.close()
+    conn2.close()
 
 
 def test_daemon_remove_project_not_loaded(daemon_sock: str) -> None:
@@ -318,9 +320,12 @@ def test_daemon_search_waits_for_load_time_indexing(daemon_sock: str) -> None:
     assert len(final_resp.results) > 0
     assert "main.py" in final_resp.results[0].file_path
 
-    # Second search — load-time indexing is done, no waiting expected
-    conn.send_bytes(encode_request(SearchRequest(project_root=str(project), query="fibonacci")))
-    resp2 = decode_response(conn.recv_bytes())
+    conn.close()
+
+    # Second search — load-time indexing is done, no waiting expected (fresh connection)
+    conn2, _ = _connect_and_handshake(daemon_sock)
+    conn2.send_bytes(encode_request(SearchRequest(project_root=str(project), query="fibonacci")))
+    resp2 = decode_response(conn2.recv_bytes())
     assert isinstance(resp2, SearchResponse)
     assert resp2.success is True
-    conn.close()
+    conn2.close()

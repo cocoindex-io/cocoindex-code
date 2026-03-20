@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Annotated, Union
 import cocoindex as coco
 from cocoindex.connectors import sqlite
 from numpy.typing import NDArray
-from pathspec import GitIgnoreSpec
 
 if TYPE_CHECKING:
     from cocoindex.ops.litellm import LiteLLMEmbedder
@@ -32,8 +31,6 @@ Embedder = Union["SentenceTransformerEmbedder", "LiteLLMEmbedder"]
 EMBEDDER = coco.ContextKey[Embedder]("embedder")
 SQLITE_DB = coco.ContextKey[sqlite.ManagedConnection]("index_db", tracked=False)
 CODEBASE_DIR = coco.ContextKey[pathlib.Path]("codebase", tracked=False)
-GITIGNORE_SPEC = coco.ContextKey[GitIgnoreSpec | None]("gitignore_spec", tracked=False)
-EXT_LANG_OVERRIDE_MAP = coco.ContextKey[dict[str, str]]("ext_lang_override_map")
 
 # Module-level variable — set by daemon at startup (needed for CodeChunk annotation).
 embedder: Embedder | None = None
@@ -85,4 +82,4 @@ class CodeChunk:
     content: str
     start_line: int
     end_line: int
-    embedding: Annotated[NDArray, embedder]  # type: ignore[type-arg]
+    embedding: Annotated[NDArray, EMBEDDER]

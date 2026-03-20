@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import typer as _typer
-
-if TYPE_CHECKING:
-    from .client import DaemonClient
 
 from .protocol import IndexingProgress, ProjectStatusResponse, SearchResponse
 from .settings import (
@@ -52,20 +48,20 @@ def require_project_root() -> Path:
     return root
 
 
-def require_daemon_for_project() -> tuple[DaemonClient, str]:
-    """Resolve project root, then connect to daemon (auto-starting if needed).
+def require_daemon_for_project() -> str:
+    """Resolve project root, then ensure daemon is running (auto-starting if needed).
 
-    Returns ``(client, project_root_str)``. Exits on failure.
+    Returns ``project_root_str``. Exits on failure.
     """
     from .client import ensure_daemon
 
     project_root = require_project_root()
     try:
-        client = ensure_daemon()
+        ensure_daemon()
     except Exception as e:
         _typer.echo(f"Error: Failed to connect to daemon: {e}", err=True)
         raise _typer.Exit(code=1)
-    return client, str(project_root)
+    return str(project_root)
 
 
 def resolve_default_path(project_root: Path) -> str | None:
@@ -128,11 +124,13 @@ def print_search_results(response: SearchResponse) -> None:
         _typer.echo(r.content)
 
 
-def _run_index_with_progress(client: DaemonClient, project_root: str) -> None:
+def _run_index_with_progress(project_root: str) -> None:
     """Run indexing with streaming progress display. Exits on failure."""
     from rich.console import Console as _Console
     from rich.live import Live as _Live
     from rich.spinner import Spinner as _Spinner
+
+    from . import client as _client
 
     err_console = _Console(stderr=True)
     last_progress_line: str | None = None
@@ -153,7 +151,7 @@ def _run_index_with_progress(client: DaemonClient, project_root: str) -> None:
             live.update(_Spinner("dots", last_progress_line))
 
         try:
-            resp = client.index(project_root, on_progress=_on_progress, on_waiting=_on_waiting)
+            resp = _client.index(project_root, on_progress=_on_progress, on_waiting=_on_waiting)
         except RuntimeError as e:
             live.stop()
             _typer.echo(f"Indexing failed: {e}", err=True)
@@ -169,7 +167,6 @@ def _run_index_with_progress(client: DaemonClient, project_root: str) -> None:
 
 
 def _search_with_wait_spinner(
-    client: DaemonClient,
     project_root: str,
     query: str,
     languages: list[str] | None = None,
@@ -182,6 +179,8 @@ def _search_with_wait_spinner(
     from rich.live import Live as _Live
     from rich.spinner import Spinner as _Spinner
 
+    from . import client as _client
+
     err_console = _Console(stderr=True)
 
     with _Live(_Spinner("dots", "Searching..."), console=err_console, transient=True) as live:
@@ -192,7 +191,7 @@ def _search_with_wait_spinner(
                 refresh=True,
             )
 
-        resp = client.search(
+        resp = _client.search(
             project_root=project_root,
             query=query,
             languages=languages,
@@ -305,13 +304,12 @@ def init(
 @app.command()
 def index() -> None:
     """Create/update index for the codebase."""
-    client, project_root = require_daemon_for_project()
+    from . import client as _client
+
+    project_root = require_daemon_for_project()
     print_project_header(project_root)
-
-    _run_index_with_progress(client, project_root)
-
-    status = client.project_status(project_root)
-    print_index_stats(status)
+    _run_index_with_progress(project_root)
+    print_index_stats(_client.project_status(project_root))
 
 
 @app.command()
@@ -324,12 +322,11 @@ def search(
     refresh: bool = _typer.Option(False, "--refresh", help="Refresh index before searching"),
 ) -> None:
     """Semantic search across the codebase."""
-    client, project_root = require_daemon_for_project()
+    project_root = require_daemon_for_project()
     query_str = " ".join(query)
 
-    # Refresh index with progress display before searching
     if refresh:
-        _run_index_with_progress(client, project_root)
+        _run_index_with_progress(project_root)
 
     # Default path filter from CWD
     paths: list[str] | None = None
@@ -341,7 +338,6 @@ def search(
             paths = [default]
 
     resp = _search_with_wait_spinner(
-        client,
         project_root=project_root,
         query=query_str,
         languages=lang or None,
@@ -355,10 +351,11 @@ def search(
 @app.command()
 def status() -> None:
     """Show project status."""
-    client, project_root = require_daemon_for_project()
+    from . import client as _client
+
+    project_root = require_daemon_for_project()
     print_project_header(project_root)
-    resp = client.project_status(project_root)
-    print_index_stats(resp)
+    print_index_stats(_client.project_status(project_root))
 
 
 @app.command()
@@ -400,12 +397,9 @@ def reset(
 
     # Remove project from daemon first so it releases file handles
     try:
-        from .client import DaemonClient
+        from . import client as _client
 
-        client = DaemonClient.connect()
-        client.handshake()
-        client.remove_project(str(project_root))
-        client.close()
+        _client.remove_project(str(project_root))
     except (ConnectionRefusedError, OSError, RuntimeError):
         pass  # Daemon not running — that's fine
 
@@ -442,13 +436,12 @@ def mcp() -> None:
     """Run as MCP server (stdio mode)."""
     import asyncio
 
-    client, project_root = require_daemon_for_project()
+    project_root = require_daemon_for_project()
 
     async def _run_mcp() -> None:
         from .server import create_mcp_server
 
-        mcp_server = create_mcp_server(client, project_root)
-        # Trigger initial indexing in background
+        mcp_server = create_mcp_server(project_root)
         asyncio.create_task(_bg_index(project_root))
         await mcp_server.run_stdio_async()
 
@@ -456,27 +449,14 @@ def mcp() -> None:
 
 
 async def _bg_index(project_root: str) -> None:
-    """Index in background using a dedicated daemon connection.
-
-    A fresh DaemonClient is used so that background indexing does not share
-    the multiprocessing connection used by foreground MCP requests, which
-    would corrupt data ("Input data was truncated").
-    """
+    """Index in background. Each call opens its own daemon connection."""
     import asyncio
 
-    from .client import ensure_daemon
+    from . import client as _client
 
     loop = asyncio.get_event_loop()
-
-    def _run_index() -> None:
-        bg_client = ensure_daemon()
-        try:
-            bg_client.index(project_root)
-        finally:
-            bg_client.close()
-
     try:
-        await loop.run_in_executor(None, _run_index)
+        await loop.run_in_executor(None, lambda: _client.index(project_root))
     except Exception:
         pass
 
@@ -487,15 +467,15 @@ async def _bg_index(project_root: str) -> None:
 @daemon_app.command("status")
 def daemon_status() -> None:
     """Show daemon status."""
-    from .client import ensure_daemon
+    from . import client as _client
 
     try:
-        client = ensure_daemon()
+        _client.ensure_daemon()
     except Exception as e:
         _typer.echo(f"Error: {e}", err=True)
         raise _typer.Exit(code=1)
 
-    resp = client.daemon_status()
+    resp = _client.daemon_status()
     _typer.echo(f"Daemon version: {resp.version}")
     _typer.echo(f"Uptime: {resp.uptime_seconds:.1f}s")
     if resp.projects:
@@ -505,7 +485,6 @@ def daemon_status() -> None:
             _typer.echo(f"  {p.project_root} [{state}]")
     else:
         _typer.echo("No projects loaded.")
-    client.close()
 
 
 @daemon_app.command("restart")

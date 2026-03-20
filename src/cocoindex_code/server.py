@@ -2,7 +2,7 @@
 
 Supports two modes:
 1. Daemon-backed: ``create_mcp_server(client, project_root)`` — lightweight MCP
-   server that delegates to the daemon via a ``DaemonClient``.
+   server that delegates to the daemon via per-request client functions.
 2. Legacy entry point: ``main()`` — backward-compatible ``cocoindex-code`` CLI that
    auto-creates settings from env vars and delegates to the daemon.
 """
@@ -13,15 +13,9 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
-
-if TYPE_CHECKING:
-    from .client import DaemonClient
-
-from .protocol import IndexingProgress
 
 _MCP_INSTRUCTIONS = (
     "Code search and codebase understanding tools."
@@ -62,7 +56,7 @@ class SearchResultModel(BaseModel):
 # === Daemon-backed MCP server factory ===
 
 
-def create_mcp_server(client: DaemonClient, project_root: str) -> FastMCP:
+def create_mcp_server(project_root: str) -> FastMCP:
     """Create a lightweight MCP server that delegates to the daemon."""
     mcp = FastMCP("cocoindex-code", instructions=_MCP_INSTRUCTIONS)
 
@@ -125,13 +119,15 @@ def create_mcp_server(client: DaemonClient, project_root: str) -> FastMCP:
         ),
     ) -> SearchResultModel:
         """Query the codebase index via the daemon."""
+        from . import client as _client
+
         loop = asyncio.get_event_loop()
         try:
             if refresh_index:
-                await loop.run_in_executor(None, lambda: client.index(project_root))
+                await loop.run_in_executor(None, lambda: _client.index(project_root))
             resp = await loop.run_in_executor(
                 None,
-                lambda: client.search(
+                lambda: _client.search(
                     project_root=project_root,
                     query=query,
                     languages=languages,
@@ -185,7 +181,6 @@ def main() -> None:
     """
     import argparse
 
-    from .client import ensure_daemon
     from .settings import (
         EmbeddingSettings,
         LanguageOverride,
@@ -276,6 +271,11 @@ def main() -> None:
         save_user_settings(us)
 
     # --- Delegate to daemon ---
+    from . import client as _client
+    from .protocol import IndexingProgress
+
+    _client.ensure_daemon()
+
     if args.command == "index":
         import sys
 
@@ -285,7 +285,6 @@ def main() -> None:
 
         from .cli import _format_progress
 
-        client = ensure_daemon()
         err_console = Console(stderr=True)
         last_progress_line: str | None = None
 
@@ -304,54 +303,32 @@ def main() -> None:
                 last_progress_line = f"Indexing: {_format_progress(progress)}"
                 live.update(Spinner("dots", last_progress_line))
 
-            resp = client.index(str(project_root), on_progress=_on_progress, on_waiting=_on_waiting)
+            resp = _client.index(
+                str(project_root), on_progress=_on_progress, on_waiting=_on_waiting
+            )
 
         if last_progress_line is not None:
             print(last_progress_line, file=sys.stderr)
 
         if resp.success:
-            status = client.project_status(str(project_root))
+            st = _client.project_status(str(project_root))
             print("\nIndex stats:")
-            print(f"  Chunks: {status.total_chunks}")
-            print(f"  Files:  {status.total_files}")
-            if status.languages:
+            print(f"  Chunks: {st.total_chunks}")
+            print(f"  Files:  {st.total_files}")
+            if st.languages:
                 print("  Languages:")
-                for lang, count in sorted(status.languages.items(), key=lambda x: -x[1]):
+                for lang, count in sorted(st.languages.items(), key=lambda x: -x[1]):
                     print(f"    {lang}: {count} chunks")
         else:
             print(f"Indexing failed: {resp.message}")
-        client.close()
     else:
         # Default: run MCP server
-        client = ensure_daemon()
-        mcp_server = create_mcp_server(client, str(project_root))
+        mcp_server = create_mcp_server(str(project_root))
 
         async def _serve() -> None:
+            from .cli import _bg_index
+
             asyncio.create_task(_bg_index(str(project_root)))
             await mcp_server.run_stdio_async()
 
         asyncio.run(_serve())
-
-
-async def _bg_index(project_root: str) -> None:
-    """Index in background using a dedicated daemon connection.
-
-    A fresh DaemonClient is used so that background indexing does not share
-    the multiprocessing connection used by foreground MCP requests, which
-    would corrupt data ("Input data was truncated").
-    """
-    from .client import ensure_daemon
-
-    loop = asyncio.get_event_loop()
-
-    def _run_index() -> None:
-        bg_client = ensure_daemon()
-        try:
-            bg_client.index(project_root)
-        finally:
-            bg_client.close()
-
-    try:
-        await loop.run_in_executor(None, _run_index)
-    except Exception:
-        pass
