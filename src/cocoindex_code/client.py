@@ -51,13 +51,51 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+_daemon_ensured = False
+
+
 def _connect_and_handshake() -> Connection:
     """Connect to the daemon and perform the version handshake.
 
     Returns the open connection for the caller to send exactly one request.
-    Raises ``ConnectionRefusedError`` if the daemon is not running, or
-    ``RuntimeError`` on protocol/version errors.
+
+    On the first call, automatically starts or
+    restarts the daemon if needed.  Subsequent calls fail fast with
+    ``DaemonVersionError`` on mismatch (indicating the daemon was replaced
+    mid-session, e.g. after a tool upgrade).
     """
+    global _daemon_ensured  # noqa: PLW0603
+
+    if _daemon_ensured:
+        return _raw_connect_and_handshake()
+
+    # First connection — auto-start/restart as needed.
+    try:
+        conn = _raw_connect_and_handshake()
+        _daemon_ensured = True
+        return conn
+    except DaemonVersionError:
+        stop_daemon()
+    except (ConnectionRefusedError, OSError):
+        pass
+
+    start_daemon()
+    _wait_for_daemon()
+
+    # Verify the fresh daemon is reachable
+    for _attempt in range(10):
+        try:
+            conn = _raw_connect_and_handshake()
+            _daemon_ensured = True
+            return conn
+        except (ConnectionRefusedError, OSError):
+            time.sleep(0.5)
+
+    raise RuntimeError("Failed to connect to daemon after starting it")
+
+
+def _raw_connect_and_handshake() -> Connection:
+    """Low-level connect + handshake without auto-start logic."""
     sock = daemon_socket_path()
     if sys.platform != "win32" and not os.path.exists(sock):
         raise ConnectionRefusedError(f"Daemon socket not found: {sock}")
@@ -80,20 +118,25 @@ def _connect_and_handshake() -> Connection:
     if not isinstance(resp, HandshakeResponse):
         conn.close()
         raise RuntimeError(f"Unexpected handshake response: {type(resp).__name__}")
-    if not resp.ok:
+    if not resp.ok or _needs_restart(resp):
         conn.close()
-        raise _VersionMismatchError(resp)
+        raise DaemonVersionError(resp)
     return conn
 
 
-class _VersionMismatchError(Exception):
-    """Raised when the daemon version or settings are stale."""
+class DaemonVersionError(RuntimeError):
+    """Raised when the daemon has a version or settings mismatch.
+
+    The first ``_connect_and_handshake()`` call handles this by restarting
+    the daemon.  If a mismatch occurs on a subsequent call, it means the
+    daemon was replaced mid-session (e.g. after a tool upgrade).
+    """
 
     def __init__(self, resp: HandshakeResponse) -> None:
         self.resp = resp
         super().__init__(
-            f"Daemon version mismatch: {resp.daemon_version} "
-            f"(settings_mtime={resp.global_settings_mtime_us})"
+            f"Daemon version mismatch (daemon={resp.daemon_version}, "
+            f"client={__version__}). Please retry — the daemon may need a restart."
         )
 
 
@@ -319,6 +362,8 @@ def stop_daemon() -> None:
 
     Escalation: StopRequest → SIGTERM → SIGKILL.
     """
+    global _daemon_ensured  # noqa: PLW0603
+    _daemon_ensured = False
     pid_path = daemon_pid_path()
 
     pid: int | None = None
@@ -329,10 +374,15 @@ def stop_daemon() -> None:
     except (FileNotFoundError, ValueError):
         pass
 
-    # 1) Graceful StopRequest via socket
+    # 1) Graceful StopRequest via socket (bypass auto-start)
     try:
-        stop()
-    except (ConnectionRefusedError, OSError, RuntimeError):
+        conn = _raw_connect_and_handshake()
+        try:
+            conn.send_bytes(encode_request(StopRequest()))
+            conn.recv_bytes()
+        finally:
+            conn.close()
+    except (ConnectionRefusedError, OSError, RuntimeError, DaemonVersionError):
         pass
 
     if _wait_for_daemon_exit(timeout=3.0):
@@ -408,37 +458,3 @@ def _needs_restart(resp: HandshakeResponse) -> bool:
     if current_mtime != resp.global_settings_mtime_us:
         return True
     return False
-
-
-def ensure_daemon() -> None:
-    """Ensure daemon is running with correct version. Starts or restarts as needed.
-
-    After this returns, per-request functions (``index``, ``search``, etc.)
-    can be called directly — each opens its own connection.
-    """
-    # Try connecting to existing daemon
-    try:
-        conn = _connect_and_handshake()
-        conn.close()
-        return  # daemon is up and version matches
-    except _VersionMismatchError:
-        stop_daemon()
-    except (ConnectionRefusedError, OSError):
-        pass
-
-    # Start daemon
-    start_daemon()
-    _wait_for_daemon()
-
-    # Verify with retries
-    for _attempt in range(10):
-        try:
-            conn = _connect_and_handshake()
-            conn.close()
-            return
-        except _VersionMismatchError as e:
-            raise RuntimeError(f"Daemon mismatch after fresh start: {e}") from e
-        except (ConnectionRefusedError, OSError):
-            time.sleep(0.5)
-
-    raise RuntimeError("Failed to connect to daemon after starting it")
