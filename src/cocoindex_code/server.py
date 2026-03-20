@@ -274,8 +274,6 @@ def main() -> None:
     from . import client as _client
     from .protocol import IndexingProgress
 
-    _client.ensure_daemon()
-
     if args.command == "index":
         import sys
 

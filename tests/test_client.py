@@ -18,4 +18,4 @@ def test_client_connect_refuses_when_no_daemon(
     monkeypatch.setattr("cocoindex_code.client.daemon_socket_path", lambda: sock_path)
 
     with pytest.raises(ConnectionRefusedError):
-        client._connect_and_handshake()
+        client._raw_connect_and_handshake()

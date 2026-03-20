@@ -48,22 +48,6 @@ def require_project_root() -> Path:
     return root
 
 
-def require_daemon_for_project() -> str:
-    """Resolve project root, then ensure daemon is running (auto-starting if needed).
-
-    Returns ``project_root_str``. Exits on failure.
-    """
-    from .client import ensure_daemon
-
-    project_root = require_project_root()
-    try:
-        ensure_daemon()
-    except Exception as e:
-        _typer.echo(f"Error: Failed to connect to daemon: {e}", err=True)
-        raise _typer.Exit(code=1)
-    return str(project_root)
-
-
 def resolve_default_path(project_root: Path) -> str | None:
     """Compute default ``--path`` filter from CWD relative to project root."""
     cwd = Path.cwd().resolve()
@@ -306,7 +290,7 @@ def index() -> None:
     """Create/update index for the codebase."""
     from . import client as _client
 
-    project_root = require_daemon_for_project()
+    project_root = str(require_project_root())
     print_project_header(project_root)
     _run_index_with_progress(project_root)
     print_index_stats(_client.project_status(project_root))
@@ -322,7 +306,7 @@ def search(
     refresh: bool = _typer.Option(False, "--refresh", help="Refresh index before searching"),
 ) -> None:
     """Semantic search across the codebase."""
-    project_root = require_daemon_for_project()
+    project_root = str(require_project_root())
     query_str = " ".join(query)
 
     if refresh:
@@ -353,7 +337,7 @@ def status() -> None:
     """Show project status."""
     from . import client as _client
 
-    project_root = require_daemon_for_project()
+    project_root = str(require_project_root())
     print_project_header(project_root)
     print_index_stats(_client.project_status(project_root))
 
@@ -436,7 +420,7 @@ def mcp() -> None:
     """Run as MCP server (stdio mode)."""
     import asyncio
 
-    project_root = require_daemon_for_project()
+    project_root = str(require_project_root())
 
     async def _run_mcp() -> None:
         from .server import create_mcp_server
@@ -468,12 +452,6 @@ async def _bg_index(project_root: str) -> None:
 def daemon_status() -> None:
     """Show daemon status."""
     from . import client as _client
-
-    try:
-        _client.ensure_daemon()
-    except Exception as e:
-        _typer.echo(f"Error: {e}", err=True)
-        raise _typer.Exit(code=1)
 
     resp = _client.daemon_status()
     _typer.echo(f"Daemon version: {resp.version}")
