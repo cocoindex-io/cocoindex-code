@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Union
 
 import cocoindex as coco
+import numpy as np
+import numpy.typing as npt
 from cocoindex.connectors import sqlite
-from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     from cocoindex.ops.litellm import LiteLLMEmbedder
@@ -82,4 +83,4 @@ class CodeChunk:
     content: str
     start_line: int
     end_line: int
-    embedding: Annotated[NDArray, EMBEDDER]
+    embedding: Annotated[npt.NDArray[np.float32], EMBEDDER]
