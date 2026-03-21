@@ -169,6 +169,7 @@ The background daemon starts automatically on first use.
 | `ccc search <query>` | Semantic search across the codebase |
 | `ccc status` | Show index stats (chunk count, file count, language breakdown) |
 | `ccc mcp` | Run as MCP server in stdio mode |
+| `ccc doctor` | Run diagnostics — checks settings, daemon, model, file matching, and index health |
 | `ccc reset` | Delete index databases. `--all` also removes settings. `-f` skips confirmation. |
 | `ccc daemon status` | Show daemon version, uptime, and loaded projects |
 | `ccc daemon restart` | Restart the background daemon |
@@ -418,6 +419,8 @@ embedding:
 | yaml | | `.yaml`, `.yml` |
 
 ## Troubleshooting
+
+Run `ccc doctor` to diagnose common issues. It checks your settings, daemon health, embedding model, file matching, and index status — all in one command.
 
 ### `sqlite3.Connection object has no attribute enable_load_extension`
 
