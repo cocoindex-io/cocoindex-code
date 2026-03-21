@@ -42,6 +42,14 @@ class StopRequest(_msgspec.Struct, tag="stop"):
     pass
 
 
+class DoctorRequest(_msgspec.Struct, tag="doctor"):
+    project_root: str | None = None
+
+
+class DaemonEnvRequest(_msgspec.Struct, tag="daemon_env"):
+    pass
+
+
 Request = (
     HandshakeRequest
     | IndexRequest
@@ -50,6 +58,8 @@ Request = (
     | DaemonStatusRequest
     | RemoveProjectRequest
     | StopRequest
+    | DoctorRequest
+    | DaemonEnvRequest
 )
 
 # ---------------------------------------------------------------------------
@@ -136,6 +146,23 @@ class StopResponse(_msgspec.Struct, tag="stop"):
     ok: bool
 
 
+class DoctorCheckResult(_msgspec.Struct):
+    name: str
+    ok: bool
+    details: list[str]
+    errors: list[str]
+
+
+class DoctorResponse(_msgspec.Struct, tag="doctor"):
+    result: DoctorCheckResult
+    final: bool = False
+
+
+class DaemonEnvResponse(_msgspec.Struct, tag="daemon_env"):
+    env_names: list[str]
+    settings_env_names: list[str]
+
+
 class ErrorResponse(_msgspec.Struct, tag="error"):
     message: str
 
@@ -150,11 +177,14 @@ Response = (
     | DaemonStatusResponse
     | RemoveProjectResponse
     | StopResponse
+    | DoctorResponse
+    | DaemonEnvResponse
     | ErrorResponse
 )
 
 IndexStreamResponse = IndexProgressUpdate | IndexWaitingNotice | IndexResponse | ErrorResponse
 SearchStreamResponse = IndexWaitingNotice | SearchResponse | ErrorResponse
+DoctorStreamResponse = DoctorResponse | ErrorResponse
 
 # ---------------------------------------------------------------------------
 # Encode / decode helpers (msgpack binary)

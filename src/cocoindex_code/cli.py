@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer as _typer
 
-from .protocol import IndexingProgress, ProjectStatusResponse, SearchResponse
+from .protocol import DoctorCheckResult, IndexingProgress, ProjectStatusResponse, SearchResponse
 from .settings import (
     default_project_settings,
     default_user_settings,
@@ -413,6 +413,143 @@ def reset(
                 "Settings file still exists. Run `ccc reset --all` to remove it too,\n"
                 "or edit it manually."
             )
+
+
+def _print_section(name: str) -> None:
+    import click as _click
+
+    _typer.echo()
+    _typer.echo(_click.style(f"  {name}", bold=True))
+    _typer.echo(_click.style(f"  {'─' * 38}", fg="bright_black"))
+
+
+def _print_error(msg: str) -> None:
+    import click as _click
+
+    _typer.echo(_click.style(f"  ERROR: {msg}", fg="red"), err=True)
+
+
+def _print_doctor_result(result: DoctorCheckResult) -> None:
+    import click as _click
+
+    if result.name == "done":
+        return
+    if result.ok:
+        tag = _click.style("[OK]", fg="green", bold=True)
+    else:
+        tag = _click.style("[FAIL]", fg="red", bold=True)
+    _typer.echo(f"\n  {tag} {result.name}")
+    for line in result.details:
+        _typer.echo(f"    {line}")
+    for err in result.errors:
+        _typer.echo(_click.style(f"    ERROR: {err}", fg="red"), err=True)
+
+
+@app.command()
+def doctor() -> None:
+    """Check system health and report issues."""
+    from . import client as _client
+    from .settings import (
+        load_project_settings as _load_project_settings,
+    )
+    from .settings import (
+        load_user_settings as _load_user_settings,
+    )
+    from .settings import (
+        project_settings_path as _project_settings_path,
+    )
+    from .settings import (
+        user_settings_path as _user_settings_path,
+    )
+
+    # --- 1. Global settings (local, no daemon needed) ---
+    _print_section("Global Settings")
+    settings_path = _user_settings_path()
+    _typer.echo(f"  Settings: {settings_path}")
+    try:
+        user_settings = _load_user_settings()
+        emb = user_settings.embedding
+        device_str = f", device={emb.device}" if emb.device else ""
+        _typer.echo(f"  Embedding: provider={emb.provider}, model={emb.model}{device_str}")
+        if user_settings.envs:
+            _typer.echo(
+                f"  Env vars (from settings): {', '.join(sorted(user_settings.envs.keys()))}"
+            )
+    except (FileNotFoundError, ValueError) as e:
+        _print_error(str(e))
+
+    # --- 2. Connect to daemon (handshake with auto-start/restart) ---
+    _print_section("Daemon")
+    daemon_ok = False
+    try:
+        status = _client.daemon_status()
+        _typer.echo(f"  Version: {status.version}")
+        _typer.echo(f"  Uptime: {status.uptime_seconds:.1f}s")
+        _typer.echo(f"  Loaded projects: {len(status.projects)}")
+        daemon_ok = True
+    except Exception as e:
+        _print_error(f"Cannot connect to daemon: {e}")
+        _typer.echo("  Remaining daemon-side checks will be skipped.")
+
+    # --- 3. Daemon environment (requires daemon) ---
+    if daemon_ok:
+        try:
+            env_resp = _client.daemon_env()
+            settings_keys = set(env_resp.settings_env_names)
+            other_keys = [k for k in env_resp.env_names if k not in settings_keys]
+            if other_keys:
+                _typer.echo(f"  Other env vars in daemon: {', '.join(sorted(other_keys))}")
+        except Exception as e:
+            _print_error(f"Failed to get daemon env: {e}")
+
+    # --- 4. Model check (daemon-side, global — before project checks) ---
+    if daemon_ok:
+        try:
+            _client.doctor(
+                project_root=None,
+                on_result=_print_doctor_result,
+            )
+        except Exception as e:
+            _print_error(f"Model check failed: {e}")
+
+    # --- 5. Detect project ---
+    project_root = find_project_root(Path.cwd())
+
+    # --- 6. Project settings (local, no daemon needed) ---
+    if project_root is not None:
+        _print_section("Project Settings")
+        ps_path = _project_settings_path(project_root)
+        _typer.echo(f"  Settings: {ps_path}")
+        try:
+            ps = _load_project_settings(project_root)
+            _typer.echo(f"  Include patterns ({len(ps.include_patterns)}):")
+            _typer.echo(f"    {', '.join(ps.include_patterns)}")
+            _typer.echo(f"  Exclude patterns ({len(ps.exclude_patterns)}):")
+            _typer.echo(f"    {', '.join(ps.exclude_patterns)}")
+            if ps.language_overrides:
+                _typer.echo("  Language overrides:")
+                for lo in ps.language_overrides:
+                    _typer.echo(f"    .{lo.ext} -> {lo.lang}")
+        except (FileNotFoundError, ValueError) as e:
+            _print_error(str(e))
+
+    # --- 7. Project daemon-side checks (file walk + index status) ---
+    if daemon_ok and project_root is not None:
+        try:
+            _client.doctor(
+                project_root=str(project_root),
+                on_result=_print_doctor_result,
+            )
+        except Exception as e:
+            _print_error(f"Project checks failed: {e}")
+
+    # --- 8. Log files ---
+    _print_section("Log Files")
+    from .daemon import daemon_dir as _daemon_dir
+
+    log_dir = _daemon_dir()
+    _typer.echo(f"  Daemon logs: {log_dir / 'daemon.log'}")
+    _typer.echo("  Check logs above for further troubleshooting.")
 
 
 @app.command()

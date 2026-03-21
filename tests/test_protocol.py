@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from cocoindex_code.protocol import (
+    DaemonEnvRequest,
+    DaemonEnvResponse,
     DaemonProjectInfo,
     DaemonStatusRequest,
     DaemonStatusResponse,
+    DoctorCheckResult,
+    DoctorRequest,
+    DoctorResponse,
     ErrorResponse,
     HandshakeRequest,
     IndexingProgress,
@@ -128,6 +133,64 @@ def test_tagged_union_dispatch() -> None:
     assert not isinstance(decoded, HandshakeRequest)
 
 
+def test_encode_decode_doctor_request() -> None:
+    req = DoctorRequest(project_root="/tmp/proj")
+    data = encode_request(req)
+    decoded = decode_request(data)
+    assert isinstance(decoded, DoctorRequest)
+    assert decoded.project_root == "/tmp/proj"
+
+
+def test_encode_decode_doctor_request_no_project() -> None:
+    req = DoctorRequest()
+    data = encode_request(req)
+    decoded = decode_request(data)
+    assert isinstance(decoded, DoctorRequest)
+    assert decoded.project_root is None
+
+
+def test_encode_decode_doctor_response() -> None:
+    result = DoctorCheckResult(
+        name="Model Check", ok=True, details=["Embedding dimension: 384"], errors=[]
+    )
+    resp = DoctorResponse(result=result, final=False)
+    data = encode_response(resp)
+    decoded = decode_response(data)
+    assert isinstance(decoded, DoctorResponse)
+    assert decoded.result.name == "Model Check"
+    assert decoded.result.ok is True
+    assert decoded.result.details == ["Embedding dimension: 384"]
+    assert decoded.final is False
+
+
+def test_encode_decode_doctor_response_final() -> None:
+    result = DoctorCheckResult(name="done", ok=True, details=[], errors=[])
+    resp = DoctorResponse(result=result, final=True)
+    data = encode_response(resp)
+    decoded = decode_response(data)
+    assert isinstance(decoded, DoctorResponse)
+    assert decoded.final is True
+
+
+def test_encode_decode_daemon_env_request() -> None:
+    req = DaemonEnvRequest()
+    data = encode_request(req)
+    decoded = decode_request(data)
+    assert isinstance(decoded, DaemonEnvRequest)
+
+
+def test_encode_decode_daemon_env_response() -> None:
+    resp = DaemonEnvResponse(
+        env_names=["HOME", "PATH", "GEMINI_API_KEY"],
+        settings_env_names=["GEMINI_API_KEY"],
+    )
+    data = encode_response(resp)
+    decoded = decode_response(data)
+    assert isinstance(decoded, DaemonEnvResponse)
+    assert decoded.env_names == ["HOME", "PATH", "GEMINI_API_KEY"]
+    assert decoded.settings_env_names == ["GEMINI_API_KEY"]
+
+
 def test_all_request_types_round_trip() -> None:
     requests: list[Request] = [
         HandshakeRequest(version="1.0.0"),
@@ -137,6 +200,8 @@ def test_all_request_types_round_trip() -> None:
         DaemonStatusRequest(),
         RemoveProjectRequest(project_root="/tmp"),
         StopRequest(),
+        DoctorRequest(project_root="/tmp"),
+        DaemonEnvRequest(),
     ]
     for req in requests:
         data = encode_request(req)
@@ -228,6 +293,10 @@ def test_all_response_types_round_trip() -> None:
         DaemonStatusResponse(version="1.0.0", uptime_seconds=0.0, projects=[]),
         RemoveProjectResponse(ok=True),
         StopResponse(ok=True),
+        DoctorResponse(
+            result=DoctorCheckResult(name="test", ok=True, details=[], errors=[]),
+        ),
+        DaemonEnvResponse(env_names=["HOME"], settings_env_names=[]),
         ErrorResponse(message="err"),
     ]
     for resp in responses:

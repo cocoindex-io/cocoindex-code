@@ -20,7 +20,12 @@ from pathlib import Path
 from ._version import __version__
 from .daemon import _connection_family, daemon_pid_path, daemon_socket_path
 from .protocol import (
+    DaemonEnvRequest,
+    DaemonEnvResponse,
     DaemonStatusResponse,
+    DoctorCheckResult,
+    DoctorRequest,
+    DoctorResponse,
     ErrorResponse,
     HandshakeRequest,
     HandshakeResponse,
@@ -257,6 +262,41 @@ def remove_project(project_root: str) -> RemoveProjectResponse:
 
 def stop() -> StopResponse:
     return _send(StopRequest())  # type: ignore[return-value]
+
+
+def daemon_env() -> DaemonEnvResponse:
+    """Get environment variable names from the daemon."""
+    return _send(DaemonEnvRequest())  # type: ignore[return-value]
+
+
+def doctor(
+    project_root: str | None = None,
+    on_result: Callable[[DoctorCheckResult], None] | None = None,
+) -> list[DoctorCheckResult]:
+    """Run doctor checks via daemon, streaming results to on_result callback."""
+    conn = _connect_and_handshake()
+    try:
+        conn.send_bytes(encode_request(DoctorRequest(project_root=project_root)))
+        results: list[DoctorCheckResult] = []
+        while True:
+            try:
+                data = conn.recv_bytes()
+            except EOFError:
+                raise RuntimeError("Connection to daemon lost during doctor checks")
+            resp = decode_response(data)
+            if isinstance(resp, ErrorResponse):
+                raise RuntimeError(f"Daemon error: {resp.message}")
+            if isinstance(resp, DoctorResponse):
+                results.append(resp.result)
+                if on_result is not None:
+                    on_result(resp.result)
+                if resp.final:
+                    break
+            else:
+                raise RuntimeError(f"Unexpected response: {type(resp).__name__}")
+        return results
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

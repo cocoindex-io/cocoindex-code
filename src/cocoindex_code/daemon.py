@@ -17,9 +17,15 @@ from typing import Any
 from ._version import __version__
 from .project import Project
 from .protocol import (
+    DaemonEnvRequest,
+    DaemonEnvResponse,
     DaemonProjectInfo,
     DaemonStatusRequest,
     DaemonStatusResponse,
+    DoctorCheckResult,
+    DoctorRequest,
+    DoctorResponse,
+    DoctorStreamResponse,
     ErrorResponse,
     HandshakeRequest,
     HandshakeResponse,
@@ -151,6 +157,7 @@ async def handle_connection(
     start_time: float,
     on_shutdown: Callable[[], None],
     settings_mtime_us: int | None,
+    settings_env_names: list[str],
 ) -> None:
     """Handle a single client connection (per-request model).
 
@@ -186,7 +193,7 @@ async def handle_connection(
         data = await loop.run_in_executor(None, conn.recv_bytes)
         req = decode_request(data)
 
-        result = await _dispatch(req, registry, start_time, on_shutdown)
+        result = await _dispatch(req, registry, start_time, on_shutdown, settings_env_names)
         if isinstance(result, AsyncIterator):
             try:
                 async for resp in result:
@@ -231,17 +238,161 @@ async def _search_with_wait(
         yield ErrorResponse(message=str(e))
 
 
+async def _handle_doctor(
+    req: DoctorRequest,
+    registry: ProjectRegistry,
+) -> AsyncIterator[DoctorStreamResponse]:
+    """Run doctor checks sequentially, yielding results as they complete.
+
+    When ``project_root`` is None, only the model check runs (global scope).
+    When ``project_root`` is set, only project-specific checks run (file walk + index status).
+    The CLI calls this twice — once without project, once with — so that global checks
+    appear before project settings in the output.
+    """
+    if req.project_root is None:
+        # Global-scope checks
+        yield DoctorResponse(result=await _check_model(registry._embedder))
+    else:
+        # Project-scope checks
+        yield DoctorResponse(result=await _check_file_walk(req.project_root))
+        yield DoctorResponse(result=await _check_index_status(req.project_root))
+
+    # Final marker
+    yield DoctorResponse(
+        result=DoctorCheckResult(name="done", ok=True, details=[], errors=[]),
+        final=True,
+    )
+
+
+async def _check_model(embedder: Embedder) -> DoctorCheckResult:
+    """Test the embedding model by embedding a short string."""
+    try:
+        vec = await embedder.embed("hello world")
+        dim = len(vec)
+        return DoctorCheckResult(
+            name="Model Check",
+            ok=True,
+            details=[f"Embedding dimension: {dim}"],
+            errors=[],
+        )
+    except Exception as e:
+        return DoctorCheckResult(
+            name="Model Check",
+            ok=False,
+            details=[],
+            errors=[str(e)],
+        )
+
+
+async def _check_file_walk(project_root_str: str) -> DoctorCheckResult:
+    """Walk project files and report counts + gitignore paths."""
+    from pathlib import PurePath
+
+    from cocoindex.resources.file import PatternFilePathMatcher
+
+    from .indexer import GitignoreAwareMatcher
+    from .settings import load_gitignore_spec, load_project_settings
+
+    project_root = Path(project_root_str)
+    try:
+        ps = load_project_settings(project_root)
+    except FileNotFoundError as e:
+        return DoctorCheckResult(name="File Walk", ok=False, details=[], errors=[str(e)])
+
+    gitignore_spec = load_gitignore_spec(project_root)
+    base_matcher = PatternFilePathMatcher(
+        included_patterns=ps.include_patterns,
+        excluded_patterns=ps.exclude_patterns,
+    )
+    matcher = GitignoreAwareMatcher(base_matcher, gitignore_spec, project_root)
+
+    counts_by_ext: dict[str, int] = {}
+    gitignore_dirs: list[str] = []
+    total = 0
+
+    def _walk() -> None:
+        nonlocal total
+        for dirpath_str, dirnames, filenames in os.walk(project_root):
+            dirpath = Path(dirpath_str)
+            rel_dir = PurePath(dirpath.relative_to(project_root))
+            if rel_dir != PurePath(".") and not matcher.is_dir_included(rel_dir):
+                dirnames.clear()
+                continue
+
+            if (dirpath / ".gitignore").is_file():
+                gitignore_dirs.append(str(rel_dir))
+
+            for fname in filenames:
+                rel_path = rel_dir / fname if rel_dir != PurePath(".") else PurePath(fname)
+                if matcher.is_file_included(rel_path):
+                    total += 1
+                    ext = PurePath(fname).suffix or "(no ext)"
+                    counts_by_ext[ext] = counts_by_ext.get(ext, 0) + 1
+
+    await asyncio.get_event_loop().run_in_executor(None, _walk)
+
+    details = [f"Total matched files: {total}"]
+    for ext, count in sorted(counts_by_ext.items(), key=lambda x: -x[1]):
+        details.append(f"  {ext}: {count}")
+    if gitignore_dirs:
+        details.append(f"Loaded .gitignore from: {', '.join(gitignore_dirs)}")
+
+    return DoctorCheckResult(name="File Walk", ok=True, details=details, errors=[])
+
+
+async def _check_index_status(project_root_str: str) -> DoctorCheckResult:
+    """Check index status by querying target_sqlite.db directly."""
+    from cocoindex.connectors import sqlite as coco_sqlite
+
+    project_root = Path(project_root_str)
+    db_path = project_root / ".cocoindex_code" / "target_sqlite.db"
+    details = [f"Index: {db_path}"]
+
+    if not db_path.exists():
+        details.append("Index not created yet.")
+        return DoctorCheckResult(name="Index Status", ok=True, details=details, errors=[])
+
+    try:
+        conn = coco_sqlite.connect(str(db_path), load_vec=True)
+        try:
+            with conn.readonly() as db:
+                total_chunks = db.execute("SELECT COUNT(*) FROM code_chunks_vec").fetchone()[0]
+                file_rows = db.execute("SELECT DISTINCT file_path FROM code_chunks_vec").fetchall()
+                total_files = len(file_rows)
+                lang_rows = db.execute(
+                    "SELECT language, COUNT(*) FROM code_chunks_vec GROUP BY language"
+                ).fetchall()
+                languages = {row[0]: row[1] for row in lang_rows}
+        finally:
+            conn.close()
+
+        details.append(f"Chunks: {total_chunks}")
+        details.append(f"Files: {total_files}")
+        if languages:
+            details.append("Languages:")
+            for lang, count in sorted(languages.items(), key=lambda x: -x[1]):
+                details.append(f"  {lang}: {count} chunks")
+        return DoctorCheckResult(name="Index Status", ok=True, details=details, errors=[])
+    except Exception as e:
+        return DoctorCheckResult(name="Index Status", ok=False, details=details, errors=[str(e)])
+
+
 async def _dispatch(
     req: Request,
     registry: ProjectRegistry,
     start_time: float,
     on_shutdown: Callable[[], None],
-) -> Response | AsyncIterator[IndexStreamResponse] | AsyncIterator[SearchStreamResponse]:
+    settings_env_names: list[str],
+) -> (
+    Response
+    | AsyncIterator[IndexStreamResponse]
+    | AsyncIterator[SearchStreamResponse]
+    | AsyncIterator[DoctorStreamResponse]
+):
     """Dispatch a request to the appropriate handler.
 
     Returns a single Response for most requests, or an AsyncIterator for
-    streaming requests (IndexRequest, or SearchRequest when waiting for
-    load-time indexing).
+    streaming requests (IndexRequest, SearchRequest when waiting, DoctorRequest).
     """
     try:
         if isinstance(req, IndexRequest):
@@ -289,6 +440,15 @@ async def _dispatch(
             on_shutdown()
             return StopResponse(ok=True)
 
+        if isinstance(req, DaemonEnvRequest):
+            return DaemonEnvResponse(
+                env_names=sorted(os.environ.keys()),
+                settings_env_names=settings_env_names,
+            )
+
+        if isinstance(req, DoctorRequest):
+            return _handle_doctor(req, registry)
+
         return ErrorResponse(message=f"Unknown request type: {type(req).__name__}")
     except Exception as e:
         logger.exception("Error dispatching request")
@@ -314,6 +474,7 @@ def run_daemon() -> None:
     settings_mtime_us = global_settings_mtime_us()
 
     # Set environment variables from settings
+    settings_env_keys = list(user_settings.envs.keys())
     for key, value in user_settings.envs.items():
         os.environ[key] = value
 
@@ -363,6 +524,7 @@ def run_daemon() -> None:
                 start_time,
                 _request_shutdown,
                 settings_mtime_us,
+                settings_env_keys,
             )
         )
         tasks.add(task)

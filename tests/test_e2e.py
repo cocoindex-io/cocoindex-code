@@ -431,6 +431,92 @@ def test_session_not_initialized_errors(e2e_project: Path) -> None:
     os.chdir(e2e_project)
 
 
+def test_session_doctor_happy_path(e2e_project: Path) -> None:
+    """Init → index → doctor shows global settings, daemon, model, project, and index info."""
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    result = runner.invoke(app, ["index"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+    result = runner.invoke(app, ["doctor"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+    # Global settings section
+    assert "Global Settings" in result.output
+    assert "global_settings.yml" in result.output
+    assert "provider=" in result.output
+    assert "model=" in result.output
+
+    # Daemon section
+    assert "Daemon" in result.output
+    assert "Version:" in result.output
+    assert "Uptime:" in result.output
+
+    # Model check
+    assert "[OK] Model Check" in result.output
+    assert "Embedding dimension:" in result.output
+
+    # Project settings section
+    assert "Project Settings" in result.output
+    assert "settings.yml" in result.output
+    assert "Include patterns (" in result.output
+    assert "Exclude patterns (" in result.output
+
+    # File walk
+    assert "[OK] File Walk" in result.output
+    assert "Total matched files:" in result.output
+    # Our sample project has .py files
+    assert ".py:" in result.output
+
+    # Index status
+    assert "[OK] Index Status" in result.output
+    assert "Chunks:" in result.output
+    assert "Files:" in result.output
+
+    # Log files section
+    assert "Log Files" in result.output
+    assert "daemon.log" in result.output
+
+
+def test_session_doctor_no_index(e2e_project: Path) -> None:
+    """Doctor before indexing should show index not created yet."""
+    runner.invoke(app, ["init"], catch_exceptions=False)
+
+    result = runner.invoke(app, ["doctor"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+    assert "[OK] Model Check" in result.output
+    assert "Index not created yet" in result.output
+
+
+def test_session_doctor_no_project(e2e_project: Path) -> None:
+    """Doctor outside a project should still show global + daemon checks."""
+    # Init to create global settings and start daemon
+    runner.invoke(app, ["init"], catch_exceptions=False)
+
+    # Move to a standalone directory (not a project)
+    standalone = Path(tempfile.mkdtemp(prefix="ccc_standalone_"))
+    old_cwd = os.getcwd()
+    os.chdir(standalone)
+    try:
+        result = runner.invoke(app, ["doctor"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+
+        # Global + daemon checks should be present
+        assert "Global Settings" in result.output
+        assert "Daemon" in result.output
+        assert "[OK] Model Check" in result.output
+
+        # Project-specific sections should NOT be present
+        assert "Project Settings" not in result.output
+        assert "File Walk" not in result.output
+        assert "Index Status" not in result.output
+
+        # Log files always present
+        assert "Log Files" in result.output
+    finally:
+        os.chdir(old_cwd)
+
+
 # ---------------------------------------------------------------------------
 # Unit tests (not session-based)
 # ---------------------------------------------------------------------------
