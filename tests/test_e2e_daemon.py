@@ -57,11 +57,15 @@ def e2e_daemon() -> Iterator[tuple[str, Path]]:
         save_user_settings(default_user_settings())
         save_project_settings(project_dir, default_project_settings())
 
-        start_daemon()
+        proc = start_daemon()
 
         sock_path = daemon_socket_path()
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                log = base_dir / "daemon.log"
+                log_content = log.read_text() if log.exists() else "(no log)"
+                raise RuntimeError(f"Daemon process exited early.\nLog:\n{log_content}")
             if os.path.exists(sock_path):
                 break
             time.sleep(0.2)

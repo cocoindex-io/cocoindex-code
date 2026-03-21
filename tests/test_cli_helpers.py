@@ -21,6 +21,13 @@ def test_require_project_root_success(tmp_path: Path, monkeypatch: pytest.Monkey
     subdir = project / "src"
     subdir.mkdir()
     monkeypatch.chdir(subdir)
+    # Create global settings so require_project_root doesn't reject
+    settings_dir = tmp_path / "ccc_home"
+    settings_dir.mkdir()
+    (settings_dir / "global_settings.yml").write_text(
+        "embedding:\n  model: test\n  provider: litellm\n"
+    )
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(settings_dir))
     assert require_project_root() == project
 
 
@@ -30,6 +37,13 @@ def test_require_project_root_exits_when_not_initialized(
     standalone = tmp_path / "standalone"
     standalone.mkdir()
     monkeypatch.chdir(standalone)
+    # Create global settings so we test the "no project" check, not "no global settings"
+    settings_dir = tmp_path / "ccc_home"
+    settings_dir.mkdir()
+    (settings_dir / "global_settings.yml").write_text(
+        "embedding:\n  model: test\n  provider: litellm\n"
+    )
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(settings_dir))
     from click.exceptions import Exit
 
     with pytest.raises(Exit):

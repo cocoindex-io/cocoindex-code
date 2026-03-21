@@ -19,7 +19,11 @@ from typer.testing import CliRunner
 
 from cocoindex_code.cli import app
 from cocoindex_code.client import stop_daemon
-from cocoindex_code.settings import find_parent_with_marker
+from cocoindex_code.settings import (
+    default_project_settings,
+    find_parent_with_marker,
+    save_project_settings,
+)
 
 runner = CliRunner()
 
@@ -515,6 +519,65 @@ def test_session_doctor_no_project(e2e_project: Path) -> None:
         assert "Log Files" in result.output
     finally:
         os.chdir(old_cwd)
+
+
+# ---------------------------------------------------------------------------
+# Daemon startup failure tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def e2e_project_no_global_settings() -> Iterator[Path]:
+    """Set up a project with project settings but NO global_settings.yml.
+
+    This reproduces the scenario from issue #113 where a user creates project
+    settings manually but hasn't run ``ccc init`` (which creates global settings).
+    """
+    base_dir = Path(tempfile.mkdtemp(prefix="ccc_e2e_"))
+    project_dir = base_dir / "project"
+    project_dir.mkdir()
+    (project_dir / "main.py").write_text(SAMPLE_MAIN_PY)
+    (project_dir / ".git").mkdir()
+
+    old_env = os.environ.get("COCOINDEX_CODE_DIR")
+    os.environ["COCOINDEX_CODE_DIR"] = str(base_dir)
+    old_cwd = os.getcwd()
+    os.chdir(project_dir)
+
+    # Create project settings but NOT global settings — this is the bug scenario
+    save_project_settings(project_dir, default_project_settings())
+
+    try:
+        yield project_dir
+    finally:
+        os.chdir(old_cwd)
+        stop_daemon()
+        if old_env is None:
+            os.environ.pop("COCOINDEX_CODE_DIR", None)
+        else:
+            os.environ["COCOINDEX_CODE_DIR"] = old_env
+
+
+@pytest.mark.usefixtures("e2e_project_no_global_settings")
+def test_session_missing_global_settings_early_error() -> None:
+    """When global_settings.yml is missing, project commands should fail early with guidance."""
+    # `ccc status` should detect missing global settings before even starting the daemon.
+    result = runner.invoke(app, ["status"])
+    assert result.exit_code != 0, f"Expected failure but got: {result.output}"
+    assert "Global settings not found" in result.output
+    assert "global_settings.yml" in result.output
+    assert "ccc init" in result.output
+
+
+@pytest.mark.usefixtures("e2e_project_no_global_settings")
+def test_session_daemon_restart_missing_global_settings() -> None:
+    """``ccc daemon restart`` should fail fast with daemon log when global settings are missing."""
+    # `daemon restart` doesn't go through require_project_root, so it hits the
+    # daemon start path where the process dies. Should show the daemon log.
+    result = runner.invoke(app, ["daemon", "restart"])
+    assert result.exit_code != 0, f"Expected failure but got: {result.output}"
+    assert "Daemon log:" in result.output
+    assert "User settings not found" in result.output
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ from multiprocessing.connection import Client, Connection
 from pathlib import Path
 
 from ._version import __version__
-from .daemon import _connection_family, daemon_pid_path, daemon_socket_path
+from .daemon import _connection_family, daemon_log_path, daemon_pid_path, daemon_socket_path
 from .protocol import (
     DaemonEnvRequest,
     DaemonEnvResponse,
@@ -84,8 +84,8 @@ def _connect_and_handshake() -> Connection:
     except (ConnectionRefusedError, OSError):
         pass
 
-    start_daemon()
-    _wait_for_daemon()
+    proc = start_daemon()
+    _wait_for_daemon(proc=proc)
 
     # Verify the fresh daemon is reachable
     for _attempt in range(10):
@@ -143,6 +143,27 @@ class DaemonVersionError(RuntimeError):
             f"Daemon version mismatch (daemon={resp.daemon_version}, "
             f"client={__version__}). Please retry — the daemon may need a restart."
         )
+
+
+class DaemonStartError(RuntimeError):
+    """Raised when the daemon process fails to start.
+
+    Carries the daemon log content so callers can display it to the user.
+    """
+
+    def __init__(self, message: str, log: str | None = None) -> None:
+        self.log = log
+        super().__init__(message)
+
+
+def _read_daemon_log() -> str | None:
+    """Read the daemon log file, returning its content or None."""
+    log_path = daemon_log_path()
+    try:
+        content = log_path.read_text().strip()
+        return content if content else None
+    except (FileNotFoundError, OSError):
+        return None
 
 
 def _send(req: Request) -> Response:
@@ -316,8 +337,12 @@ def is_daemon_running() -> bool:
     return os.path.exists(daemon_socket_path())
 
 
-def start_daemon() -> None:
-    """Start the daemon as a background process."""
+def start_daemon() -> subprocess.Popen[bytes]:
+    """Start the daemon as a background process.
+
+    Returns the ``Popen`` object so callers can detect early process death
+    (via ``proc.poll()``) instead of waiting for a full timeout.
+    """
     from .daemon import daemon_dir
 
     daemon_dir().mkdir(parents=True, exist_ok=True)
@@ -332,7 +357,7 @@ def start_daemon() -> None:
     log_fd = open(log_path, "w")
     if sys.platform == "win32":
         _create_no_window = 0x08000000
-        subprocess.Popen(
+        proc = subprocess.Popen(
             cmd,
             stdout=log_fd,
             stderr=log_fd,
@@ -340,7 +365,7 @@ def start_daemon() -> None:
             creationflags=_create_no_window,
         )
     else:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             cmd,
             start_new_session=True,
             stdout=log_fd,
@@ -348,6 +373,7 @@ def start_daemon() -> None:
             stdin=subprocess.DEVNULL,
         )
     log_fd.close()
+    return proc
 
 
 def _find_ccc_executable() -> str | None:
@@ -469,11 +495,27 @@ def _cleanup_stale_files(pid_path: Path, pid: int | None) -> None:
             pass
 
 
-def _wait_for_daemon(timeout: float = 30.0) -> None:
-    """Wait for the daemon socket/pipe to become available."""
+def _wait_for_daemon(
+    timeout: float = 30.0,
+    proc: subprocess.Popen[bytes] | None = None,
+) -> None:
+    """Wait for the daemon socket/pipe to become available.
+
+    If *proc* is given, polls the process each iteration.  When the process
+    exits before the socket appears, raises ``DaemonStartError`` immediately
+    with the daemon log content — no need to wait for the full timeout.
+    """
     deadline = time.monotonic() + timeout
     sock_path = daemon_socket_path()
     while time.monotonic() < deadline:
+        # Check if the daemon process died before the socket appeared.
+        if proc is not None and proc.poll() is not None:
+            log = _read_daemon_log()
+            msg = "Daemon process exited before it became ready."
+            if log:
+                msg += f"\n\nDaemon log:\n{log}"
+            raise DaemonStartError(msg, log=log)
+
         if sys.platform == "win32":
             try:
                 conn = Client(sock_path, family=_connection_family())
@@ -485,7 +527,13 @@ def _wait_for_daemon(timeout: float = 30.0) -> None:
             if os.path.exists(sock_path):
                 return
         time.sleep(0.2)
-    raise TimeoutError("Daemon did not start in time")
+
+    # Timeout — also include log for diagnostics.
+    log = _read_daemon_log()
+    msg = "Daemon did not start in time."
+    if log:
+        msg += f"\n\nDaemon log:\n{log}"
+    raise DaemonStartError(msg, log=log)
 
 
 def _needs_restart(resp: HandshakeResponse) -> bool:

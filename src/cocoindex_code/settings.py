@@ -240,7 +240,7 @@ def _user_settings_to_dict(settings: UserSettings) -> dict[str, Any]:
 def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
     emb_dict = d.get("embedding")
     if not emb_dict or "model" not in emb_dict:
-        raise ValueError("global_settings.yml must contain 'embedding' with at least 'model' field")
+        raise ValueError("Must contain 'embedding' with at least 'model' field")
     # Only pass keys that are present; provider uses dataclass default ("litellm") if omitted
     emb_kwargs: dict[str, Any] = {"model": emb_dict["model"]}
     if "provider" in emb_dict:
@@ -288,11 +288,14 @@ def load_user_settings() -> UserSettings:
     path = user_settings_path()
     if not path.is_file():
         raise FileNotFoundError(f"User settings not found: {path}")
-    with open(path) as f:
-        data = _yaml.safe_load(f)
-    if not data:
-        raise ValueError(f"User settings file is empty: {path}")
-    return _user_settings_from_dict(data)
+    try:
+        with open(path) as f:
+            data = _yaml.safe_load(f)
+        if not data:
+            raise ValueError("File is empty")
+        return _user_settings_from_dict(data)
+    except Exception as e:
+        raise type(e)(f"Error loading {path}: {e}") from e
 
 
 def save_user_settings(settings: UserSettings) -> Path:
@@ -312,11 +315,14 @@ def load_project_settings(project_root: Path) -> ProjectSettings:
     path = project_settings_path(project_root)
     if not path.is_file():
         raise FileNotFoundError(f"Project settings not found: {path}")
-    with open(path) as f:
-        data = _yaml.safe_load(f)
-    if not data:
-        return default_project_settings()
-    return _project_settings_from_dict(data)
+    try:
+        with open(path) as f:
+            data = _yaml.safe_load(f)
+        if not data:
+            return default_project_settings()
+        return _project_settings_from_dict(data)
+    except Exception as e:
+        raise type(e)(f"Error loading {path}: {e}") from e
 
 
 def save_project_settings(project_root: Path, settings: ProjectSettings) -> Path:

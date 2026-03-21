@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import functools
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 import typer as _typer
 
+from .client import DaemonStartError
 from .protocol import DoctorCheckResult, IndexingProgress, ProjectStatusResponse, SearchResponse
 from .settings import (
     default_project_settings,
@@ -35,8 +39,17 @@ app.add_typer(daemon_app, name="daemon")
 def require_project_root() -> Path:
     """Find the project root by walking up from CWD.
 
-    Exits with code 1 if not found.
+    Checks global settings first (more fundamental), then project settings.
+    Exits with code 1 if either check fails.
     """
+    gs_path = user_settings_path()
+    if not gs_path.is_file():
+        _typer.echo(
+            f"Error: Global settings not found: {gs_path}\n"
+            "Run `ccc init` to create it with default settings.",
+            err=True,
+        )
+        raise _typer.Exit(code=1)
     root = find_project_root(Path.cwd())
     if root is None:
         _typer.echo(
@@ -46,6 +59,26 @@ def require_project_root() -> Path:
         )
         raise _typer.Exit(code=1)
     return root
+
+
+_F = TypeVar("_F", bound=Callable[..., object])
+
+
+def _catch_daemon_start_error(func: _F) -> _F:
+    """Decorator that catches ``DaemonStartError`` and exits with a clean message.
+
+    Apply to any CLI command that may trigger daemon auto-start.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args: object, **kwargs: object) -> object:
+        try:
+            return func(*args, **kwargs)
+        except DaemonStartError as e:
+            _typer.echo(f"Error: {e}", err=True)
+            raise _typer.Exit(code=1)
+
+    return wrapper  # type: ignore[return-value]
 
 
 def resolve_default_path(project_root: Path) -> str | None:
@@ -138,6 +171,9 @@ def _run_index_with_progress(project_root: str) -> None:
             resp = _client.index(project_root, on_progress=_on_progress, on_waiting=_on_waiting)
         except RuntimeError as e:
             live.stop()
+            # Let DaemonStartError propagate to the decorator for consistent handling.
+            if isinstance(e, DaemonStartError):
+                raise
             _typer.echo(f"Indexing failed: {e}", err=True)
             raise _typer.Exit(code=1)
 
@@ -252,6 +288,12 @@ def init(
     cwd = Path.cwd().resolve()
     settings_file = _project_settings_path(cwd)
 
+    # Always ensure user settings exist
+    user_path = user_settings_path()
+    if not user_path.is_file():
+        save_user_settings(default_user_settings())
+        _typer.echo(f"Created user settings: {user_path}")
+
     # Check if already initialized
     if settings_file.is_file():
         _typer.echo("Project already initialized.")
@@ -268,12 +310,6 @@ def init(
             )
             raise _typer.Exit(code=1)
 
-    # Create user settings if missing
-    user_path = user_settings_path()
-    if not user_path.is_file():
-        save_user_settings(default_user_settings())
-        _typer.echo(f"Created user settings: {user_path}")
-
     # Create project settings
     save_project_settings(cwd, default_project_settings())
     _typer.echo(f"Created project settings: {settings_file}")
@@ -286,6 +322,7 @@ def init(
 
 
 @app.command()
+@_catch_daemon_start_error
 def index() -> None:
     """Create/update index for the codebase."""
     from . import client as _client
@@ -297,6 +334,7 @@ def index() -> None:
 
 
 @app.command()
+@_catch_daemon_start_error
 def search(
     query: list[str] = _typer.Argument(..., help="Search query"),
     lang: list[str] = _typer.Option([], "--lang", help="Filter by language"),
@@ -333,6 +371,7 @@ def search(
 
 
 @app.command()
+@_catch_daemon_start_error
 def status() -> None:
     """Show project status."""
     from . import client as _client
@@ -446,6 +485,7 @@ def _print_doctor_result(result: DoctorCheckResult) -> None:
 
 
 @app.command()
+@_catch_daemon_start_error
 def doctor() -> None:
     """Check system health and report issues."""
     from . import client as _client
@@ -553,6 +593,7 @@ def doctor() -> None:
 
 
 @app.command()
+@_catch_daemon_start_error
 def mcp() -> None:
     """Run as MCP server (stdio mode)."""
     import asyncio
@@ -586,6 +627,7 @@ async def _bg_index(project_root: str) -> None:
 
 
 @daemon_app.command("status")
+@_catch_daemon_start_error
 def daemon_status() -> None:
     """Show daemon status."""
     from . import client as _client
@@ -603,6 +645,7 @@ def daemon_status() -> None:
 
 
 @daemon_app.command("restart")
+@_catch_daemon_start_error
 def daemon_restart() -> None:
     """Restart the daemon."""
     from .client import _wait_for_daemon, start_daemon, stop_daemon
@@ -611,13 +654,9 @@ def daemon_restart() -> None:
     stop_daemon()
 
     _typer.echo("Starting daemon...")
-    start_daemon()
-    try:
-        _wait_for_daemon()
-        _typer.echo("Daemon restarted.")
-    except TimeoutError:
-        _typer.echo("Error: Daemon did not start in time.", err=True)
-        raise _typer.Exit(code=1)
+    proc = start_daemon()
+    _wait_for_daemon(proc=proc)
+    _typer.echo("Daemon restarted.")
 
 
 @daemon_app.command("stop")
