@@ -462,6 +462,19 @@ If you previously configured `cocoindex-code` via environment variables, the `co
 
 If you need help with remote setup, please email our maintainer linghua@cocoindex.io, happy to help!
 
+## Contributing
+
+We welcome contributions! Before you start, please install the [pre-commit](https://pre-commit.com/) hooks so that linting, formatting, type checking, and tests run automatically before each commit:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+This catches common issues — trailing whitespace, lint errors (Ruff), type errors (mypy), and test failures — before they reach CI.
+
+For more details, see our [contributing guide](https://cocoindex.io/docs/contributing/guide).
+
 ## License
 
 Apache-2.0
