@@ -36,6 +36,16 @@ After initialization, edit the settings files if needed (see [settings.md](setti
 
 ## Troubleshooting
 
+### Diagnostics
+
+Run `ccc doctor` to check system health end-to-end:
+
+```bash
+ccc doctor
+```
+
+This checks global settings, daemon status, embedding model (runs a test embedding), and — if run from within a project — file matching (walks files using the same logic as the indexer) and index status. Results stream incrementally. Always points to `daemon.log` at the end for further investigation.
+
 ### Checking Project Status
 
 To view the current project's index status:
