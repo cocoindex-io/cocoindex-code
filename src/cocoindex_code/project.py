@@ -10,6 +10,7 @@ from pathlib import Path
 import cocoindex as coco
 from cocoindex.connectors import sqlite as coco_sqlite
 
+from .chunking import CHUNKER_REGISTRY, ChunkerFn
 from .indexer import indexer_main
 from .protocol import (
     IndexingProgress,
@@ -256,12 +257,20 @@ class Project:
     async def create(
         project_root: Path,
         embedder: Embedder,
+        chunker_registry: dict[str, ChunkerFn] | None = None,
     ) -> Project:
         """Create a project with explicit embedder.
 
         Project-level settings and .gitignore are NOT cached here — the
         indexer loads them fresh from disk on every run so that user edits
         take effect without restarting the daemon.
+
+        Args:
+            project_root: Root directory of the codebase to index.
+            embedder: Embedding model instance.
+            chunker_registry: Optional mapping of file suffix (e.g. ``".toml"``)
+                to a ``ChunkerFn``. When a suffix matches, the registered
+                chunker is called instead of the built-in splitter.
         """
         settings_dir = project_root / ".cocoindex_code"
         settings_dir.mkdir(parents=True, exist_ok=True)
@@ -278,6 +287,7 @@ class Project:
         context.provide(CODEBASE_DIR, project_root)
         context.provide(SQLITE_DB, coco_sqlite.connect(str(target_sqlite_db), load_vec=True))
         context.provide(EMBEDDER, embedder)
+        context.provide(CHUNKER_REGISTRY, dict(chunker_registry) if chunker_registry else {})
 
         env = coco.Environment(settings, context_provider=context)
         app = coco.App(

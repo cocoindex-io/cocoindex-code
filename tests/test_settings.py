@@ -7,9 +7,13 @@ from pathlib import Path
 
 import pytest
 
+# _resolve_chunker_registry is private to daemon.py (single call site), but its
+# error paths (bad format, non-callable) are not exercised by integration tests.
+from cocoindex_code.daemon import _resolve_chunker_registry
 from cocoindex_code.settings import (
     DEFAULT_EXCLUDED_PATTERNS,
     DEFAULT_INCLUDED_PATTERNS,
+    ChunkerMapping,
     EmbeddingSettings,
     LanguageOverride,
     ProjectSettings,
@@ -289,3 +293,25 @@ class TestResolveDbDir:
         dst = tmp_path / "db-files"
         monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", f"{src}={dst}")
         assert resolve_db_dir(src / "org" / "repo" / "subdir") == dst / "org" / "repo" / "subdir"
+
+
+def test_project_settings_with_chunkers(tmp_path: Path) -> None:
+    settings = ProjectSettings(
+        chunkers=[ChunkerMapping(ext="toml", module="example_toml_chunker:toml_chunker")],
+    )
+    save_project_settings(tmp_path, settings)
+    loaded = load_project_settings(tmp_path)
+    assert len(loaded.chunkers) == 1
+    assert loaded.chunkers[0].ext == "toml"
+    assert loaded.chunkers[0].module == "example_toml_chunker:toml_chunker"
+
+
+def test_resolve_chunker_registry_missing_colon() -> None:
+    with pytest.raises(ValueError, match="module.path:callable"):
+        _resolve_chunker_registry([ChunkerMapping(ext="toml", module="no_colon_here")])
+
+
+def test_resolve_chunker_registry_not_callable() -> None:
+    # os.path is a module attribute that is a string — not callable.
+    with pytest.raises(ValueError, match="not callable"):
+        _resolve_chunker_registry([ChunkerMapping(ext="toml", module="os:sep")])

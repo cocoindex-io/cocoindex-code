@@ -84,10 +84,17 @@ class LanguageOverride:
 
 
 @dataclass
+class ChunkerMapping:
+    ext: str  # without dot, e.g. "toml"
+    module: str  # "module.path:callable", e.g. "cocoindex_code.toml_chunker:toml_chunker"
+
+
+@dataclass
 class ProjectSettings:
     include_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_INCLUDED_PATTERNS))
     exclude_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDED_PATTERNS))
     language_overrides: list[LanguageOverride] = field(default_factory=list)
+    chunkers: list[ChunkerMapping] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +358,8 @@ def _project_settings_to_dict(settings: ProjectSettings) -> dict[str, Any]:
         d["language_overrides"] = [
             {"ext": lo.ext, "lang": lo.lang} for lo in settings.language_overrides
         ]
+    if settings.chunkers:
+        d["chunkers"] = [{"ext": cm.ext, "module": cm.module} for cm in settings.chunkers]
     return d
 
 
@@ -358,10 +367,12 @@ def _project_settings_from_dict(d: dict[str, Any]) -> ProjectSettings:
     overrides = [
         LanguageOverride(ext=lo["ext"], lang=lo["lang"]) for lo in d.get("language_overrides", [])
     ]
+    chunkers = [ChunkerMapping(ext=cm["ext"], module=cm["module"]) for cm in d.get("chunkers", [])]
     return ProjectSettings(
         include_patterns=d.get("include_patterns", list(DEFAULT_INCLUDED_PATTERNS)),
         exclude_patterns=d.get("exclude_patterns", list(DEFAULT_EXCLUDED_PATTERNS)),
         language_overrides=overrides,
+        chunkers=chunkers,
     )
 
 

@@ -237,9 +237,42 @@ exclude_patterns:
 language_overrides:
   - ext: inc               # treat .inc files as PHP
     lang: php
+
+chunkers:
+  - ext: toml              # use a custom chunker for .toml files
+    module: example_toml_chunker:toml_chunker
 ```
 
 > `.cocoindex_code/` is automatically added to `.gitignore` during init.
+
+Use `chunkers` when you want to control how a file type is split into chunks before indexing.
+
+`module: example_toml_chunker:toml_chunker` means:
+- `example_toml_chunker` is a local Python module
+- `toml_chunker` is the function inside that module
+
+In practice, this usually means:
+- you create a Python file in your project, for example `example_toml_chunker.py`
+- you add a function in that file
+- you point `settings.yml` at it with `module.path:function_name`
+
+The function should use this signature:
+
+```python
+from pathlib import Path
+from cocoindex_code.chunking import Chunk
+
+def my_chunker(path: Path, content: str) -> tuple[str | None, list[Chunk]]:
+    ...
+```
+
+- `path` is the file being indexed
+- `content` is the full text of that file
+- return `language_override` as a string like `"toml"` if you want to override language detection
+- return `None` as `language_override` if you want to keep the detected language
+- return a `list[Chunk]` with the chunks you want stored in the index
+
+See [`src/cocoindex_code/chunking.py`](./src/cocoindex_code/chunking.py) for the public types and [`tests/example_toml_chunker.py`](./tests/example_toml_chunker.py) for a complete example.
 
 ## Embedding Models
 

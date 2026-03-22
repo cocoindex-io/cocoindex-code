@@ -14,6 +14,7 @@ from cocoindex.resources.file import FilePathMatcher, PatternFilePathMatcher
 from cocoindex.resources.id import IdGenerator
 from pathspec import GitIgnoreSpec
 
+from .chunking import CHUNKER_REGISTRY
 from .settings import load_gitignore_spec, load_project_settings
 from .shared import (
     CODEBASE_DIR,
@@ -158,13 +159,20 @@ async def process_file(
         or "text"
     )
 
-    chunks = splitter.split(
-        content,
-        chunk_size=CHUNK_SIZE,
-        min_chunk_size=MIN_CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        language=language,
-    )
+    chunker_registry = coco.use_context(CHUNKER_REGISTRY)
+    chunker = chunker_registry.get(suffix)
+    if chunker is not None:
+        language_override, chunks = chunker(Path(file.file_path.path), content)
+        if language_override is not None:
+            language = language_override
+    else:
+        chunks = splitter.split(
+            content,
+            chunk_size=CHUNK_SIZE,
+            min_chunk_size=MIN_CHUNK_SIZE,
+            chunk_overlap=CHUNK_OVERLAP,
+            language=language,
+        )
 
     id_gen = IdGenerator()
 

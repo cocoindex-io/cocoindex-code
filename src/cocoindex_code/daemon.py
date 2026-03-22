@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
 import signal
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ._version import __version__
+from .chunking import ChunkerFn as _ChunkerFn
 from .project import Project
 from .protocol import (
     DaemonEnvRequest,
@@ -46,7 +48,9 @@ from .protocol import (
     encode_response,
 )
 from .settings import (
+    ChunkerMapping,
     global_settings_mtime_us,
+    load_project_settings,
     load_user_settings,
     target_sqlite_db_path,
     user_settings_dir,
@@ -54,6 +58,26 @@ from .settings import (
 from .shared import Embedder, create_embedder
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> dict[str, _ChunkerFn]:
+    """Resolve ``ChunkerMapping`` settings entries to a ``{suffix: fn}`` dict.
+
+    Each ``mapping.module`` must be a ``"module.path:callable"`` string importable
+    from the current environment.
+    """
+    registry: dict[str, _ChunkerFn] = {}
+    for cm in mappings:
+        module_path, _, attr = cm.module.partition(":")
+        if not attr:
+            raise ValueError(f"chunker module {cm.module!r} must use 'module.path:callable' format")
+        mod = importlib.import_module(module_path)
+        fn = getattr(mod, attr)
+        if not callable(fn):
+            raise ValueError(f"chunker {cm.module!r}: {attr!r} is not callable")
+        registry[f".{cm.ext}"] = fn
+    return registry
+
 
 # ---------------------------------------------------------------------------
 # Daemon paths
@@ -111,7 +135,9 @@ class ProjectRegistry:
         """Get or create a Project for the given root. Lazy initialization."""
         if project_root not in self._projects:
             root = Path(project_root)
-            project = await Project.create(root, self._embedder)
+            project_settings = load_project_settings(root)
+            chunker_registry = _resolve_chunker_registry(project_settings.chunkers)
+            project = await Project.create(root, self._embedder, chunker_registry=chunker_registry)
             self._projects[project_root] = project
         return self._projects[project_root]
 
