@@ -12,13 +12,16 @@ import typer as _typer
 from .client import DaemonStartError
 from .protocol import DoctorCheckResult, IndexingProgress, ProjectStatusResponse, SearchResponse
 from .settings import (
+    cocoindex_db_path,
     default_project_settings,
     default_user_settings,
     find_parent_with_marker,
     find_project_root,
+    project_settings_path,
     resolve_db_dir,
     save_project_settings,
     save_user_settings,
+    target_sqlite_db_path,
     user_settings_path,
 )
 
@@ -284,10 +287,8 @@ def init(
     force: bool = _typer.Option(False, "-f", "--force", help="Skip parent directory warning"),
 ) -> None:
     """Initialize a project for cocoindex-code."""
-    from .settings import project_settings_path as _project_settings_path
-
     cwd = Path.cwd().resolve()
-    settings_file = _project_settings_path(cwd)
+    settings_file = project_settings_path(cwd)
 
     # Always ensure user settings exist
     user_path = user_settings_path()
@@ -377,8 +378,15 @@ def status() -> None:
     """Show project status."""
     from . import client as _client
 
-    project_root = str(require_project_root())
+    project_root_path = require_project_root()
+    project_root = str(project_root_path)
     print_project_header(project_root)
+
+    _typer.echo(f"Settings: {project_settings_path(project_root_path)}")
+    db_path = target_sqlite_db_path(project_root_path)
+    if db_path.exists():
+        _typer.echo(f"Index DB: {db_path}")
+
     print_index_stats(_client.project_status(project_root))
 
 
@@ -393,10 +401,10 @@ def reset(
     db_dir = resolve_db_dir(project_root)
 
     db_files = [
-        db_dir / "cocoindex.db",
-        db_dir / "target_sqlite.db",
+        cocoindex_db_path(project_root),
+        target_sqlite_db_path(project_root),
     ]
-    settings_file = cocoindex_dir / "settings.yml"
+    settings_file = project_settings_path(project_root)
 
     # Determine what will be deleted
     to_delete = [f for f in db_files if f.exists()]
@@ -503,16 +511,10 @@ def doctor() -> None:
     from .settings import (
         load_user_settings as _load_user_settings,
     )
-    from .settings import (
-        project_settings_path as _project_settings_path,
-    )
-    from .settings import (
-        user_settings_path as _user_settings_path,
-    )
 
     # --- 1. Global settings (local, no daemon needed) ---
     _print_section("Global Settings")
-    settings_path = _user_settings_path()
+    settings_path = user_settings_path()
     _typer.echo(f"  Settings: {settings_path}")
     try:
         user_settings = _load_user_settings()
@@ -570,7 +572,7 @@ def doctor() -> None:
     # --- 6. Project settings (local, no daemon needed) ---
     if project_root is not None:
         _print_section("Project Settings")
-        ps_path = _project_settings_path(project_root)
+        ps_path = project_settings_path(project_root)
         _typer.echo(f"  Settings: {ps_path}")
         try:
             ps = _load_project_settings(project_root)
@@ -597,10 +599,9 @@ def doctor() -> None:
 
     # --- 8. Log files ---
     _print_section("Log Files")
-    from .daemon import daemon_dir as _daemon_dir
+    from .daemon import daemon_log_path as _daemon_log_path
 
-    log_dir = _daemon_dir()
-    _typer.echo(f"  Daemon logs: {log_dir / 'daemon.log'}")
+    _typer.echo(f"  Daemon logs: {_daemon_log_path()}")
     _typer.echo("  Check logs above for further troubleshooting.")
 
 

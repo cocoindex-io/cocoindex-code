@@ -343,10 +343,10 @@ def start_daemon() -> subprocess.Popen[bytes]:
     Returns the ``Popen`` object so callers can detect early process death
     (via ``proc.poll()``) instead of waiting for a full timeout.
     """
-    from .daemon import daemon_dir
+    from .daemon import daemon_dir, daemon_log_path
 
     daemon_dir().mkdir(parents=True, exist_ok=True)
-    log_path = daemon_dir() / "daemon.log"
+    log_path = daemon_log_path()
 
     ccc_path = _find_ccc_executable()
     if ccc_path:

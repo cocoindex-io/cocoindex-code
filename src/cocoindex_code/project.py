@@ -21,7 +21,15 @@ from .protocol import (
     SearchResult,
 )
 from .query import query_codebase
-from .settings import resolve_db_dir
+from .settings import (
+    cocoindex_db_path as _cocoindex_db_path,
+)
+from .settings import (
+    resolve_db_dir,
+)
+from .settings import (
+    target_sqlite_db_path as _target_sqlite_db_path,
+)
 from .shared import (
     CODEBASE_DIR,
     EMBEDDER,
@@ -171,7 +179,7 @@ class Project:
         offset: int = 0,
     ) -> list[SearchResult]:
         """Search within this project."""
-        target_db = resolve_db_dir(self._project_root) / "target_sqlite.db"
+        target_db = _target_sqlite_db_path(self._project_root)
         results = await query_codebase(
             query=query,
             target_sqlite_db_path=target_db,
@@ -261,14 +269,14 @@ class Project:
         db_dir = resolve_db_dir(project_root)
         db_dir.mkdir(parents=True, exist_ok=True)
 
-        cocoindex_db_path = db_dir / "cocoindex.db"
-        target_sqlite_db_path = db_dir / "target_sqlite.db"
+        cocoindex_db = _cocoindex_db_path(project_root)
+        target_sqlite_db = _target_sqlite_db_path(project_root)
 
-        settings = coco.Settings.from_env(cocoindex_db_path)
+        settings = coco.Settings.from_env(cocoindex_db)
 
         context = coco.ContextProvider()
         context.provide(CODEBASE_DIR, project_root)
-        context.provide(SQLITE_DB, coco_sqlite.connect(str(target_sqlite_db_path), load_vec=True))
+        context.provide(SQLITE_DB, coco_sqlite.connect(str(target_sqlite_db), load_vec=True))
         context.provide(EMBEDDER, embedder)
 
         env = coco.Environment(settings, context_provider=context)

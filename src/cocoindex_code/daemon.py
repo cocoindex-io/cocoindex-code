@@ -48,7 +48,7 @@ from .protocol import (
 from .settings import (
     global_settings_mtime_us,
     load_user_settings,
-    resolve_db_dir,
+    target_sqlite_db_path,
     user_settings_dir,
 )
 from .shared import Embedder, create_embedder
@@ -346,7 +346,7 @@ async def _check_index_status(project_root_str: str) -> DoctorCheckResult:
     from cocoindex.connectors import sqlite as coco_sqlite
 
     project_root = Path(project_root_str)
-    db_path = resolve_db_dir(project_root) / "target_sqlite.db"
+    db_path = target_sqlite_db_path(project_root)
     details = [f"Index: {db_path}"]
 
     if not db_path.exists():

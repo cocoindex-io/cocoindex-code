@@ -194,6 +194,20 @@ def _reset_db_path_mapping_cache() -> None:
     _db_path_mapping = None
 
 
+_TARGET_SQLITE_DB_NAME = "target_sqlite.db"
+_COCOINDEX_DB_NAME = "cocoindex.db"
+
+
+def target_sqlite_db_path(project_root: Path) -> Path:
+    """Return the path to the vector index SQLite database for a project."""
+    return resolve_db_dir(project_root) / _TARGET_SQLITE_DB_NAME
+
+
+def cocoindex_db_path(project_root: Path) -> Path:
+    """Return the path to the CocoIndex state database for a project."""
+    return resolve_db_dir(project_root) / _COCOINDEX_DB_NAME
+
+
 def user_settings_dir() -> Path:
     """Return ``~/.cocoindex_code/``.
 
@@ -238,7 +252,7 @@ def find_legacy_project_root(start: Path) -> Path | None:
     """
     current = start.resolve()
     while True:
-        if (current / _SETTINGS_DIR_NAME / "cocoindex.db").exists():
+        if (current / _SETTINGS_DIR_NAME / _COCOINDEX_DB_NAME).exists():
             return current
         parent = current.parent
         if parent == current:
