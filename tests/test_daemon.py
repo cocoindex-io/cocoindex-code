@@ -74,8 +74,8 @@ def daemon_sock() -> Iterator[str]:
     os.environ["COCOINDEX_CODE_DIR"] = str(user_dir)
 
     # Patch create_embedder to reuse the already-loaded embedder (performance)
-    _orig_create_embedder = dm.create_embedder  # type: ignore[attr-defined]
-    dm.create_embedder = lambda settings: emb  # type: ignore[attr-defined]
+    _orig_create_embedder = dm.create_embedder
+    dm.create_embedder = lambda settings: emb
 
     save_user_settings(default_user_settings())
 
@@ -107,7 +107,7 @@ def daemon_sock() -> Iterator[str]:
     thread.join(timeout=5)
 
     # Restore patches and env var
-    dm.create_embedder = _orig_create_embedder  # type: ignore[attr-defined]
+    dm.create_embedder = _orig_create_embedder
     if old_env is None:
         os.environ.pop("COCOINDEX_CODE_DIR", None)
     else:
@@ -156,8 +156,8 @@ def _connect_and_handshake(sock_path: str) -> tuple[Connection, Response]:
 
 def test_daemon_starts_and_accepts_handshake(daemon_sock: str) -> None:
     conn, resp = _connect_and_handshake(daemon_sock)
-    assert resp.ok is True  # type: ignore[union-attr]
-    assert resp.daemon_version == __version__  # type: ignore[union-attr]
+    assert resp.ok is True
+    assert resp.daemon_version == __version__
     conn.close()
 
 
@@ -165,7 +165,7 @@ def test_daemon_rejects_version_mismatch(daemon_sock: str) -> None:
     conn = Client(daemon_sock, family=_connection_family())
     conn.send_bytes(encode_request(HandshakeRequest(version="0.0.0-fake")))
     resp = decode_response(conn.recv_bytes())
-    assert resp.ok is False  # type: ignore[union-attr]
+    assert resp.ok is False
     conn.close()
 
 
@@ -173,8 +173,8 @@ def test_daemon_status(daemon_sock: str) -> None:
     conn, _ = _connect_and_handshake(daemon_sock)
     conn.send_bytes(encode_request(DaemonStatusRequest()))
     resp = decode_response(conn.recv_bytes())
-    assert resp.version == __version__  # type: ignore[union-attr]
-    assert resp.uptime_seconds > 0  # type: ignore[union-attr]
+    assert resp.version == __version__
+    assert resp.uptime_seconds > 0
     conn.close()
 
 
@@ -182,8 +182,8 @@ def test_daemon_project_status_after_index(daemon_sock: str, daemon_project: str
     conn, _ = _connect_and_handshake(daemon_sock)
     conn.send_bytes(encode_request(ProjectStatusRequest(project_root=daemon_project)))
     resp = decode_response(conn.recv_bytes())
-    assert resp.total_chunks > 0  # type: ignore[union-attr]
-    assert resp.total_files > 0  # type: ignore[union-attr]
+    assert resp.total_chunks > 0
+    assert resp.total_files > 0
     conn.close()
 
 
@@ -191,9 +191,9 @@ def test_daemon_search_after_index(daemon_sock: str, daemon_project: str) -> Non
     conn, _ = _connect_and_handshake(daemon_sock)
     conn.send_bytes(encode_request(SearchRequest(project_root=daemon_project, query="fibonacci")))
     resp = decode_response(conn.recv_bytes())
-    assert resp.success is True  # type: ignore[union-attr]
-    assert len(resp.results) > 0  # type: ignore[union-attr]
-    assert "main.py" in resp.results[0].file_path  # type: ignore[union-attr]
+    assert resp.success is True
+    assert len(resp.results) > 0
+    assert "main.py" in resp.results[0].file_path
     conn.close()
 
 
@@ -219,14 +219,15 @@ def test_daemon_remove_project(daemon_sock: str, daemon_project: str) -> None:
     conn, _ = _connect_and_handshake(daemon_sock)
     conn.send_bytes(encode_request(RemoveProjectRequest(project_root=daemon_project)))
     resp = decode_response(conn.recv_bytes())
-    assert resp.ok is True  # type: ignore[union-attr]
+    assert hasattr(resp, "ok")
+    assert resp.ok is True
     conn.close()
 
     # Verify project is gone from daemon status (fresh connection)
     conn2, _ = _connect_and_handshake(daemon_sock)
     conn2.send_bytes(encode_request(DaemonStatusRequest()))
     status = decode_response(conn2.recv_bytes())
-    project_roots = [p.project_root for p in status.projects]  # type: ignore[union-attr]
+    project_roots = [p.project_root for p in status.projects]
     assert daemon_project not in project_roots
     conn2.close()
 
@@ -236,7 +237,7 @@ def test_daemon_remove_project_not_loaded(daemon_sock: str) -> None:
     conn, _ = _connect_and_handshake(daemon_sock)
     conn.send_bytes(encode_request(RemoveProjectRequest(project_root="/nonexistent/path")))
     resp = decode_response(conn.recv_bytes())
-    assert resp.ok is True  # type: ignore[union-attr]
+    assert resp.ok is True
     conn.close()
 
 
