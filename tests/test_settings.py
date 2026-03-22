@@ -220,45 +220,45 @@ class TestResolveDbDir:
         )
 
     def test_single_mapping_match(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace:/db-files")
+        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace=/db-files")
         assert resolve_db_dir(Path("/workspace/myproject")) == Path("/db-files/myproject")
 
     def test_exact_root_match(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace:/db-files")
+        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace=/db-files")
         assert resolve_db_dir(Path("/workspace")) == Path("/db-files")
 
     def test_no_match_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace:/db-files")
+        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace=/db-files")
         assert resolve_db_dir(Path("/other/myproject")) == Path("/other/myproject/.cocoindex_code")
 
     def test_multiple_mappings_first_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace:/db1,/workspace/sub:/db2")
+        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace=/db1,/workspace/sub=/db2")
         assert resolve_db_dir(Path("/workspace/sub/proj")) == Path("/db1/sub/proj")
 
     def test_multiple_mappings_second_matches(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace:/db1,/other:/db2")
+        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace=/db1,/other=/db2")
         assert resolve_db_dir(Path("/other/proj")) == Path("/db2/proj")
 
     def test_no_partial_component_match(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace:/db-files")
+        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace=/db-files")
         assert resolve_db_dir(Path("/workspace2/proj")) == Path("/workspace2/proj/.cocoindex_code")
 
     def test_rejects_relative_source(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "relative/path:/db-files")
+        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "relative/path=/db-files")
         with pytest.raises(ValueError, match="source path must be absolute"):
             resolve_db_dir(Path("/anything"))
 
     def test_rejects_relative_target(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace:relative/path")
+        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace=relative/path")
         with pytest.raises(ValueError, match="target path must be absolute"):
             resolve_db_dir(Path("/anything"))
 
     def test_skips_empty_entries(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace:/db-files,,/other:/db2,")
+        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace=/db-files,,/other=/db2,")
         assert resolve_db_dir(Path("/other/proj")) == Path("/db2/proj")
 
     def test_nested_project(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace:/db-files")
+        monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", "/workspace=/db-files")
         assert resolve_db_dir(Path("/workspace/org/repo/subdir")) == Path(
             "/db-files/org/repo/subdir"
         )

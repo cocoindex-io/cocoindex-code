@@ -425,7 +425,7 @@ By default, index databases (`cocoindex.db` and `target_sqlite.db`) live alongsi
 Set `COCOINDEX_CODE_DB_PATH_MAPPING` to remap database locations by path prefix:
 
 ```bash
-COCOINDEX_CODE_DB_PATH_MAPPING=/workspace:/db-files
+COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/db-files
 ```
 
 With this mapping, a project at `/workspace/myrepo` stores its databases in `/db-files/myrepo/` instead of `/workspace/myrepo/.cocoindex_code/`. Settings files remain in the original location.
@@ -433,7 +433,7 @@ With this mapping, a project at `/workspace/myrepo` stores its databases in `/db
 Multiple mappings are comma-separated and resolved in order (first match wins):
 
 ```bash
-COCOINDEX_CODE_DB_PATH_MAPPING=/workspace:/db-files,/workspace2:/db-files2
+COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/db-files,/workspace2=/db-files2
 ```
 
 Both source and target must be absolute paths. If no mapping matches, the default location is used.

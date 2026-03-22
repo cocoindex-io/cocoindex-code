@@ -606,7 +606,7 @@ def e2e_project_with_db_mapping() -> Iterator[tuple[Path, Path]]:
     }
     os.environ["COCOINDEX_CODE_DIR"] = str(base_dir)
     workspace = str(base_dir / "workspace")
-    os.environ["COCOINDEX_CODE_DB_PATH_MAPPING"] = f"{workspace}:{db_base_dir}"
+    os.environ["COCOINDEX_CODE_DB_PATH_MAPPING"] = f"{workspace}={db_base_dir}"
     _reset_db_path_mapping_cache()
     old_cwd = os.getcwd()
     os.chdir(project_dir)

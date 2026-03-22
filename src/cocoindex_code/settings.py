@@ -131,7 +131,7 @@ _db_path_mapping: list[DbPathMapping] | None = None
 def _parse_db_path_mapping() -> list[DbPathMapping]:
     """Parse ``COCOINDEX_CODE_DB_PATH_MAPPING`` env var.
 
-    Format: ``/src1:/dst1,/src2:/dst2``
+    Format: ``/src1=/dst1,/src2=/dst2``
     Both source and target must be absolute paths.
     """
     raw = os.environ.get(_ENV_DB_PATH_MAPPING, "")
@@ -143,11 +143,10 @@ def _parse_db_path_mapping() -> list[DbPathMapping]:
         entry = entry.strip()
         if not entry:
             continue
-        # Split on first colon only (to be robust with edge cases)
-        parts = entry.split(":", 1)
+        parts = entry.split("=", 1)
         if len(parts) != 2 or not parts[0] or not parts[1]:
             raise ValueError(
-                f"{_ENV_DB_PATH_MAPPING}: invalid entry {entry!r}, expected format 'source:target'"
+                f"{_ENV_DB_PATH_MAPPING}: invalid entry {entry!r}, expected format 'source=target'"
             )
         source = Path(parts[0])
         target = Path(parts[1])
