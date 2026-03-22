@@ -158,9 +158,15 @@ class DoctorResponse(_msgspec.Struct, tag="doctor"):
     final: bool = False
 
 
+class DbPathMappingEntry(_msgspec.Struct):
+    source: str
+    target: str
+
+
 class DaemonEnvResponse(_msgspec.Struct, tag="daemon_env"):
     env_names: list[str]
     settings_env_names: list[str]
+    db_path_mappings: list[DbPathMappingEntry] = []
 
 
 class ErrorResponse(_msgspec.Struct, tag="error"):

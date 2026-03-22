@@ -21,6 +21,7 @@ from .protocol import (
     SearchResult,
 )
 from .query import query_codebase
+from .settings import resolve_db_dir
 from .shared import (
     CODEBASE_DIR,
     EMBEDDER,
@@ -170,7 +171,7 @@ class Project:
         offset: int = 0,
     ) -> list[SearchResult]:
         """Search within this project."""
-        target_db = self._project_root / ".cocoindex_code" / "target_sqlite.db"
+        target_db = resolve_db_dir(self._project_root) / "target_sqlite.db"
         results = await query_codebase(
             query=query,
             target_sqlite_db_path=target_db,
@@ -254,11 +255,14 @@ class Project:
         indexer loads them fresh from disk on every run so that user edits
         take effect without restarting the daemon.
         """
-        index_dir = project_root / ".cocoindex_code"
-        index_dir.mkdir(parents=True, exist_ok=True)
+        settings_dir = project_root / ".cocoindex_code"
+        settings_dir.mkdir(parents=True, exist_ok=True)
 
-        cocoindex_db_path = index_dir / "cocoindex.db"
-        target_sqlite_db_path = index_dir / "target_sqlite.db"
+        db_dir = resolve_db_dir(project_root)
+        db_dir.mkdir(parents=True, exist_ok=True)
+
+        cocoindex_db_path = db_dir / "cocoindex.db"
+        target_sqlite_db_path = db_dir / "target_sqlite.db"
 
         settings = coco.Settings.from_env(cocoindex_db_path)
 

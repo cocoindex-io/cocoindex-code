@@ -48,6 +48,7 @@ from .protocol import (
 from .settings import (
     global_settings_mtime_us,
     load_user_settings,
+    resolve_db_dir,
     user_settings_dir,
 )
 from .shared import Embedder, create_embedder
@@ -345,7 +346,7 @@ async def _check_index_status(project_root_str: str) -> DoctorCheckResult:
     from cocoindex.connectors import sqlite as coco_sqlite
 
     project_root = Path(project_root_str)
-    db_path = project_root / ".cocoindex_code" / "target_sqlite.db"
+    db_path = resolve_db_dir(project_root) / "target_sqlite.db"
     details = [f"Index: {db_path}"]
 
     if not db_path.exists():
@@ -441,9 +442,16 @@ async def _dispatch(
             return StopResponse(ok=True)
 
         if isinstance(req, DaemonEnvRequest):
+            from .protocol import DbPathMappingEntry
+            from .settings import get_db_path_mappings
+
             return DaemonEnvResponse(
                 env_names=sorted(os.environ.keys()),
                 settings_env_names=settings_env_names,
+                db_path_mappings=[
+                    DbPathMappingEntry(source=str(m.source), target=str(m.target))
+                    for m in get_db_path_mappings()
+                ],
             )
 
         if isinstance(req, DoctorRequest):

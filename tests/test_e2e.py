@@ -20,6 +20,7 @@ from typer.testing import CliRunner
 from cocoindex_code.cli import app
 from cocoindex_code.client import stop_daemon
 from cocoindex_code.settings import (
+    _reset_db_path_mapping_cache,
     default_project_settings,
     find_parent_with_marker,
     save_project_settings,
@@ -578,6 +579,87 @@ def test_session_daemon_restart_missing_global_settings() -> None:
     assert result.exit_code != 0, f"Expected failure but got: {result.output}"
     assert "Daemon log:" in result.output
     assert "User settings not found" in result.output
+
+
+# ---------------------------------------------------------------------------
+# DB path mapping tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def e2e_project_with_db_mapping() -> Iterator[tuple[Path, Path]]:
+    """Set up a project with COCOINDEX_CODE_DB_PATH_MAPPING pointing to a separate db dir.
+
+    Yields (project_dir, db_base_dir).
+    """
+    base_dir = Path(tempfile.mkdtemp(prefix="ccc_e2e_"))
+    project_dir = base_dir / "workspace" / "myproject"
+    project_dir.mkdir(parents=True)
+    db_base_dir = base_dir / "db-files"
+    db_base_dir.mkdir()
+
+    (project_dir / "main.py").write_text(SAMPLE_MAIN_PY)
+    (project_dir / ".git").mkdir()
+
+    old_env = {
+        k: os.environ.get(k) for k in ("COCOINDEX_CODE_DIR", "COCOINDEX_CODE_DB_PATH_MAPPING")
+    }
+    os.environ["COCOINDEX_CODE_DIR"] = str(base_dir)
+    workspace = str(base_dir / "workspace")
+    os.environ["COCOINDEX_CODE_DB_PATH_MAPPING"] = f"{workspace}:{db_base_dir}"
+    _reset_db_path_mapping_cache()
+    old_cwd = os.getcwd()
+    os.chdir(project_dir)
+
+    try:
+        yield project_dir, db_base_dir
+    finally:
+        os.chdir(project_dir)
+        runner.invoke(app, ["reset", "--all", "-f"])
+        stop_daemon()
+        os.chdir(old_cwd)
+        _reset_db_path_mapping_cache()
+        for k, v in old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def test_session_db_path_mapping(
+    e2e_project_with_db_mapping: tuple[Path, Path],
+) -> None:
+    """Init → index → verify databases are in the mapped directory → search works."""
+    project_dir, db_base_dir = e2e_project_with_db_mapping
+    mapped_db_dir = db_base_dir / "myproject"
+
+    # Init
+    result = runner.invoke(app, ["init"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+    # Settings should be in the project dir, NOT the mapped dir
+    assert (project_dir / ".cocoindex_code" / "settings.yml").exists()
+
+    # Index
+    result = runner.invoke(app, ["index"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+    # Databases should be in the mapped directory
+    assert (mapped_db_dir / "target_sqlite.db").exists()
+    # Databases should NOT be in the project's .cocoindex_code dir
+    assert not (project_dir / ".cocoindex_code" / "target_sqlite.db").exists()
+
+    # Search should work
+    result = runner.invoke(app, ["search", "fibonacci"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert "main.py" in result.output
+
+    # Reset should clean databases from the mapped dir
+    result = runner.invoke(app, ["reset", "-f"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert not (mapped_db_dir / "target_sqlite.db").exists()
+    # Settings still in place
+    assert (project_dir / ".cocoindex_code" / "settings.yml").exists()
 
 
 # ---------------------------------------------------------------------------

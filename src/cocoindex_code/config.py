@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .settings import resolve_db_dir
+
 _DEFAULT_MODEL = "sbert/sentence-transformers/all-MiniLM-L6-v2"
 
 
@@ -96,8 +98,8 @@ class Config:
             _DEFAULT_MODEL,
         )
 
-        # Index directory is always under the root
-        index_dir = root / ".cocoindex_code"
+        # Index directory: apply DB path mapping if configured
+        index_dir = resolve_db_dir(root)
 
         # Device: auto-detect CUDA or use env override
         device = os.environ.get("COCOINDEX_CODE_DEVICE")

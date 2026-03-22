@@ -16,6 +16,7 @@ from .settings import (
     default_user_settings,
     find_parent_with_marker,
     find_project_root,
+    resolve_db_dir,
     save_project_settings,
     save_user_settings,
     user_settings_path,
@@ -389,10 +390,11 @@ def reset(
     """Reset project databases and optionally remove settings."""
     project_root = require_project_root()
     cocoindex_dir = project_root / ".cocoindex_code"
+    db_dir = resolve_db_dir(project_root)
 
     db_files = [
-        cocoindex_dir / "cocoindex.db",
-        cocoindex_dir / "target_sqlite.db",
+        db_dir / "cocoindex.db",
+        db_dir / "target_sqlite.db",
     ]
     settings_file = cocoindex_dir / "settings.yml"
 
@@ -436,6 +438,12 @@ def reset(
             f.unlink(missing_ok=True)
 
     if all_:
+        # Remove db_dir if empty and different from cocoindex_dir
+        if db_dir != cocoindex_dir:
+            try:
+                db_dir.rmdir()
+            except OSError:
+                pass  # Not empty or doesn't exist
         # Remove .cocoindex_code/ if empty
         try:
             cocoindex_dir.rmdir()
@@ -539,6 +547,10 @@ def doctor() -> None:
             other_keys = [k for k in env_resp.env_names if k not in settings_keys]
             if other_keys:
                 _typer.echo(f"  Other env vars in daemon: {', '.join(sorted(other_keys))}")
+            if env_resp.db_path_mappings:
+                _typer.echo("  DB path mappings:")
+                for m in env_resp.db_path_mappings:
+                    _typer.echo(f"    {m.source} \u2192 {m.target}")
         except Exception as e:
             _print_error(f"Failed to get daemon env: {e}")
 

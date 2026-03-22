@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -115,14 +116,90 @@ _SETTINGS_DIR_NAME = ".cocoindex_code"
 _SETTINGS_FILE_NAME = "settings.yml"  # project-level
 _USER_SETTINGS_FILE_NAME = "global_settings.yml"  # user-level
 
+_ENV_DB_PATH_MAPPING = "COCOINDEX_CODE_DB_PATH_MAPPING"
+
+
+@dataclass
+class DbPathMapping:
+    source: Path
+    target: Path
+
+
+_db_path_mapping: list[DbPathMapping] | None = None
+
+
+def _parse_db_path_mapping() -> list[DbPathMapping]:
+    """Parse ``COCOINDEX_CODE_DB_PATH_MAPPING`` env var.
+
+    Format: ``/src1:/dst1,/src2:/dst2``
+    Both source and target must be absolute paths.
+    """
+    raw = os.environ.get(_ENV_DB_PATH_MAPPING, "")
+    if not raw.strip():
+        return []
+
+    mappings: list[DbPathMapping] = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        # Split on first colon only (to be robust with edge cases)
+        parts = entry.split(":", 1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise ValueError(
+                f"{_ENV_DB_PATH_MAPPING}: invalid entry {entry!r}, expected format 'source:target'"
+            )
+        source = Path(parts[0])
+        target = Path(parts[1])
+        if not source.is_absolute():
+            raise ValueError(
+                f"{_ENV_DB_PATH_MAPPING}: source path must be absolute, got {source!r}"
+            )
+        if not target.is_absolute():
+            raise ValueError(
+                f"{_ENV_DB_PATH_MAPPING}: target path must be absolute, got {target!r}"
+            )
+        mappings.append(DbPathMapping(source=source.resolve(), target=target.resolve()))
+    return mappings
+
+
+def resolve_db_dir(project_root: Path) -> Path:
+    """Return the directory for database files given a project root.
+
+    Applies ``COCOINDEX_CODE_DB_PATH_MAPPING`` if set, otherwise falls back
+    to ``project_root / ".cocoindex_code"``.
+    """
+    global _db_path_mapping  # noqa: PLW0603
+    if _db_path_mapping is None:
+        _db_path_mapping = _parse_db_path_mapping()
+
+    resolved = project_root.resolve()
+    for mapping in _db_path_mapping:
+        if resolved == mapping.source or resolved.is_relative_to(mapping.source):
+            rel = resolved.relative_to(mapping.source)
+            return mapping.target / rel
+    return project_root / _SETTINGS_DIR_NAME
+
+
+def get_db_path_mappings() -> list[DbPathMapping]:
+    """Return the parsed DB path mappings from ``COCOINDEX_CODE_DB_PATH_MAPPING``."""
+    global _db_path_mapping  # noqa: PLW0603
+    if _db_path_mapping is None:
+        _db_path_mapping = _parse_db_path_mapping()
+    return list(_db_path_mapping)
+
+
+def _reset_db_path_mapping_cache() -> None:
+    """Reset the cached mapping (for tests)."""
+    global _db_path_mapping  # noqa: PLW0603
+    _db_path_mapping = None
+
 
 def user_settings_dir() -> Path:
     """Return ``~/.cocoindex_code/``.
 
     Respects ``COCOINDEX_CODE_DIR`` env var for overriding the base directory.
     """
-    import os
-
     override = os.environ.get("COCOINDEX_CODE_DIR")
     if override:
         return Path(override)
