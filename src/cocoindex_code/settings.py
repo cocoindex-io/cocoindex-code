@@ -45,6 +45,29 @@ DEFAULT_INCLUDED_PATTERNS: list[str] = [
     "**/*.rst",  # reStructuredText
     "**/*.php",  # PHP
     "**/*.lua",  # Lua
+    "**/*.rb",  # Ruby
+    "**/*.swift",  # Swift
+    "**/*.kt",  # Kotlin
+    "**/*.kts",  # Kotlin script
+    "**/*.scala",  # Scala
+    "**/*.r",  # R
+    "**/*.html",  # HTML
+    "**/*.htm",  # HTML
+    "**/*.css",  # CSS
+    "**/*.scss",  # SCSS
+    "**/*.json",  # JSON
+    "**/*.xml",  # XML
+    "**/*.yaml",  # YAML
+    "**/*.yml",  # YAML
+    "**/*.toml",  # TOML
+    "**/*.sol",  # Solidity
+    "**/*.pas",  # Pascal
+    "**/*.dpr",  # Pascal/Delphi
+    "**/*.dtd",  # DTD
+    "**/*.f",  # Fortran
+    "**/*.f90",  # Fortran
+    "**/*.f95",  # Fortran
+    "**/*.f03",  # Fortran
 ]
 
 DEFAULT_EXCLUDED_PATTERNS: list[str] = [
