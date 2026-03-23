@@ -187,6 +187,105 @@ ccc search --refresh database schema                 # update index first, then 
 
 By default, `ccc search` scopes results to your current working directory (relative to the project root). Use `--path` to override.
 
+## Docker
+
+A Docker image is available for teams who want a reproducible, dependency-free
+setup — no Python, `uv`, or system dependencies required on the host.
+
+The recommended approach is a **persistent container**: start it once, and use
+`docker exec` to run CLI commands or connect MCP sessions to it. The daemon
+inside stays warm across sessions, so the embedding model is loaded only once.
+
+### Step 1 — Start the container
+
+```bash
+docker run -d --name cocoindex-code \
+  --volume "$(pwd):/workspace" \
+  --volume cocoindex-db:/db \
+  --volume cocoindex-model-cache:/root/.cache \
+  ghcr.io/cocoindex-io/cocoindex-code:latest
+```
+
+- `/workspace` — mount your project root here
+- `cocoindex-db` — index databases live inside the container (fast native I/O, no cross-OS volume issues)
+- `cocoindex-model-cache` — persists the embedding model across image upgrades
+
+### Step 2 — Index your codebase
+
+```bash
+docker exec -it cocoindex-code ccc index
+```
+
+### Step 3 — Connect your coding agent
+
+<details>
+<summary>Claude Code</summary>
+
+```bash
+claude mcp add cocoindex-code -- docker exec -i cocoindex-code ccc mcp
+```
+
+Or via `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "cocoindex-code": {
+      "type": "stdio",
+      "command": "docker",
+      "args": ["exec", "-i", "cocoindex-code", "ccc", "mcp"]
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary>Codex</summary>
+
+```bash
+codex mcp add cocoindex-code -- docker exec -i cocoindex-code ccc mcp
+```
+</details>
+
+### CLI usage inside the container
+
+All `ccc` commands work via `docker exec`:
+
+```bash
+docker exec -it cocoindex-code ccc index
+docker exec -it cocoindex-code ccc search "authentication logic"
+docker exec -it cocoindex-code ccc status
+```
+
+Or set an alias on your host so it feels native:
+
+```bash
+alias ccc='docker exec -it cocoindex-code ccc'
+```
+
+### Configuration via environment variables
+
+Pass configuration to `docker run` with `-e`:
+
+```bash
+# Extra extensions (e.g. Typesafe Config, SBT build files)
+-e COCOINDEX_CODE_EXTRA_EXTENSIONS="conf,sbt"
+
+# Exclude build artefacts (Scala/SBT example)
+-e COCOINDEX_CODE_EXCLUDE_PATTERNS='["**/target/**","**/.bloop/**","**/.metals/**"]'
+
+# Swap in a code-optimised embedding model
+-e COCOINDEX_CODE_EMBEDDING_MODEL=voyage/voyage-code-3
+-e VOYAGE_API_KEY=your-key
+```
+
+### Build the image locally
+
+```bash
+docker build -t cocoindex-code:local -f docker/Dockerfile .
+```
+
 ## Features
 - **Semantic Code Search**: Find relevant code using natural language queries when grep doesn't work well, and save tokens immediately.
 - **Ultra Performant**: ⚡ Built on top of ultra performant [Rust indexing engine](https://github.com/cocoindex-io/cocoindex). Only re-indexes changed files for fast updates.
