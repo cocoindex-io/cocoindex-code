@@ -11,6 +11,7 @@ embedding:
   provider: sentence-transformers   # or "litellm" (default when provider is omitted)
   model: sentence-transformers/all-MiniLM-L6-v2
   device: mps                       # optional: cpu, cuda, mps (auto-detected if omitted)
+  min_interval_ms: 300              # optional: pace LiteLLM embedding requests to reduce 429s; defaults to 5 for LiteLLM
 
 envs:                               # extra environment variables for the daemon
   OPENAI_API_KEY: your-key          # only needed if not already in the shell environment
@@ -23,6 +24,7 @@ envs:                               # extra environment variables for the daemon
 | `embedding.provider` | `sentence-transformers` for local models, `litellm` (or omit) for cloud/remote models |
 | `embedding.model` | Model identifier — format depends on provider (see examples below) |
 | `embedding.device` | Optional. `cpu`, `cuda`, or `mps`. Auto-detected if omitted. Only relevant for `sentence-transformers`. |
+| `embedding.min_interval_ms` | Optional. Minimum delay between LiteLLM embedding requests in milliseconds. Defaults to `5` for LiteLLM and is ignored by `sentence-transformers`. Set explicitly to override the default. |
 | `envs` | Key-value map of environment variables injected into the daemon. Use for API keys not already in the shell environment. |
 
 ### Embedding Model Examples
@@ -53,6 +55,7 @@ embedding:
 ```yaml
 embedding:
   model: text-embedding-3-small
+  min_interval_ms: 300
 envs:
   OPENAI_API_KEY: your-api-key
 ```
