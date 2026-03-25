@@ -306,6 +306,7 @@ embedding:
   provider: sentence-transformers                    # or "litellm"
   model: sentence-transformers/all-MiniLM-L6-v2
   device: mps                                        # optional: cpu, cuda, mps (auto-detected if omitted)
+  min_interval_ms: 300                               # optional: pace LiteLLM embedding requests to reduce 429s; defaults to 5 for LiteLLM
 
 envs:                                                # extra environment variables for the daemon
   OPENAI_API_KEY: your-key                           # only needed if not already in your shell environment
@@ -397,6 +398,7 @@ Set `OLLAMA_API_BASE` in `envs:` if your Ollama server is not at `http://localho
 ```yaml
 embedding:
   model: text-embedding-3-small
+  min_interval_ms: 300                               # optional: override the 5ms LiteLLM default
 envs:
   OPENAI_API_KEY: your-api-key
 ```

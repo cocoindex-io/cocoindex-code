@@ -49,6 +49,7 @@ def test_default_user_settings() -> None:
     assert s.embedding.provider == "sentence-transformers"
     assert "all-MiniLM-L6-v2" in s.embedding.model
     assert s.embedding.device is None
+    assert s.embedding.min_interval_ms is None
     assert s.envs == {}
 
 
@@ -66,6 +67,7 @@ def test_save_and_load_user_settings(tmp_path: Path) -> None:
             provider="litellm",
             model="gemini/text-embedding-004",
             device="cpu",
+            min_interval_ms=300,
         ),
         envs={"GEMINI_API_KEY": "test-key"},
     )
@@ -74,6 +76,7 @@ def test_save_and_load_user_settings(tmp_path: Path) -> None:
     assert loaded.embedding.provider == settings.embedding.provider
     assert loaded.embedding.model == settings.embedding.model
     assert loaded.embedding.device == settings.embedding.device
+    assert loaded.embedding.min_interval_ms == settings.embedding.min_interval_ms
     assert loaded.envs == settings.envs
 
 
@@ -123,6 +126,7 @@ def test_from_dict_missing_provider_defaults_to_litellm() -> None:
     settings = _user_settings_from_dict({"embedding": {"model": "some/model"}})
     assert settings.embedding.provider == "litellm"
     assert settings.embedding.model == "some/model"
+    assert settings.embedding.min_interval_ms is None
 
 
 @pytest.mark.usefixtures("_patch_user_dir")
@@ -186,6 +190,7 @@ def test_user_settings_litellm_round_trip() -> None:
         embedding=EmbeddingSettings(
             provider="litellm",
             model="gemini/text-embedding-004",
+            min_interval_ms=250,
         ),
         envs={"GEMINI_API_KEY": "test"},
     )
@@ -193,7 +198,21 @@ def test_user_settings_litellm_round_trip() -> None:
     loaded = load_user_settings()
     assert loaded.embedding.provider == "litellm"
     assert loaded.embedding.model == "gemini/text-embedding-004"
+    assert loaded.embedding.min_interval_ms == 250
     assert loaded.envs == {"GEMINI_API_KEY": "test"}
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_load_user_settings_with_min_interval_ms(tmp_path: Path) -> None:
+    path = tmp_path / ".cocoindex_code" / "global_settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "embedding:\n  provider: litellm\n  model: text-embedding-3-small\n  min_interval_ms: 300\n"
+    )
+    loaded = load_user_settings()
+    assert loaded.embedding.provider == "litellm"
+    assert loaded.embedding.model == "text-embedding-3-small"
+    assert loaded.embedding.min_interval_ms == 300
 
 
 def test_project_settings_with_language_overrides(tmp_path: Path) -> None:

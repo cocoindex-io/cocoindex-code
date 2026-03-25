@@ -21,6 +21,7 @@ from .settings import EmbeddingSettings
 logger = logging.getLogger(__name__)
 
 SBERT_PREFIX = "sbert/"
+DEFAULT_LITELLM_MIN_INTERVAL_MS = 5
 
 # Models that define a "query" prompt for asymmetric retrieval.
 _QUERY_PROMPT_MODELS = {"nomic-ai/nomic-embed-code", "nomic-ai/CodeRankEmbed"}
@@ -63,11 +64,23 @@ def create_embedder(settings: EmbeddingSettings) -> Embedder:
         )
         logger.info("Embedding model: %s | device: %s", settings.model, settings.device)
     else:
-        from cocoindex.ops.litellm import LiteLLMEmbedder
+        from .litellm_embedder import PacedLiteLLMEmbedder
 
-        instance = LiteLLMEmbedder(settings.model)
+        min_interval_ms = (
+            settings.min_interval_ms
+            if settings.min_interval_ms is not None
+            else DEFAULT_LITELLM_MIN_INTERVAL_MS
+        )
+        instance = PacedLiteLLMEmbedder(
+            settings.model,
+            min_interval_ms=min_interval_ms,
+        )
         query_prompt_name = None
-        logger.info("Embedding model (LiteLLM): %s", settings.model)
+        logger.info(
+            "Embedding model (LiteLLM): %s | min_interval_ms: %s",
+            settings.model,
+            min_interval_ms,
+        )
 
     embedder = instance
     return instance
