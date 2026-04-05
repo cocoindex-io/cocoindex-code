@@ -92,6 +92,7 @@ class EmbeddingSettings:
     model: str
     provider: str = "litellm"
     device: str | None = None
+    min_interval_ms: int | None = None
 
 
 @dataclass
@@ -351,6 +352,8 @@ def _user_settings_to_dict(settings: UserSettings) -> dict[str, Any]:
     }
     if settings.embedding.device is not None:
         emb["device"] = settings.embedding.device
+    if settings.embedding.min_interval_ms is not None:
+        emb["min_interval_ms"] = settings.embedding.min_interval_ms
     d["embedding"] = emb
     if settings.envs:
         d["envs"] = dict(settings.envs)
@@ -367,6 +370,8 @@ def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
         emb_kwargs["provider"] = emb_dict["provider"]
     if "device" in emb_dict:
         emb_kwargs["device"] = emb_dict["device"]
+    if "min_interval_ms" in emb_dict:
+        emb_kwargs["min_interval_ms"] = emb_dict["min_interval_ms"]
     embedding = EmbeddingSettings(**emb_kwargs)
     envs = d.get("envs", {})
     return UserSettings(embedding=embedding, envs=envs)
