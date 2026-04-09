@@ -9,6 +9,9 @@ on:
 jobs:
   pre-commit:
     runs-on: ${{ matrix.os }}
+    # Free-threaded Python (3.14t) lacks pre-built wheels for tokenizers;
+    # the fallback source build is fragile across macOS toolchain updates.
+    continue-on-error: ${{ matrix.python-version == '3.14t' }}
     strategy:
       fail-fast: false
       matrix:
