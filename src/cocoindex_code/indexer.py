@@ -224,5 +224,6 @@ async def indexer_main() -> None:
         path_matcher=matcher,
     )
 
-    with coco.component_subpath(coco.Symbol("process_file")):
-        await coco.mount_each(process_file, files.items(), table)
+    await coco.mount_each(
+        coco.component_subpath(coco.Symbol("process_file")), process_file, files.items(), table
+    )
