@@ -599,7 +599,7 @@ def doctor() -> None:
 
     # --- 8. Log files ---
     _print_section("Log Files")
-    from .daemon import daemon_log_path as _daemon_log_path
+    from ._daemon_paths import daemon_log_path as _daemon_log_path
 
     _typer.echo(f"  Daemon logs: {_daemon_log_path()}")
     _typer.echo("  Check logs above for further troubleshooting.")
@@ -675,8 +675,8 @@ def daemon_restart() -> None:
 @daemon_app.command("stop")
 def daemon_stop() -> None:
     """Stop the daemon."""
+    from ._daemon_paths import daemon_pid_path
     from .client import is_daemon_running, stop_daemon
-    from .daemon import daemon_pid_path
 
     pid_path = daemon_pid_path()
     if not pid_path.exists() and not is_daemon_running():

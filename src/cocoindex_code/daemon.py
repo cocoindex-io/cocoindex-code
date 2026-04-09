@@ -15,6 +15,13 @@ from multiprocessing.connection import Connection, Listener
 from pathlib import Path
 from typing import Any
 
+from ._daemon_paths import (
+    connection_family,
+    daemon_dir,
+    daemon_log_path,
+    daemon_pid_path,
+    daemon_socket_path,
+)
 from ._version import __version__
 from .chunking import ChunkerFn as _ChunkerFn
 from .project import Project
@@ -53,7 +60,6 @@ from .settings import (
     load_project_settings,
     load_user_settings,
     target_sqlite_db_path,
-    user_settings_dir,
 )
 from .shared import Embedder, create_embedder
 
@@ -77,43 +83,6 @@ def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> dict[str, _Chun
             raise ValueError(f"chunker {cm.module!r}: {attr!r} is not callable")
         registry[f".{cm.ext}"] = fn
     return registry
-
-
-# ---------------------------------------------------------------------------
-# Daemon paths
-# ---------------------------------------------------------------------------
-
-
-def daemon_dir() -> Path:
-    """Return the daemon directory (``~/.cocoindex_code/``)."""
-    return user_settings_dir()
-
-
-def _connection_family() -> str:
-    """Return the multiprocessing connection family for this platform."""
-    return "AF_PIPE" if sys.platform == "win32" else "AF_UNIX"
-
-
-def daemon_socket_path() -> str:
-    """Return the daemon socket/pipe address."""
-    if sys.platform == "win32":
-        import hashlib
-
-        # Hash the daemon dir so COCOINDEX_CODE_DIR overrides create unique pipe names,
-        # preventing conflicts between different daemon instances (tests, users, etc.)
-        dir_hash = hashlib.md5(str(daemon_dir()).encode()).hexdigest()[:12]
-        return rf"\\.\pipe\cocoindex_code_{dir_hash}"
-    return str(daemon_dir() / "daemon.sock")
-
-
-def daemon_pid_path() -> Path:
-    """Return the path for the daemon's PID file."""
-    return daemon_dir() / "daemon.pid"
-
-
-def daemon_log_path() -> Path:
-    """Return the path for the daemon's log file."""
-    return daemon_dir() / "daemon.log"
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +509,7 @@ def run_daemon() -> None:
         except Exception:
             pass
 
-    listener = Listener(sock_path, family=_connection_family())
+    listener = Listener(sock_path, family=connection_family())
     logger.info("Listening on %s", sock_path)
 
     loop = asyncio.new_event_loop()

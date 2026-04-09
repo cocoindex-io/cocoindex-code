@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from cocoindex_code._daemon_paths import connection_family
 from cocoindex_code._version import __version__
-from cocoindex_code.daemon import _connection_family
 from cocoindex_code.protocol import (
     DaemonStatusRequest,
     HandshakeRequest,
@@ -96,7 +96,7 @@ def daemon_sock() -> Iterator[str]:
 
     # Gracefully shut down the daemon thread so named pipes are released on Windows
     try:
-        conn = Client(sock_path, family=_connection_family())
+        conn = Client(sock_path, family=connection_family())
         conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
         conn.recv_bytes()
         conn.send_bytes(encode_request(StopRequest()))
@@ -136,7 +136,7 @@ def daemon_project(daemon_sock: str) -> str:
     save_project_settings(project, default_project_settings())
     (project / "main.py").write_text(SAMPLE_MAIN_PY)
 
-    conn = Client(daemon_sock, family=_connection_family())
+    conn = Client(daemon_sock, family=connection_family())
     conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
     decode_response(conn.recv_bytes())
     conn.send_bytes(encode_request(IndexRequest(project_root=str(project))))
@@ -148,7 +148,7 @@ def daemon_project(daemon_sock: str) -> str:
 
 
 def _connect_and_handshake(sock_path: str) -> tuple[Connection, Response]:
-    conn = Client(sock_path, family=_connection_family())
+    conn = Client(sock_path, family=connection_family())
     conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
     resp = decode_response(conn.recv_bytes())
     return conn, resp
@@ -162,7 +162,7 @@ def test_daemon_starts_and_accepts_handshake(daemon_sock: str) -> None:
 
 
 def test_daemon_rejects_version_mismatch(daemon_sock: str) -> None:
-    conn = Client(daemon_sock, family=_connection_family())
+    conn = Client(daemon_sock, family=connection_family())
     conn.send_bytes(encode_request(HandshakeRequest(version="0.0.0-fake")))
     resp = decode_response(conn.recv_bytes())
     assert resp.ok is False

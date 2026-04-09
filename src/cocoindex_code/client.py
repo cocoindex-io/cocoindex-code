@@ -17,8 +17,14 @@ from collections.abc import Callable
 from multiprocessing.connection import Client, Connection
 from pathlib import Path
 
+from ._daemon_paths import (
+    connection_family,
+    daemon_dir,
+    daemon_log_path,
+    daemon_pid_path,
+    daemon_socket_path,
+)
 from ._version import __version__
-from .daemon import _connection_family, daemon_log_path, daemon_pid_path, daemon_socket_path
 from .protocol import (
     DaemonEnvRequest,
     DaemonEnvResponse,
@@ -105,7 +111,7 @@ def _raw_connect_and_handshake() -> Connection:
     if sys.platform != "win32" and not os.path.exists(sock):
         raise ConnectionRefusedError(f"Daemon socket not found: {sock}")
     try:
-        conn = Client(sock, family=_connection_family())
+        conn = Client(sock, family=connection_family())
     except (ConnectionRefusedError, FileNotFoundError, OSError) as e:
         raise ConnectionRefusedError(f"Cannot connect to daemon: {e}") from e
 
@@ -329,7 +335,7 @@ def is_daemon_running() -> bool:
     """Check if the daemon is running."""
     if sys.platform == "win32":
         try:
-            conn = Client(daemon_socket_path(), family=_connection_family())
+            conn = Client(daemon_socket_path(), family=connection_family())
             conn.close()
             return True
         except (ConnectionRefusedError, OSError):
@@ -343,8 +349,6 @@ def start_daemon() -> subprocess.Popen[bytes]:
     Returns the ``Popen`` object so callers can detect early process death
     (via ``proc.poll()``) instead of waiting for a full timeout.
     """
-    from .daemon import daemon_dir, daemon_log_path
-
     daemon_dir().mkdir(parents=True, exist_ok=True)
     log_path = daemon_log_path()
 
@@ -518,7 +522,7 @@ def _wait_for_daemon(
 
         if sys.platform == "win32":
             try:
-                conn = Client(sock_path, family=_connection_family())
+                conn = Client(sock_path, family=connection_family())
                 conn.close()
                 return
             except (ConnectionRefusedError, OSError):
