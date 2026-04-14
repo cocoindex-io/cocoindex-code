@@ -126,6 +126,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # QEMU lets buildx cross-compile linux/arm64 on the x86_64 runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -172,6 +178,9 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
+          # Native amd64 for Linux servers + Intel Macs; arm64 (cross-compiled
+          # via QEMU) for Apple Silicon Macs and arm64 Linux hosts.
+          platforms: linux/amd64,linux/arm64
           # Install cocoindex-code from the checked-out source tree, not PyPI.
           # Avoids a race where a just-published version hasn't propagated to
           # PyPI's CDN yet (which happened on v0.2.24 release), and ensures
