@@ -10,6 +10,11 @@ on:
         required: false
         type: boolean
         default: false
+      test_docker:
+        description: 'Build & push the Docker image (tagged :test) without running PyPI publish — use to verify Docker Hub / GHCR credentials'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -108,9 +113,9 @@ jobs:
 
   publish-docker:
     name: Build & push Docker image to Docker Hub and GHCR
-    if: github.event_name == 'release'
-    needs:
-      - publish-to-pypi
+    # Runs on real releases, and on manual dispatch with `test_docker=true`
+    # for verifying registry credentials before the first release.
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.test_docker)
     runs-on: ubuntu-latest
     environment:
       name: docker-hub
@@ -138,14 +143,39 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute image tags
+        id: tags
+        # Real releases: push `:latest` and `:<version>` to both registries.
+        # Manual dispatches: push only `:test` so we don't clobber `:latest`.
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            {
+              echo "tags<<EOF"
+              echo "cocoindex/cocoindex-code:latest"
+              echo "cocoindex/cocoindex-code:${{ github.ref_name }}"
+              echo "ghcr.io/cocoindex-io/cocoindex-code:latest"
+              echo "ghcr.io/cocoindex-io/cocoindex-code:${{ github.ref_name }}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "tags<<EOF"
+              echo "cocoindex/cocoindex-code:test"
+              echo "ghcr.io/cocoindex-io/cocoindex-code:test"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push to both registries
         uses: docker/build-push-action@v5
         with:
           context: .
           file: docker/Dockerfile
           push: true
-          tags: |
-            cocoindex/cocoindex-code:latest
-            cocoindex/cocoindex-code:${{ github.ref_name }}
-            ghcr.io/cocoindex-io/cocoindex-code:latest
-            ghcr.io/cocoindex-io/cocoindex-code:${{ github.ref_name }}
+          # Install cocoindex-code from the checked-out source tree, not PyPI.
+          # Avoids a race where a just-published version hasn't propagated to
+          # PyPI's CDN yet (which happened on v0.2.24 release), and ensures
+          # the image matches the tagged commit byte-for-byte.
+          build-args: |
+            CCC_INSTALL_SPEC=/ccc-src[default]
+          tags: ${{ steps.tags.outputs.tags }}
