@@ -19,9 +19,9 @@ from pathlib import Path
 
 from ._daemon_paths import (
     connection_family,
-    daemon_dir,
     daemon_log_path,
     daemon_pid_path,
+    daemon_runtime_dir,
     daemon_socket_path,
 )
 from ._version import __version__
@@ -53,6 +53,7 @@ from .protocol import (
     decode_response,
     encode_request,
 )
+from .settings import normalize_input_path
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,14 @@ logger = logging.getLogger(__name__)
 
 
 _daemon_ensured = False
+
+
+def _is_daemon_supervised() -> bool:
+    """True when an external supervisor (Docker entrypoint loop, systemd, …) owns
+    daemon respawn. The client in that mode calls ``stop_daemon`` but never
+    ``start_daemon`` — it just waits for the socket to reappear.
+    """
+    return os.environ.get("COCOINDEX_CODE_DAEMON_SUPERVISED") == "1"
 
 
 def _connect_and_handshake() -> Connection:
@@ -90,8 +99,13 @@ def _connect_and_handshake() -> Connection:
     except (ConnectionRefusedError, OSError):
         pass
 
-    proc = start_daemon()
-    _wait_for_daemon(proc=proc)
+    if _is_daemon_supervised():
+        # Supervisor is responsible for (re)starting the daemon — just wait
+        # for the socket to reappear.
+        _wait_for_daemon()
+    else:
+        proc = start_daemon()
+        _wait_for_daemon(proc=proc)
 
     # Verify the fresh daemon is reachable
     for _attempt in range(10):
@@ -199,6 +213,7 @@ def index(
     on_waiting: Callable[[], None] | None = None,
 ) -> IndexResponse:
     """Request indexing with streaming progress. Blocks until complete."""
+    project_root = normalize_input_path(project_root)
     conn = _connect_and_handshake()
     try:
         conn.send_bytes(encode_request(IndexRequest(project_root=project_root)))
@@ -240,6 +255,7 @@ def search(
     progress), calls *on_waiting* (if provided) then continues reading
     until the final ``SearchResponse``.
     """
+    project_root = normalize_input_path(project_root)
     conn = _connect_and_handshake()
     try:
         conn.send_bytes(
@@ -274,7 +290,7 @@ def search(
 
 
 def project_status(project_root: str) -> ProjectStatusResponse:
-    return _send(ProjectStatusRequest(project_root=project_root))  # type: ignore[return-value]
+    return _send(ProjectStatusRequest(project_root=normalize_input_path(project_root)))  # type: ignore[return-value]
 
 
 def daemon_status() -> DaemonStatusResponse:
@@ -284,7 +300,7 @@ def daemon_status() -> DaemonStatusResponse:
 
 
 def remove_project(project_root: str) -> RemoveProjectResponse:
-    return _send(RemoveProjectRequest(project_root=project_root))  # type: ignore[return-value]
+    return _send(RemoveProjectRequest(project_root=normalize_input_path(project_root)))  # type: ignore[return-value]
 
 
 def stop() -> StopResponse:
@@ -301,6 +317,8 @@ def doctor(
     on_result: Callable[[DoctorCheckResult], None] | None = None,
 ) -> list[DoctorCheckResult]:
     """Run doctor checks via daemon, streaming results to on_result callback."""
+    if project_root is not None:
+        project_root = normalize_input_path(project_root)
     conn = _connect_and_handshake()
     try:
         conn.send_bytes(encode_request(DoctorRequest(project_root=project_root)))
@@ -349,7 +367,7 @@ def start_daemon() -> subprocess.Popen[bytes]:
     Returns the ``Popen`` object so callers can detect early process death
     (via ``proc.poll()``) instead of waiting for a full timeout.
     """
-    daemon_dir().mkdir(parents=True, exist_ok=True)
+    daemon_runtime_dir().mkdir(parents=True, exist_ok=True)
     log_path = daemon_log_path()
 
     ccc_path = _find_ccc_executable()
@@ -508,18 +526,16 @@ def _wait_for_daemon(
     If *proc* is given, polls the process each iteration.  When the process
     exits before the socket appears, raises ``DaemonStartError`` immediately
     with the daemon log content — no need to wait for the full timeout.
+
+    Socket existence is checked *before* ``proc.poll()`` so that races with a
+    supervisor (e.g. the Docker entrypoint restart loop) don't spuriously raise
+    ``DaemonStartError``: if the supervisor wins the bind and our subprocess
+    exits because the socket is already in use, the socket is still ready — we
+    should return success, not flag a failure.
     """
     deadline = time.monotonic() + timeout
     sock_path = daemon_socket_path()
     while time.monotonic() < deadline:
-        # Check if the daemon process died before the socket appeared.
-        if proc is not None and proc.poll() is not None:
-            log = _read_daemon_log()
-            msg = "Daemon process exited before it became ready."
-            if log:
-                msg += f"\n\nDaemon log:\n{log}"
-            raise DaemonStartError(msg, log=log)
-
         if sys.platform == "win32":
             try:
                 conn = Client(sock_path, family=connection_family())
@@ -530,6 +546,16 @@ def _wait_for_daemon(
         else:
             if os.path.exists(sock_path):
                 return
+
+        # Daemon socket not yet up — if we spawned a subprocess that already
+        # exited, bail out with its log.
+        if proc is not None and proc.poll() is not None:
+            log = _read_daemon_log()
+            msg = "Daemon process exited before it became ready."
+            if log:
+                msg += f"\n\nDaemon log:\n{log}"
+            raise DaemonStartError(msg, log=log)
+
         time.sleep(0.2)
 
     # Timeout — also include log for diagnostics.

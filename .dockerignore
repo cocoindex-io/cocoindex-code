@@ -1,0 +1,31 @@
+# Git + VCS
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Project artifacts
+.cocoindex_code/
+specs/
+tests/e2e_docker_fixtures/  # test fixtures — not needed in image builds
+
+# Docs (the image ships no docs)
+*.md
+!README.md

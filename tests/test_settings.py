@@ -19,12 +19,16 @@ from cocoindex_code.settings import (
     ProjectSettings,
     UserSettings,
     _reset_db_path_mapping_cache,
+    _reset_host_path_mapping_cache,
     default_project_settings,
     default_user_settings,
     find_parent_with_marker,
     find_project_root,
+    format_path_for_display,
+    get_host_path_mappings,
     load_project_settings,
     load_user_settings,
+    normalize_input_path,
     resolve_db_dir,
     save_project_settings,
     save_user_settings,
@@ -379,3 +383,139 @@ def test_save_initial_user_settings_model_with_colon() -> None:
     loaded = load_user_settings()
     assert loaded.embedding.provider == "litellm"
     assert loaded.embedding.model == "ollama_chat/llama3:latest"
+
+
+# ---------------------------------------------------------------------------
+# Host path mapping (COCOINDEX_CODE_HOST_PATH_MAPPING)
+# ---------------------------------------------------------------------------
+
+
+class TestHostPathMapping:
+    """Tests for format_path_for_display / normalize_input_path and the shared parser."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        _reset_host_path_mapping_cache()
+        monkeypatch.delenv("COCOINDEX_CODE_HOST_PATH_MAPPING", raising=False)
+        yield
+        _reset_host_path_mapping_cache()
+
+    def test_translates_display(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        container = tmp_path / "workspace"
+        host = tmp_path / "alice"
+        container.mkdir()
+        host.mkdir()
+        monkeypatch.setenv("COCOINDEX_CODE_HOST_PATH_MAPPING", f"{container}={host}")
+        assert format_path_for_display(container / "proj" / "app.py") == str(
+            host / "proj" / "app.py"
+        )
+
+    def test_translates_input(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        container = tmp_path / "workspace"
+        host = tmp_path / "alice"
+        container.mkdir()
+        host.mkdir()
+        monkeypatch.setenv("COCOINDEX_CODE_HOST_PATH_MAPPING", f"{container}={host}")
+        assert normalize_input_path(host / "proj") == str(container / "proj")
+
+    def test_unmatched_absolute_passes_through(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        container = tmp_path / "workspace"
+        host = tmp_path / "alice"
+        container.mkdir()
+        host.mkdir()
+        monkeypatch.setenv("COCOINDEX_CODE_HOST_PATH_MAPPING", f"{container}={host}")
+        unrelated = "/etc/hosts"
+        assert format_path_for_display(unrelated) == unrelated
+        assert normalize_input_path(unrelated) == unrelated
+
+    def test_relative_passes_through(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        container = tmp_path / "workspace"
+        host = tmp_path / "alice"
+        container.mkdir()
+        host.mkdir()
+        monkeypatch.setenv("COCOINDEX_CODE_HOST_PATH_MAPPING", f"{container}={host}")
+        assert format_path_for_display("src/app.py") == "src/app.py"
+        assert normalize_input_path("src/app.py") == "src/app.py"
+
+    def test_first_match_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ws = tmp_path / "workspace"
+        shared = ws / "shared"
+        host_ws = tmp_path / "alice"
+        host_shared = tmp_path / "mnt-shared"
+        ws.mkdir()
+        shared.mkdir(parents=True)
+        host_ws.mkdir()
+        host_shared.mkdir()
+        monkeypatch.setenv(
+            "COCOINDEX_CODE_HOST_PATH_MAPPING",
+            f"{ws}={host_ws},{shared}={host_shared}",
+        )
+        # Path under shared — first mapping wins, not the more-specific one.
+        assert format_path_for_display(shared / "docs" / "x") == str(
+            host_ws / "shared" / "docs" / "x"
+        )
+
+    def test_env_unset_is_noop(self) -> None:
+        # Fixture already clears env var.
+        assert format_path_for_display("/workspace/x") == "/workspace/x"
+        assert normalize_input_path("/workspace/x") == "/workspace/x"
+        assert get_host_path_mappings() == []
+
+    def test_invalid_env_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("COCOINDEX_CODE_HOST_PATH_MAPPING", "relative=/abs")
+        with pytest.raises(ValueError, match="source path must be absolute"):
+            get_host_path_mappings()
+
+
+# ---------------------------------------------------------------------------
+# find_parent_with_marker — global-only should not match
+# ---------------------------------------------------------------------------
+
+
+def test_find_parent_with_marker_skips_global_only(tmp_path: Path) -> None:
+    """A workspace-root ``.cocoindex_code/`` holding only ``global_settings.yml``
+    should NOT trigger the parent-marker check (it's not a project).
+    """
+    ws = tmp_path / "ws"
+    (ws / ".cocoindex_code").mkdir(parents=True)
+    (ws / ".cocoindex_code" / "global_settings.yml").write_text("embedding: {model: x}\n")
+    subdir = ws / "myproject"
+    subdir.mkdir()
+    assert find_parent_with_marker(subdir) is None
+
+
+def test_find_parent_with_marker_detects_project_settings(tmp_path: Path) -> None:
+    """``.cocoindex_code/settings.yml`` at a parent is a real project marker."""
+    repo = tmp_path / "repo"
+    (repo / ".cocoindex_code").mkdir(parents=True)
+    (repo / ".cocoindex_code" / "settings.yml").write_text("include_patterns: []\n")
+    subdir = repo / "src"
+    subdir.mkdir()
+    assert find_parent_with_marker(subdir) == repo
+
+
+# ---------------------------------------------------------------------------
+# daemon_runtime_dir
+# ---------------------------------------------------------------------------
+
+
+def test_daemon_runtime_dir_uses_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from cocoindex_code._daemon_paths import daemon_runtime_dir
+
+    target = tmp_path / "runtime"
+    monkeypatch.setenv("COCOINDEX_CODE_RUNTIME_DIR", str(target))
+    assert daemon_runtime_dir() == target
+
+
+def test_daemon_runtime_dir_falls_back_to_user_settings_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When COCOINDEX_CODE_RUNTIME_DIR is unset, falls back to user_settings_dir()."""
+    from cocoindex_code._daemon_paths import daemon_runtime_dir
+
+    settings_dir = tmp_path / "settings"
+    monkeypatch.delenv("COCOINDEX_CODE_RUNTIME_DIR", raising=False)
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(settings_dir))
+    assert daemon_runtime_dir() == settings_dir

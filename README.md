@@ -198,33 +198,79 @@ The recommended approach is a **persistent container**: start it once, and use
 `docker exec` to run CLI commands or connect MCP sessions to it. The daemon
 inside stays warm across sessions, so the embedding model is loaded only once.
 
-### Step 1 — Start the container
+### Quick start — `docker compose up -d`
+
+Grab [`docker/docker-compose.yml`](./docker/docker-compose.yml) from this repo and run:
+
+```bash
+# macOS / Windows
+docker compose up -d
+
+# Linux (aligns file ownership on bind-mounted paths with your host user)
+PUID=$(id -u) PGID=$(id -g) docker compose up -d
+```
+
+By default your home directory is mounted into the container (set
+`COCOINDEX_HOST_WORKSPACE` to narrow this to a specific code folder). Index
+data and the embedding model cache persist in a Docker volume across
+restarts. Your global settings file at `$HOME/.cocoindex_code/global_settings.yml`
+is visible and editable on the host; edits take effect on your next `ccc` command.
+
+> **GHCR:** to pull from GitHub Container Registry instead of Docker Hub,
+> change the `image:` line in your copy of `docker-compose.yml` to
+> `ghcr.io/cocoindex-io/cocoindex-code:latest`.
+
+### Or: `docker run`
+
+<details>
+<summary>Docker Desktop (macOS / Windows)</summary>
 
 ```bash
 docker run -d --name cocoindex-code \
-  --volume "$(pwd):/workspace" \
-  --volume cocoindex-db:/db \
-  --volume cocoindex-model-cache:/root/.cache \
-  ghcr.io/cocoindex-io/cocoindex-code:latest
+  --volume "$HOME:/workspace" \
+  --volume cocoindex-data:/var/cocoindex \
+  -e COCOINDEX_CODE_HOST_PATH_MAPPING="/workspace=$HOME" \
+  cocoindex/cocoindex-code:latest
 ```
+</details>
 
-- `/workspace` — mount your project root here
-- `cocoindex-db` — index databases live inside the container (fast native I/O, no cross-OS volume issues)
-- `cocoindex-model-cache` — persists the embedding model across image upgrades
-
-### Step 2 — Index your codebase
+<details>
+<summary>Linux (with <code>PUID</code>/<code>PGID</code>)</summary>
 
 ```bash
-docker exec -it cocoindex-code ccc index
+docker run -d --name cocoindex-code \
+  -e PUID=$(id -u) -e PGID=$(id -g) \
+  --volume "$HOME:/workspace" \
+  --volume cocoindex-data:/var/cocoindex \
+  -e COCOINDEX_CODE_HOST_PATH_MAPPING="/workspace=$HOME" \
+  cocoindex/cocoindex-code:latest
+```
+</details>
+
+### Shell wrapper for `ccc` commands
+
+Paste this into `~/.bashrc` / `~/.zshrc` so `ccc` feels native on the host
+and picks up the right project based on your current directory:
+
+```bash
+ccc() {
+  docker exec -it -e COCOINDEX_CODE_HOST_CWD="$PWD" cocoindex-code ccc "$@"
+}
 ```
 
-### Step 3 — Connect your coding agent
+Now `cd` into any project under your workspace and run `ccc init`, `ccc index`,
+`ccc search ...`, `ccc status`, etc. — it just works.
+
+### Connect your coding agent
 
 <details>
 <summary>Claude Code</summary>
 
+Register MCP from inside the target project so `$PWD` points there:
+
 ```bash
-claude mcp add cocoindex-code -- docker exec -i cocoindex-code ccc mcp
+claude mcp add cocoindex-code -- docker exec -i \
+  -e COCOINDEX_CODE_HOST_CWD="$PWD" cocoindex-code ccc mcp
 ```
 
 Or via `.mcp.json`:
@@ -235,40 +281,50 @@ Or via `.mcp.json`:
     "cocoindex-code": {
       "type": "stdio",
       "command": "docker",
-      "args": ["exec", "-i", "cocoindex-code", "ccc", "mcp"]
+      "args": [
+        "exec",
+        "-i",
+        "-e",
+        "COCOINDEX_CODE_HOST_CWD=${PWD}",
+        "cocoindex-code",
+        "ccc",
+        "mcp"
+      ]
     }
   }
 }
 ```
+
+> Note: use `-i` (not `-it`). The `-t` flag allocates a terminal, which
+> interferes with MCP's JSON messaging over stdin/stdout — only add it for
+> interactive `ccc` commands like `ccc init`.
 </details>
 
 <details>
 <summary>Codex</summary>
 
 ```bash
-codex mcp add cocoindex-code -- docker exec -i cocoindex-code ccc mcp
+codex mcp add cocoindex-code -- docker exec -i \
+  -e COCOINDEX_CODE_HOST_CWD="$PWD" cocoindex-code ccc mcp
 ```
 </details>
 
-### CLI usage inside the container
+### Upgrading from an older image
 
-All `ccc` commands work via `docker exec`:
-
-```bash
-docker exec -it cocoindex-code ccc index
-docker exec -it cocoindex-code ccc search "authentication logic"
-docker exec -it cocoindex-code ccc status
-```
-
-Or set an alias on your host so it feels native:
+Earlier images used separate `cocoindex-db` and `cocoindex-model-cache`
+volumes; the current image consolidates them into a single `cocoindex-data`
+volume. Before pulling the new image, drop the old container and volumes —
+indexes rebuild on your next `ccc index`, and the embedding model is
+re-populated automatically on first start:
 
 ```bash
-alias ccc='docker exec -it cocoindex-code ccc'
+docker rm -f cocoindex-code
+docker volume rm cocoindex-db cocoindex-model-cache
 ```
 
 ### Configuration via environment variables
 
-Pass configuration to `docker run` with `-e`:
+Pass configuration to `docker run` / compose with `-e`:
 
 ```bash
 # Extra extensions (e.g. Typesafe Config, SBT build files)
@@ -280,6 +336,10 @@ Pass configuration to `docker run` with `-e`:
 # Set an API key
 -e VOYAGE_API_KEY=your-key
 ```
+
+> **Security note:** mounting `$HOME` gives the container read/write access
+> to everything under it. If that's too broad, bind-mount a narrower
+> directory instead (`COCOINDEX_HOST_WORKSPACE=/path/to/code`).
 
 ### Build the image locally
 
@@ -314,6 +374,8 @@ envs:                                                # extra environment variabl
 ```
 
 > **Note:** The daemon inherits your shell environment. If an API key (e.g. `OPENAI_API_KEY`) is already set as an environment variable, you don't need to duplicate it in `envs`. The `envs` field is only for values that aren't in your environment.
+
+> **Custom location:** set `COCOINDEX_CODE_DIR` to place `global_settings.yml` somewhere other than `~/.cocoindex_code/` — useful if you want the file to live alongside your projects (e.g. on a synced folder).
 
 ### Project Settings (`<project>/.cocoindex_code/settings.yml`)
 

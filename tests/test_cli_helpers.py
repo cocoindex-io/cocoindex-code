@@ -139,3 +139,67 @@ def test_remove_from_gitignore_no_entry(tmp_path: Path) -> None:
     gitignore.write_text(original)
     remove_from_gitignore(tmp_path)
     assert gitignore.read_text() == original
+
+
+# ---------------------------------------------------------------------------
+# COCOINDEX_CODE_HOST_CWD callback
+# ---------------------------------------------------------------------------
+
+
+def test_apply_host_cwd_chdirs_to_mapped_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """When COCOINDEX_CODE_HOST_CWD is set and matches the mapping, chdir to container form."""
+    from cocoindex_code.cli import _apply_host_cwd
+    from cocoindex_code.settings import _reset_host_path_mapping_cache
+
+    container = tmp_path / "workspace"
+    host = tmp_path / "host-home"
+    (container / "proj" / "src").mkdir(parents=True)
+    host.mkdir()
+
+    _reset_host_path_mapping_cache()
+    monkeypatch.setenv("COCOINDEX_CODE_HOST_PATH_MAPPING", f"{container}={host}")
+    monkeypatch.setenv("COCOINDEX_CODE_HOST_CWD", str(host / "proj" / "src"))
+
+    _apply_host_cwd()
+
+    # chdir resolves symlinks; compare resolved forms.
+    assert Path.cwd().resolve() == (container / "proj" / "src").resolve()
+    assert capsys.readouterr().err == ""
+
+    _reset_host_path_mapping_cache()
+
+
+def test_apply_host_cwd_warns_on_invalid_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An invalid COCOINDEX_CODE_HOST_CWD emits a warning but doesn't abort."""
+    from cocoindex_code.cli import _apply_host_cwd
+
+    original_cwd = Path.cwd()
+    monkeypatch.setenv("COCOINDEX_CODE_HOST_CWD", "/nonexistent/path/xyz")
+    monkeypatch.delenv("COCOINDEX_CODE_HOST_PATH_MAPPING", raising=False)
+
+    _apply_host_cwd()
+
+    captured = capsys.readouterr()
+    assert "COCOINDEX_CODE_HOST_CWD" in captured.err
+    assert "/nonexistent/path/xyz" in captured.err
+    # cwd should be unchanged since chdir failed.
+    assert Path.cwd() == original_cwd
+
+
+def test_apply_host_cwd_noop_when_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With COCOINDEX_CODE_HOST_CWD unset, the callback is a silent no-op."""
+    from cocoindex_code.cli import _apply_host_cwd
+
+    original_cwd = Path.cwd()
+    monkeypatch.delenv("COCOINDEX_CODE_HOST_CWD", raising=False)
+
+    _apply_host_cwd()
+
+    assert Path.cwd() == original_cwd
+    assert capsys.readouterr().err == ""

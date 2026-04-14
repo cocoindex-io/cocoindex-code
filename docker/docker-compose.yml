@@ -1,0 +1,34 @@
+# cocoindex-code — Docker Compose quickstart.
+#
+#   # macOS / Windows
+#   docker compose up -d
+#
+#   # Linux (aligns file ownership with your host user)
+#   PUID=$(id -u) PGID=$(id -g) docker compose up -d
+#
+# By default your home directory is mounted into the container as the
+# workspace. Set COCOINDEX_HOST_WORKSPACE=/path/to/code to mount a narrower
+# directory instead.
+#
+# Using GHCR instead of Docker Hub? Change the image below to
+# `ghcr.io/cocoindex-io/cocoindex-code:latest`.
+
+services:
+  cocoindex-code:
+    image: cocoindex/cocoindex-code:latest
+    container_name: cocoindex-code
+    volumes:
+      - ${COCOINDEX_HOST_WORKSPACE:-${HOME}}:/workspace
+      - cocoindex-data:/var/cocoindex
+    environment:
+      # Makes CLI and MCP output show your real paths
+      # (e.g. `/Users/you/myproject/...`) instead of container paths
+      # (e.g. `/workspace/myproject/...`).
+      COCOINDEX_CODE_HOST_PATH_MAPPING: /workspace=${COCOINDEX_HOST_WORKSPACE:-${HOME}}
+      # Linux only: set these so files written to your workspace are owned by
+      # you rather than root. Not needed on macOS / Windows — leave empty.
+      PUID: ${PUID:-}
+      PGID: ${PGID:-}
+
+volumes:
+  cocoindex-data:

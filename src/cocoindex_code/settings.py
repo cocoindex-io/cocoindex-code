@@ -151,49 +151,66 @@ _SETTINGS_FILE_NAME = "settings.yml"  # project-level
 _USER_SETTINGS_FILE_NAME = "global_settings.yml"  # user-level
 
 _ENV_DB_PATH_MAPPING = "COCOINDEX_CODE_DB_PATH_MAPPING"
+_ENV_HOST_PATH_MAPPING = "COCOINDEX_CODE_HOST_PATH_MAPPING"
 
 
 @dataclass
-class DbPathMapping:
+class PathMapping:
     source: Path
     target: Path
 
 
-_db_path_mapping: list[DbPathMapping] | None = None
+def _parse_path_mapping(env_var: str) -> list[PathMapping]:
+    """Parse a ``source=target[,source=target...]`` env var.
 
-
-def _parse_db_path_mapping() -> list[DbPathMapping]:
-    """Parse ``COCOINDEX_CODE_DB_PATH_MAPPING`` env var.
-
-    Format: ``/src1=/dst1,/src2=/dst2``
-    Both source and target must be absolute paths.
+    Both source and target must be absolute paths. Returns an empty list when
+    the env var is unset or blank. Raises ``ValueError`` on malformed entries.
     """
-    raw = os.environ.get(_ENV_DB_PATH_MAPPING, "")
+    raw = os.environ.get(env_var, "")
     if not raw.strip():
         return []
 
-    mappings: list[DbPathMapping] = []
+    mappings: list[PathMapping] = []
     for entry in raw.split(","):
         entry = entry.strip()
         if not entry:
             continue
         parts = entry.split("=", 1)
         if len(parts) != 2 or not parts[0] or not parts[1]:
-            raise ValueError(
-                f"{_ENV_DB_PATH_MAPPING}: invalid entry {entry!r}, expected format 'source=target'"
-            )
+            raise ValueError(f"{env_var}: invalid entry {entry!r}, expected format 'source=target'")
         source = Path(parts[0])
         target = Path(parts[1])
         if not source.is_absolute():
-            raise ValueError(
-                f"{_ENV_DB_PATH_MAPPING}: source path must be absolute, got {source!r}"
-            )
+            raise ValueError(f"{env_var}: source path must be absolute, got {source!r}")
         if not target.is_absolute():
-            raise ValueError(
-                f"{_ENV_DB_PATH_MAPPING}: target path must be absolute, got {target!r}"
-            )
-        mappings.append(DbPathMapping(source=source.resolve(), target=target.resolve()))
+            raise ValueError(f"{env_var}: target path must be absolute, got {target!r}")
+        mappings.append(PathMapping(source=source.resolve(), target=target.resolve()))
     return mappings
+
+
+def _apply_mapping(mappings: list[PathMapping], path: str | Path, reverse: bool = False) -> str:
+    """Rewrite ``path`` through ``mappings``. First prefix match wins.
+
+    ``reverse=False``: rewrites source-prefix → target-prefix (forward).
+    ``reverse=True``: rewrites target-prefix → source-prefix (reverse).
+
+    Relative paths and absolute paths with no matching prefix are returned
+    unchanged (as ``str``).
+    """
+    p = Path(path)
+    if not p.is_absolute():
+        return str(path)
+    resolved = p.resolve()
+    for m in mappings:
+        src, dst = (m.target, m.source) if reverse else (m.source, m.target)
+        if resolved == src or resolved.is_relative_to(src):
+            rel = resolved.relative_to(src)
+            return str(dst / rel) if str(rel) != "." else str(dst)
+    return str(path)
+
+
+_db_path_mapping: list[PathMapping] | None = None
+_host_path_mapping: list[PathMapping] | None = None
 
 
 def resolve_db_dir(project_root: Path) -> Path:
@@ -204,7 +221,7 @@ def resolve_db_dir(project_root: Path) -> Path:
     """
     global _db_path_mapping  # noqa: PLW0603
     if _db_path_mapping is None:
-        _db_path_mapping = _parse_db_path_mapping()
+        _db_path_mapping = _parse_path_mapping(_ENV_DB_PATH_MAPPING)
 
     resolved = project_root.resolve()
     for mapping in _db_path_mapping:
@@ -214,18 +231,50 @@ def resolve_db_dir(project_root: Path) -> Path:
     return project_root / _SETTINGS_DIR_NAME
 
 
-def get_db_path_mappings() -> list[DbPathMapping]:
+def get_db_path_mappings() -> list[PathMapping]:
     """Return the parsed DB path mappings from ``COCOINDEX_CODE_DB_PATH_MAPPING``."""
     global _db_path_mapping  # noqa: PLW0603
     if _db_path_mapping is None:
-        _db_path_mapping = _parse_db_path_mapping()
+        _db_path_mapping = _parse_path_mapping(_ENV_DB_PATH_MAPPING)
     return list(_db_path_mapping)
+
+
+def get_host_path_mappings() -> list[PathMapping]:
+    """Return the parsed host path mappings from ``COCOINDEX_CODE_HOST_PATH_MAPPING``."""
+    global _host_path_mapping  # noqa: PLW0603
+    if _host_path_mapping is None:
+        _host_path_mapping = _parse_path_mapping(_ENV_HOST_PATH_MAPPING)
+    return list(_host_path_mapping)
+
+
+def format_path_for_display(p: str | Path) -> str:
+    """Translate a container path to its host equivalent for user-facing output.
+
+    No-op when ``COCOINDEX_CODE_HOST_PATH_MAPPING`` is unset or when ``p`` is a
+    relative path / unmatched absolute path.
+    """
+    return _apply_mapping(get_host_path_mappings(), p, reverse=False)
+
+
+def normalize_input_path(p: str | Path) -> str:
+    """Translate a host path back to its container form before using it internally.
+
+    Inverse of :func:`format_path_for_display`. No-op when the env var is unset
+    or when ``p`` is relative / unmatched.
+    """
+    return _apply_mapping(get_host_path_mappings(), p, reverse=True)
 
 
 def _reset_db_path_mapping_cache() -> None:
     """Reset the cached mapping (for tests)."""
     global _db_path_mapping  # noqa: PLW0603
     _db_path_mapping = None
+
+
+def _reset_host_path_mapping_cache() -> None:
+    """Reset the cached mapping (for tests)."""
+    global _host_path_mapping  # noqa: PLW0603
+    _host_path_mapping = None
 
 
 _TARGET_SQLITE_DB_NAME = "target_sqlite.db"
@@ -295,22 +344,27 @@ def find_legacy_project_root(start: Path) -> Path | None:
 
 
 def find_parent_with_marker(start: Path) -> Path | None:
-    """Walk up from *start* looking for ``.cocoindex_code/`` or ``.git/``.
+    """Walk up from *start* looking for an initialized project or a git repo.
 
-    Returns the first directory found, or ``None``.
-    Does not consider the home directory or above, to avoid false positives
-    on CI runners where ~/.git may exist.
+    Match criteria: ``.cocoindex_code/settings.yml`` (a real project marker —
+    distinct from a workspace-root ``.cocoindex_code/global_settings.yml``
+    which should not trigger this check) or ``.git/``.
+
+    Returns the first directory found, or ``None``. Does not consider the home
+    directory or above, to avoid false positives on CI runners where ~/.git
+    may exist.
     """
     home = Path.home().resolve()
     current = start.resolve()
     while True:
-        # Stop before reaching the home directory (home itself is not a project root)
         if current == home:
             return None
         parent = current.parent
         if parent == current:
             return None
-        if (current / _SETTINGS_DIR_NAME).is_dir() or (current / ".git").is_dir():
+        if (current / _SETTINGS_DIR_NAME / _SETTINGS_FILE_NAME).is_file() or (
+            current / ".git"
+        ).is_dir():
             return current
         current = parent
 

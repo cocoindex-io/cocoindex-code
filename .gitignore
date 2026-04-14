@@ -46,3 +46,7 @@ src/cocoindex_code/_version.py
 
 # CocoIndex Code (ccc)
 /.cocoindex_code/
+
+# Docker E2E fixtures contain a `lib/` dir that the generic Python rule above
+# would ignore — keep it tracked.
+!tests/e2e_docker_fixtures/**

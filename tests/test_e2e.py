@@ -580,14 +580,24 @@ def test_session_missing_global_settings_early_error() -> None:
 
 
 @pytest.mark.usefixtures("e2e_project_no_global_settings")
-def test_session_daemon_restart_missing_global_settings() -> None:
-    """``ccc daemon restart`` should fail fast with daemon log when global settings are missing."""
-    # `daemon restart` doesn't go through require_project_root, so it hits the
-    # daemon start path where the process dies. Should show the daemon log.
+def test_session_daemon_restart_with_no_global_settings() -> None:
+    """``ccc daemon restart`` without ``global_settings.yml`` starts the daemon in
+    no-settings mode rather than failing hard.
+
+    The daemon comes up, accepts handshakes, but rejects project requests until
+    ``ccc init`` writes the file. The handshake mtime mismatch then drives the
+    restart that loads real settings — here we just verify the restart itself
+    succeeds and the file stays absent (no silent auto-create).
+    """
+    from cocoindex_code.settings import user_settings_path
+
     result = runner.invoke(app, ["daemon", "restart"])
-    assert result.exit_code != 0, f"Expected failure but got: {result.output}"
-    assert "Daemon log:" in result.output
-    assert "User settings not found" in result.output
+    assert result.exit_code == 0, f"Expected success but got: {result.output}"
+    assert "Daemon restarted." in result.output
+
+    # No auto-creation — user still needs to run `ccc init` to pick a model
+    # (and trigger the supervised respawn with real settings).
+    assert not user_settings_path().is_file()
 
 
 # ---------------------------------------------------------------------------

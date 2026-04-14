@@ -105,3 +105,47 @@ jobs:
           gh release upload
           '${{ github.ref_name }}' dist/*
           --repo '${{ github.repository }}'
+
+  publish-docker:
+    name: Build & push Docker image to Docker Hub and GHCR
+    if: github.event_name == 'release'
+    needs:
+      - publish-to-pypi
+    runs-on: ubuntu-latest
+    environment:
+      name: docker-hub
+      url: https://hub.docker.com/r/cocoindex/cocoindex-code
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push to both registries
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: |
+            cocoindex/cocoindex-code:latest
+            cocoindex/cocoindex-code:${{ github.ref_name }}
+            ghcr.io/cocoindex-io/cocoindex-code:latest
+            ghcr.io/cocoindex-io/cocoindex-code:${{ github.ref_name }}

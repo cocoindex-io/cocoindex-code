@@ -167,6 +167,7 @@ class DaemonEnvResponse(_msgspec.Struct, tag="daemon_env"):
     env_names: list[str]
     settings_env_names: list[str]
     db_path_mappings: list[DbPathMappingEntry] = []
+    host_path_mappings: list[DbPathMappingEntry] = []
 
 
 class ErrorResponse(_msgspec.Struct, tag="error"):

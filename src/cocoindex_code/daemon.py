@@ -17,9 +17,9 @@ from typing import Any
 
 from ._daemon_paths import (
     connection_family,
-    daemon_dir,
     daemon_log_path,
     daemon_pid_path,
+    daemon_runtime_dir,
     daemon_socket_path,
 )
 from ._version import __version__
@@ -56,10 +56,13 @@ from .protocol import (
 )
 from .settings import (
     ChunkerMapping,
+    format_path_for_display,
+    get_host_path_mappings,
     global_settings_mtime_us,
     load_project_settings,
     load_user_settings,
     target_sqlite_db_path,
+    user_settings_path,
 )
 from .shared import Embedder, check_embedding, create_embedder
 
@@ -91,17 +94,28 @@ def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> dict[str, _Chun
 
 
 class ProjectRegistry:
-    """Cache of loaded projects, keyed by project root path."""
+    """Cache of loaded projects, keyed by project root path.
+
+    ``_embedder`` is ``None`` when the daemon is running in "no-settings mode"
+    (started before ``global_settings.yml`` existed). In that state
+    ``get_project`` raises an error pointing the user at ``ccc init``; the
+    daemon still serves handshakes so the client can detect the mtime
+    mismatch once the file is created and trigger a supervisor respawn.
+    """
 
     _projects: dict[str, Project]
-    _embedder: Embedder
+    _embedder: Embedder | None
 
-    def __init__(self, embedder: Embedder) -> None:
+    def __init__(self, embedder: Embedder | None) -> None:
         self._projects = {}
         self._embedder = embedder
 
     async def get_project(self, project_root: str) -> Project:
         """Get or create a Project for the given root. Lazy initialization."""
+        if self._embedder is None:
+            raise RuntimeError(
+                "Daemon has no global settings loaded. Run `ccc init` to set up cocoindex-code."
+            )
         if project_root not in self._projects:
             root = Path(project_root)
             project_settings = load_project_settings(root)
@@ -260,8 +274,19 @@ async def _handle_doctor(
     )
 
 
-async def _check_model(embedder: Embedder) -> DoctorCheckResult:
-    """Test the embedding model by embedding a short string."""
+async def _check_model(embedder: Embedder | None) -> DoctorCheckResult:
+    """Test the embedding model by embedding a short string.
+
+    Returns a failed result when the embedder is ``None`` (daemon running in
+    no-settings mode).
+    """
+    if embedder is None:
+        return DoctorCheckResult(
+            name="Model Check",
+            ok=False,
+            details=[],
+            errors=["Daemon has no global settings loaded. Run `ccc init` to set up."],
+        )
     result = await check_embedding(embedder)
     if result.error is None:
         return DoctorCheckResult(
@@ -340,7 +365,7 @@ async def _check_index_status(project_root_str: str) -> DoctorCheckResult:
 
     project_root = Path(project_root_str)
     db_path = target_sqlite_db_path(project_root)
-    details = [f"Index: {db_path}"]
+    details = [f"Index: {format_path_for_display(db_path)}"]
 
     if not db_path.exists():
         details.append("Index not created yet.")
@@ -445,6 +470,10 @@ async def _dispatch(
                     DbPathMappingEntry(source=str(m.source), target=str(m.target))
                     for m in get_db_path_mappings()
                 ],
+                host_path_mappings=[
+                    DbPathMappingEntry(source=str(m.source), target=str(m.target))
+                    for m in get_host_path_mappings()
+                ],
             )
 
         if isinstance(req, DoctorRequest):
@@ -468,19 +497,24 @@ def run_daemon() -> None:
     to serve connections, and performs cleanup when shutdown is requested via
     ``StopRequest`` or a signal (SIGTERM / SIGINT).
     """
-    daemon_dir().mkdir(parents=True, exist_ok=True)
+    daemon_runtime_dir().mkdir(parents=True, exist_ok=True)
 
-    # Load user settings and record mtime for staleness detection
-    user_settings = load_user_settings()
-    settings_mtime_us = global_settings_mtime_us()
-
-    # Set environment variables from settings
-    settings_env_keys = list(user_settings.envs.keys())
-    for key, value in user_settings.envs.items():
-        os.environ[key] = value
-
-    # Create embedder
-    embedder = create_embedder(user_settings.embedding)
+    # No-settings mode: start even when global_settings.yml is missing so the
+    # client can complete its handshake, detect the mtime mismatch once
+    # `ccc init` writes the file, and trigger a supervisor respawn. The
+    # alternative (auto-creating defaults) would skip the interactive
+    # provider/model picker in `ccc init`.
+    settings_mtime_us = global_settings_mtime_us()  # None when file is missing
+    embedder: Embedder | None
+    if user_settings_path().is_file():
+        user_settings = load_user_settings()
+        settings_env_keys = list(user_settings.envs.keys())
+        for key, value in user_settings.envs.items():
+            os.environ[key] = value
+        embedder = create_embedder(user_settings.embedding)
+    else:
+        settings_env_keys = []
+        embedder = None
 
     # Write PID file
     pid_path = daemon_pid_path()

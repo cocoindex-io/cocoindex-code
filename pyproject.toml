@@ -105,5 +105,8 @@ explicit_package_bases = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m 'not docker_e2e'"
 asyncio_mode = "auto"
+markers = [
+    "docker_e2e: requires Docker; builds the image and runs containerized E2E tests. Run with: pytest -m docker_e2e",
+]
