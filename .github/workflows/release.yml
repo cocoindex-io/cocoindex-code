@@ -188,3 +188,9 @@ jobs:
           build-args: |
             CCC_INSTALL_SPEC=/ccc-src[default]
           tags: ${{ steps.tags.outputs.tags }}
+          # Persist BuildKit's layer cache across workflow runs in the GitHub
+          # Actions cache. The Dockerfile is structured so the heavy base-deps
+          # layer (~1GB of torch + friends) reuses across releases — this is
+          # what lets subsequent builds skip that layer entirely.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

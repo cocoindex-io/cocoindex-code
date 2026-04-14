@@ -1,25 +1,38 @@
-# ─── Stage 1: install dependencies ───────────────────────────────────────────
+# ─── Stage 1: heavy base dependencies ────────────────────────────────────────
+# Install torch + sentence-transformers + cocoindex + cocoindex-code's
+# transitive deps from PyPI here. The cache key is just this RUN's command
+# string, so subsequent release builds reuse this layer entirely instead of
+# re-downloading and re-installing ~1GB of wheels. Especially important for
+# the arm64 cross-compile under QEMU — that's where the slowness lives.
+#
 # Use slim (glibc-based) — cocoindex ships pre-built Rust wheels that need glibc.
 # Alpine / musl-libc would require building from source.
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim AS deps
 
 RUN pip install --quiet uv
 
-WORKDIR /build
-
-# Default: install the released cocoindex-code from PyPI (release flow).
-# Tests/local dev override with:
-#   --build-arg CCC_INSTALL_SPEC=/ccc-src[default]
-# which installs from the copied-in source tree instead. The COPY always runs;
-# with .dockerignore trimming build artifacts it adds ~nothing.
-ARG CCC_INSTALL_SPEC="cocoindex-code[default]"
-COPY . /ccc-src
-
 RUN uv pip install --system --prerelease=allow \
     "cocoindex>=1.0.0a33" \
-    "${CCC_INSTALL_SPEC}"
+    "cocoindex-code[default]"
 
-# ─── Stage 2: pre-bake the default embedding model ────────────────────────────
+# ─── Stage 2: overlay the release version of cocoindex-code ──────────────────
+# Cheap relative to stage 1: the heavy deps are already installed; this only
+# (re)installs the cocoindex-code package itself.
+FROM deps AS builder
+WORKDIR /build
+
+# Default (release / PyPI flow): stage 1's install IS the release, nothing to do.
+# Tests / release workflow override with:
+#   --build-arg CCC_INSTALL_SPEC=/ccc-src[default]
+# which re-installs cocoindex-code from the copied-in source tree with
+# `--no-deps` so the deps layer stays untouched.
+ARG CCC_INSTALL_SPEC=""
+COPY . /ccc-src
+RUN if [ -n "$CCC_INSTALL_SPEC" ]; then \
+        uv pip install --system --prerelease=allow --no-deps --force-reinstall "${CCC_INSTALL_SPEC}"; \
+    fi
+
+# ─── Stage 3: pre-bake the default embedding model ────────────────────────────
 # Bakes Snowflake/snowflake-arctic-embed-xs into the merged data directory at
 # /var/cocoindex/cache/..., so on first run Docker's volume copy-up populates
 # the cocoindex-data volume with the model — no network fetch needed.
@@ -31,7 +44,7 @@ ENV HF_HOME=/var/cocoindex/cache/huggingface \
 RUN mkdir -p /var/cocoindex/cache/huggingface /var/cocoindex/cache/sentence-transformers \
     && python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('Snowflake/snowflake-arctic-embed-xs'); print('Model cached.')"
 
-# ─── Stage 3: runtime ─────────────────────────────────────────────────────────
+# ─── Stage 4: runtime ─────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
 # gosu for privilege-drop (PUID/PGID pattern); create non-root coco user.
