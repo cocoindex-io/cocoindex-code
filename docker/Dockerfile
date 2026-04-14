@@ -10,16 +10,15 @@ WORKDIR /build
 
 RUN uv pip install --system --prerelease=allow \
     "cocoindex>=1.0.0a33" \
-    "cocoindex-code" \
-    "sentence-transformers>=3.3.1"
+    "cocoindex-code[default]"
 
 # ─── Stage 2: pre-bake the default embedding model ────────────────────────────
-# Bakes sentence-transformers/all-MiniLM-L6-v2 into the image so cold container
-# starts don't trigger a ~90 MB download. Skip this stage (--target builder) if
-# you always supply COCOINDEX_CODE_EMBEDDING_MODEL pointing at an external model.
+# Bakes Snowflake/snowflake-arctic-embed-xs into the image so cold container
+# starts don't trigger a download. Skip this stage (--target builder) if
+# you always supply a global_settings.yml pointing at a non-local model.
 FROM builder AS model_cache
 
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); print('Model cached.')"
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('Snowflake/snowflake-arctic-embed-xs'); print('Model cached.')"
 
 # ─── Stage 3: runtime ─────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
@@ -47,10 +46,11 @@ ENV COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/db
 # Exclude patterns: override at runtime for your build system, e.g.:
 #   -e COCOINDEX_CODE_EXCLUDE_PATTERNS='["**/target/**","**/node_modules/**"]'
 
-# Embedding model: defaults to local SentenceTransformers (no API key needed).
-# Override for a code-optimised model, e.g.:
-#   -e COCOINDEX_CODE_EMBEDDING_MODEL=voyage/voyage-code-3
-#   -e VOYAGE_API_KEY=your-key
+# Embedding model: defaults to local sentence-transformers
+# (Snowflake/snowflake-arctic-embed-xs, pre-baked above).
+# To use a different model, pre-mount a global_settings.yml into
+# ~/.cocoindex_code/ before the container starts, e.g.
+#   -v /path/to/global_settings.yml:/root/.cocoindex_code/global_settings.yml
 
 # ── Persistent daemon entrypoint ──────────────────────────────────────────────
 # Initializes user settings on first start, then runs the daemon in the

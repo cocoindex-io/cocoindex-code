@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from cocoindex.connectors import sqlite as coco_sqlite
+from conftest import make_test_user_settings
 from typer.testing import CliRunner
 
 from cocoindex_code.cli import app
@@ -23,7 +24,10 @@ from cocoindex_code.settings import (
     _reset_db_path_mapping_cache,
     default_project_settings,
     find_parent_with_marker,
+    load_user_settings,
     save_project_settings,
+    save_user_settings,
+    user_settings_path,
 )
 
 runner = CliRunner()
@@ -119,6 +123,11 @@ def e2e_project() -> Iterator[Path]:
     os.environ["COCOINDEX_CODE_DIR"] = str(base_dir)
     old_cwd = os.getcwd()
     os.chdir(project_dir)
+
+    # Pre-write global settings with the lightweight test model so `ccc init`
+    # in these tests skips the new interactive flow and existing assertions
+    # continue to exercise the same indexing behavior as before.
+    save_user_settings(make_test_user_settings())
 
     try:
         yield project_dir
@@ -579,6 +588,252 @@ def test_session_daemon_restart_missing_global_settings() -> None:
     assert result.exit_code != 0, f"Expected failure but got: {result.output}"
     assert "Daemon log:" in result.output
     assert "User settings not found" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Interactive init flow tests
+# ---------------------------------------------------------------------------
+
+
+def _fake_doctor_ok(
+    project_root: str | None = None,
+    on_result: object = None,
+) -> list[object]:
+    """Stand-in for ``client.doctor`` that returns a single OK Model Check."""
+    from cocoindex_code.protocol import DoctorCheckResult
+
+    ok = DoctorCheckResult(
+        name="Model Check",
+        ok=True,
+        details=["Embedding dimension: 384"],
+        errors=[],
+    )
+    done = DoctorCheckResult(name="done", ok=True, details=[], errors=[])
+    return [ok, done]
+
+
+@pytest.fixture()
+def e2e_fresh_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """Fresh COCOINDEX_CODE_DIR with NO global settings and NO project settings.
+
+    Distinct from ``e2e_project`` (which pre-writes global settings): tests
+    that exercise the interactive init flow need a genuinely empty state.
+    ``client.doctor`` is monkeypatched so no real daemon starts and no real
+    model is loaded during tests.
+    """
+    base_dir = Path(tempfile.mkdtemp(prefix="ccc_e2e_fresh_"))
+    project_dir = base_dir / "project"
+    project_dir.mkdir()
+    (project_dir / "main.py").write_text(SAMPLE_MAIN_PY)
+    (project_dir / ".git").mkdir()
+
+    old_env = os.environ.get("COCOINDEX_CODE_DIR")
+    os.environ["COCOINDEX_CODE_DIR"] = str(base_dir)
+    old_cwd = os.getcwd()
+    os.chdir(project_dir)
+
+    monkeypatch.setattr("cocoindex_code.client.doctor", _fake_doctor_ok)
+
+    try:
+        yield project_dir
+    finally:
+        os.chdir(old_cwd)
+        stop_daemon()
+        if old_env is None:
+            os.environ.pop("COCOINDEX_CODE_DIR", None)
+        else:
+            os.environ["COCOINDEX_CODE_DIR"] = old_env
+
+
+def test_resolve_embedding_choice_flag_wins() -> None:
+    """--litellm-model flag short-circuits all other logic."""
+    from cocoindex_code.cli import _resolve_embedding_choice
+
+    embedding = _resolve_embedding_choice(
+        litellm_model_flag="openai/text-embedding-3-small",
+        st_installed=True,
+        tty=True,
+    )
+    assert embedding.provider == "litellm"
+    assert embedding.model == "openai/text-embedding-3-small"
+
+
+def test_resolve_embedding_choice_non_tty_defaults_to_snowflake() -> None:
+    """Non-TTY + ST installed → sentence-transformers + Snowflake defaults."""
+    from cocoindex_code.cli import _resolve_embedding_choice
+    from cocoindex_code.settings import DEFAULT_ST_MODEL
+
+    embedding = _resolve_embedding_choice(
+        litellm_model_flag=None,
+        st_installed=True,
+        tty=False,
+    )
+    assert embedding.provider == "sentence-transformers"
+    assert embedding.model == DEFAULT_ST_MODEL
+
+
+def test_resolve_embedding_choice_non_tty_slim_errors() -> None:
+    """Non-TTY + ST NOT installed + no flag → typer.Exit with guidance."""
+    import typer
+
+    from cocoindex_code.cli import _resolve_embedding_choice
+
+    with pytest.raises(typer.Exit) as exc_info:
+        _resolve_embedding_choice(
+            litellm_model_flag=None,
+            st_installed=False,
+            tty=False,
+        )
+    assert exc_info.value.exit_code == 1
+
+
+def test_init_non_tty_with_flag(e2e_fresh_env: Path) -> None:
+    """Non-TTY (CliRunner default) + --litellm-model works without prompts."""
+    result = runner.invoke(
+        app,
+        ["init", "--litellm-model", "openai/text-embedding-3-small"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+
+    loaded = load_user_settings()
+    assert loaded.embedding.provider == "litellm"
+    assert loaded.embedding.model == "openai/text-embedding-3-small"
+
+
+def test_init_non_tty_no_flag_uses_defaults(e2e_fresh_env: Path) -> None:
+    """Non-TTY + ST installed → defaults to sentence-transformers + Snowflake."""
+    result = runner.invoke(app, ["init"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+    loaded = load_user_settings()
+    assert loaded.embedding.provider == "sentence-transformers"
+    assert loaded.embedding.model == "Snowflake/snowflake-arctic-embed-xs"
+
+
+def test_init_non_tty_slim_install_no_flag_errors(
+    e2e_fresh_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-TTY + ST NOT installed + no flag → error before writing settings."""
+    monkeypatch.setattr(
+        "cocoindex_code.shared.is_sentence_transformers_installed",
+        lambda: False,
+    )
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code != 0
+    combined = result.output + result.stderr if result.stderr else result.output
+    assert "--litellm-model" in combined
+    assert "embeddings-local" in combined
+    assert not user_settings_path().is_file()
+
+
+def test_init_slim_install_with_flag(e2e_fresh_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ST not installed, --litellm-model given → LiteLLM settings written."""
+    monkeypatch.setattr(
+        "cocoindex_code.shared.is_sentence_transformers_installed",
+        lambda: False,
+    )
+    result = runner.invoke(
+        app,
+        ["init", "--litellm-model", "openai/text-embedding-3-small"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+
+    loaded = load_user_settings()
+    assert loaded.embedding.provider == "litellm"
+    assert loaded.embedding.model == "openai/text-embedding-3-small"
+
+
+def test_init_model_test_failure_is_non_fatal(
+    e2e_fresh_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Model-test failure does NOT abort init; project settings still written."""
+    from cocoindex_code.protocol import DoctorCheckResult
+
+    def _fake_doctor_fail(
+        project_root: str | None = None,
+        on_result: object = None,
+    ) -> list[DoctorCheckResult]:
+        fail = DoctorCheckResult(
+            name="Model Check",
+            ok=False,
+            details=[],
+            errors=["AuthenticationError: missing key"],
+        )
+        done = DoctorCheckResult(name="done", ok=True, details=[], errors=[])
+        return [fail, done]
+
+    monkeypatch.setattr("cocoindex_code.client.doctor", _fake_doctor_fail)
+    result = runner.invoke(
+        app,
+        ["init", "--litellm-model", "openai/text-embedding-3-small"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+    combined = result.output + (result.stderr or "")
+    assert "[FAIL]" in combined
+    assert "AuthenticationError" in combined
+    assert "ccc doctor" in combined
+    assert "envs:" in combined
+
+    # Settings file was written (not rolled back) and project was initialized.
+    assert user_settings_path().is_file()
+    assert (e2e_fresh_env / ".cocoindex_code" / "settings.yml").exists()
+
+
+def test_init_rejects_litellm_model_when_settings_exist(e2e_project: Path) -> None:
+    """With global settings pre-written by e2e_project, --litellm-model is rejected."""
+    result = runner.invoke(app, ["init", "--litellm-model", "openai/foo"])
+    assert result.exit_code != 0
+    combined = result.output + (result.stderr or "")
+    assert "already exist" in combined
+
+
+def test_init_force_does_not_suppress_prompts(e2e_fresh_env: Path) -> None:
+    """`-f` only affects the parent-marker warning, not the interactive-flow gate."""
+    result = runner.invoke(app, ["init", "-f"], catch_exceptions=False)
+    # Non-TTY + ST installed → non-TTY defaults, same as without -f.
+    assert result.exit_code == 0, result.output
+
+    loaded = load_user_settings()
+    assert loaded.embedding.provider == "sentence-transformers"
+    assert loaded.embedding.model == "Snowflake/snowflake-arctic-embed-xs"
+
+
+# ---------------------------------------------------------------------------
+# Doctor model-check failure path
+# ---------------------------------------------------------------------------
+
+
+async def test_daemon_check_model_maps_failure_to_doctor_result() -> None:
+    """daemon._check_model delegates to check_embedding and maps failures correctly."""
+    from cocoindex_code.daemon import _check_model
+
+    class _BoomEmbedder:
+        async def embed(self, text: str) -> object:  # noqa: ARG002
+            raise RuntimeError("boom")
+
+    result = await _check_model(_BoomEmbedder())
+    assert result.name == "Model Check"
+    assert result.ok is False
+    assert result.details == []
+    assert len(result.errors) == 1
+    assert result.errors[0].startswith("RuntimeError:")
+    assert "boom" in result.errors[0]
+
+
+# ---------------------------------------------------------------------------
+# Dockerfile packaging regression guard
+# ---------------------------------------------------------------------------
+
+
+def test_dockerfile_install_line_uses_default_extra() -> None:
+    """Dockerfile should install via `cocoindex-code[default]`, no separate ST pin."""
+    repo_root = Path(__file__).resolve().parent.parent
+    content = (repo_root / "docker" / "Dockerfile").read_text()
+    assert "cocoindex-code[default]" in content
+    assert "sentence-transformers>=" not in content
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
@@ -12,15 +13,16 @@ import typer as _typer
 from .client import DaemonStartError
 from .protocol import DoctorCheckResult, IndexingProgress, ProjectStatusResponse, SearchResponse
 from .settings import (
+    DEFAULT_ST_MODEL,
+    EmbeddingSettings,
     cocoindex_db_path,
     default_project_settings,
-    default_user_settings,
     find_parent_with_marker,
     find_project_root,
     project_settings_path,
     resolve_db_dir,
+    save_initial_user_settings,
     save_project_settings,
-    save_user_settings,
     target_sqlite_db_path,
     user_settings_path,
 )
@@ -282,19 +284,173 @@ def remove_from_gitignore(project_root: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+_LITELLM_MODELS_URL = "https://docs.litellm.ai/docs/embedding/supported_embedding"
+
+
+def _resolve_embedding_choice(
+    litellm_model_flag: str | None,
+    st_installed: bool,
+    tty: bool,
+) -> EmbeddingSettings:
+    """Resolve the embedding settings per the init control-flow diagram."""
+    if litellm_model_flag is not None:
+        return EmbeddingSettings(provider="litellm", model=litellm_model_flag)
+
+    if not tty:
+        if st_installed:
+            return EmbeddingSettings(provider="sentence-transformers", model=DEFAULT_ST_MODEL)
+        _typer.echo(
+            "Error: sentence-transformers is not installed and stdin is not a TTY.\n"
+            "Either install the extra (`pip install cocoindex-code[embeddings-local]`)\n"
+            "or pass `--litellm-model MODEL` to select a LiteLLM model.",
+            err=True,
+        )
+        raise _typer.Exit(code=1)
+
+    # Interactive
+    import questionary
+
+    if st_installed:
+        provider = questionary.select(
+            "Embedding provider",
+            choices=[
+                questionary.Choice(
+                    title="sentence-transformers (local, free)",
+                    value="sentence-transformers",
+                ),
+                questionary.Choice(
+                    title="litellm (cloud, 100+ providers)",
+                    value="litellm",
+                ),
+            ],
+        ).ask()
+    else:
+        _typer.echo(
+            "sentence-transformers is not installed — only `litellm` is available.\n"
+            "To enable local embeddings, install `cocoindex-code[embeddings-local]`."
+        )
+        provider = "litellm"
+
+    if provider is None:  # user cancelled (Ctrl-C / Esc)
+        raise _typer.Exit(code=1)
+
+    if provider == "sentence-transformers":
+        model = questionary.text("Model name", default=DEFAULT_ST_MODEL).ask()
+    elif provider == "litellm":
+        _typer.echo(f"See supported LiteLLM embedding models: {_LITELLM_MODELS_URL}")
+        model = questionary.text("Model name").ask()
+    else:
+        _typer.echo(f"Error: unknown provider {provider!r}", err=True)
+        raise _typer.Exit(code=1)
+
+    if not model:  # None (cancelled) or empty string
+        raise _typer.Exit(code=1)
+
+    return EmbeddingSettings(provider=provider, model=model.strip())
+
+
+def _ok_fail_tag(ok: bool) -> str:
+    """Return a colored `[OK]` or `[FAIL]` tag string."""
+    import click as _click
+
+    if ok:
+        return _click.style("[OK]", fg="green", bold=True)
+    return _click.style("[FAIL]", fg="red", bold=True)
+
+
+def _run_init_model_check(settings_path: Path) -> None:
+    """Ask the daemon to test the embedding model; print results and a hint on failure.
+
+    Drives the check via `DoctorRequest(project_root=None)`. The daemon loads
+    the model once and stays running, so the user's next `ccc index` starts
+    warm. Both DaemonStartError and generic exceptions are rendered as a
+    synthetic failed DoctorCheckResult — uniform failure-output shape.
+    """
+    from rich.console import Console as _Console
+    from rich.live import Live as _Live
+    from rich.spinner import Spinner as _Spinner
+
+    from . import client as _client
+
+    err_console = _Console(stderr=True)
+    results: list[DoctorCheckResult] = []
+    try:
+        with _Live(
+            _Spinner("dots", "Testing embedding model..."),
+            console=err_console,
+            transient=True,
+        ):
+            results = _client.doctor(project_root=None)
+    except Exception as e:
+        results = [
+            DoctorCheckResult(
+                name="Model Check",
+                ok=False,
+                details=[],
+                errors=[f"{type(e).__name__}: {e}"],
+            )
+        ]
+
+    failed = False
+    for r in results:
+        if r.name == "done":
+            continue
+        _print_doctor_result(r)
+        if not r.ok:
+            failed = True
+
+    if failed:
+        _typer.echo(
+            f"You can edit {settings_path} to change the model or add API keys\n"
+            "under `envs:`. Then run `ccc doctor` to verify.",
+            err=True,
+        )
+
+
+def _setup_user_settings_interactive(litellm_model_flag: str | None) -> None:
+    """Interactive global-settings setup — only runs when settings are missing."""
+    from .shared import is_sentence_transformers_installed
+
+    embedding = _resolve_embedding_choice(
+        litellm_model_flag=litellm_model_flag,
+        st_installed=is_sentence_transformers_installed(),
+        tty=sys.stdin.isatty(),
+    )
+
+    path = save_initial_user_settings(embedding)
+    _typer.echo()
+    _typer.echo(f"Created user settings: {path}")
+
+    _typer.echo()
+    _typer.echo(f"Testing embedding model: {embedding.provider} / {embedding.model}")
+    _run_init_model_check(path)
+    _typer.echo()
+
+
 @app.command()
 def init(
+    litellm_model: str | None = _typer.Option(
+        None,
+        "--litellm-model",
+        help="Use the given LiteLLM model and skip provider/model prompts.",
+    ),
     force: bool = _typer.Option(False, "-f", "--force", help="Skip parent directory warning"),
 ) -> None:
     """Initialize a project for cocoindex-code."""
     cwd = Path.cwd().resolve()
     settings_file = project_settings_path(cwd)
 
-    # Always ensure user settings exist
     user_path = user_settings_path()
-    if not user_path.is_file():
-        save_user_settings(default_user_settings())
-        _typer.echo(f"Created user settings: {user_path}")
+    if user_path.is_file():
+        if litellm_model is not None:
+            _typer.echo(
+                f"Error: global settings already exist at {user_path}.\n"
+                "Edit that file or remove it before passing `--litellm-model`.",
+                err=True,
+            )
+            raise _typer.Exit(code=1)
+    else:
+        _setup_user_settings_interactive(litellm_model)
 
     # Check if already initialized
     if settings_file.is_file():
@@ -489,10 +645,7 @@ def _print_doctor_result(result: DoctorCheckResult) -> None:
 
     if result.name == "done":
         return
-    if result.ok:
-        tag = _click.style("[OK]", fg="green", bold=True)
-    else:
-        tag = _click.style("[FAIL]", fg="red", bold=True)
+    tag = _ok_fail_tag(result.ok)
     _typer.echo(f"\n  {tag} {result.name}")
     for line in result.details:
         _typer.echo(f"    {line}")

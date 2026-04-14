@@ -15,6 +15,7 @@ from multiprocessing.connection import Client, Connection
 from pathlib import Path
 
 import pytest
+from conftest import make_test_user_settings
 
 from cocoindex_code._daemon_paths import connection_family
 from cocoindex_code._version import __version__
@@ -36,7 +37,6 @@ from cocoindex_code.protocol import (
 )
 from cocoindex_code.settings import (
     default_project_settings,
-    default_user_settings,
     save_project_settings,
     save_user_settings,
 )
@@ -60,7 +60,9 @@ def daemon_sock() -> Iterator[str]:
     from cocoindex_code.shared import embedder as shared_emb
 
     emb = (
-        shared_emb if shared_emb is not None else create_embedder(default_user_settings().embedding)
+        shared_emb
+        if shared_emb is not None
+        else create_embedder(make_test_user_settings().embedding)
     )
 
     # Use a short path to stay within AF_UNIX limit
@@ -77,7 +79,7 @@ def daemon_sock() -> Iterator[str]:
     _orig_create_embedder = dm.create_embedder
     dm.create_embedder = lambda settings: emb
 
-    save_user_settings(default_user_settings())
+    save_user_settings(make_test_user_settings())
 
     thread = threading.Thread(target=dm.run_daemon, daemon=True)
     thread.start()

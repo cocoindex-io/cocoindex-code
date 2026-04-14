@@ -61,7 +61,7 @@ from .settings import (
     load_user_settings,
     target_sqlite_db_path,
 )
-from .shared import Embedder, create_embedder
+from .shared import Embedder, check_embedding, create_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -262,22 +262,20 @@ async def _handle_doctor(
 
 async def _check_model(embedder: Embedder) -> DoctorCheckResult:
     """Test the embedding model by embedding a short string."""
-    try:
-        vec = await embedder.embed("hello world")
-        dim = len(vec)
+    result = await check_embedding(embedder)
+    if result.error is None:
         return DoctorCheckResult(
             name="Model Check",
             ok=True,
-            details=[f"Embedding dimension: {dim}"],
+            details=[f"Embedding dimension: {result.dim}"],
             errors=[],
         )
-    except Exception as e:
-        return DoctorCheckResult(
-            name="Model Check",
-            ok=False,
-            details=[],
-            errors=[str(e)],
-        )
+    return DoctorCheckResult(
+        name="Model Check",
+        ok=False,
+        details=[],
+        errors=[result.error],
+    )
 
 
 async def _check_file_walk(project_root_str: str) -> DoctorCheckResult:

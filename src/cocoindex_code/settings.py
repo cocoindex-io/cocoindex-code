@@ -126,11 +126,14 @@ class ProjectSettings:
 # ---------------------------------------------------------------------------
 
 
+DEFAULT_ST_MODEL = "Snowflake/snowflake-arctic-embed-xs"
+
+
 def default_user_settings() -> UserSettings:
     return UserSettings(
         embedding=EmbeddingSettings(
             provider="sentence-transformers",
-            model="sentence-transformers/all-MiniLM-L6-v2",
+            model=DEFAULT_ST_MODEL,
         )
     )
 
@@ -344,17 +347,20 @@ def load_gitignore_spec(project_root: Path) -> GitIgnoreSpec | None:
 # ---------------------------------------------------------------------------
 
 
-def _user_settings_to_dict(settings: UserSettings) -> dict[str, Any]:
-    d: dict[str, Any] = {}
-    emb: dict[str, Any] = {
-        "provider": settings.embedding.provider,
-        "model": settings.embedding.model,
+def _embedding_settings_to_dict(embedding: EmbeddingSettings) -> dict[str, Any]:
+    d: dict[str, Any] = {
+        "provider": embedding.provider,
+        "model": embedding.model,
     }
-    if settings.embedding.device is not None:
-        emb["device"] = settings.embedding.device
-    if settings.embedding.min_interval_ms is not None:
-        emb["min_interval_ms"] = settings.embedding.min_interval_ms
-    d["embedding"] = emb
+    if embedding.device is not None:
+        d["device"] = embedding.device
+    if embedding.min_interval_ms is not None:
+        d["min_interval_ms"] = embedding.min_interval_ms
+    return d
+
+
+def _user_settings_to_dict(settings: UserSettings) -> dict[str, Any]:
+    d: dict[str, Any] = {"embedding": _embedding_settings_to_dict(settings.embedding)}
     if settings.envs:
         d["envs"] = dict(settings.envs)
     return d
@@ -433,6 +439,46 @@ def save_user_settings(settings: UserSettings) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         _yaml.safe_dump(_user_settings_to_dict(settings), f, default_flow_style=False)
+    return path
+
+
+_INITIAL_HEADER = (
+    "# CocoIndex Code — global settings.\n"
+    "# After editing this file, run `ccc doctor` to verify your configuration.\n"
+    "\n"
+)
+
+_INITIAL_ENVS_COMMENT = (
+    "\n"
+    "# Environment variables to inject into the daemon running in the background.\n"
+    "# Uncomment and fill in keys for the LiteLLM providers you plan to use.\n"
+    "#\n"
+    "# envs:\n"
+    "#   OPENAI_API_KEY: ...\n"
+    "#   GEMINI_API_KEY: ...\n"
+    "#   ANTHROPIC_API_KEY: ...\n"
+    "#   VOYAGE_API_KEY: ...\n"
+)
+
+
+def save_initial_user_settings(embedding: EmbeddingSettings) -> Path:
+    """Write the initial global_settings.yml with comment hints and env examples.
+
+    Only used by `ccc init` on first-time setup. Emits only the `embedding:`
+    block from the input; the `envs:` section is a commented-out template.
+    Subsequent programmatic writes use `save_user_settings` and do not
+    preserve comments.
+    """
+    emb_block = _yaml.safe_dump(
+        {"embedding": _embedding_settings_to_dict(embedding)},
+        default_flow_style=False,
+        sort_keys=False,
+    )
+    content = _INITIAL_HEADER + emb_block + _INITIAL_ENVS_COMMENT
+
+    path = user_settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
     return path
 
 

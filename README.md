@@ -46,16 +46,18 @@ A lightweight, effective **(AST-based)** semantic code search tool for your code
 
 Using [pipx](https://pipx.pypa.io/stable/installation/):
 ```bash
-pipx install cocoindex-code       # first install
-pipx upgrade cocoindex-code       # upgrade
+pipx install 'cocoindex-code[default]'       # batteries included (local embeddings)
+pipx upgrade cocoindex-code                  # upgrade
 ```
 
 Using [uv](https://docs.astral.sh/uv/getting-started/installation/):
 ```bash
-uv tool install --upgrade cocoindex-code --prerelease explicit --with "cocoindex>=1.0.0a24"
+uv tool install --upgrade 'cocoindex-code[default]' --prerelease explicit --with "cocoindex>=1.0.0a24"
 ```
 
-The default embedding model runs locally ([sentence-transformers/all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)) — no API key required, completely free.
+Two install styles:
+- `cocoindex-code[default]` — batteries-included. Pulls in `sentence-transformers` so local embeddings (no API key required) work out of the box. The `ccc init` interactive prompt defaults to [Snowflake/snowflake-arctic-embed-xs](https://huggingface.co/Snowflake/snowflake-arctic-embed-xs).
+- `cocoindex-code` — slim. LiteLLM-only; requires a cloud embedding provider and API key. Use when you don't want the local-embedding deps (~1 GB of torch + transformers).
 
 Next, set up your [coding agent integration](#coding-agent-integration) — or jump to [Manual CLI Usage](#manual-cli-usage) if you prefer direct control.
 
@@ -275,8 +277,7 @@ Pass configuration to `docker run` with `-e`:
 # Exclude build artefacts (Scala/SBT example)
 -e COCOINDEX_CODE_EXCLUDE_PATTERNS='["**/target/**","**/.bloop/**","**/.metals/**"]'
 
-# Swap in a code-optimised embedding model
--e COCOINDEX_CODE_EMBEDDING_MODEL=voyage/voyage-code-3
+# Set an API key
 -e VOYAGE_API_KEY=your-key
 ```
 
@@ -291,7 +292,7 @@ docker build -t cocoindex-code:local -f docker/Dockerfile .
 - **Ultra Performant**: ⚡ Built on top of ultra performant [Rust indexing engine](https://github.com/cocoindex-io/cocoindex). Only re-indexes changed files for fast updates.
 - **Multi-Language Support**: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++, C#, SQL, Shell, and more.
 - **Embedded**: Portable and just works, no database setup required!
-- **Flexible Embeddings**: Local SentenceTransformers by default (free!) or 100+ cloud providers via LiteLLM.
+- **Flexible Embeddings**: Local SentenceTransformers via the `[default]` extra (free, no API key!) or 100+ cloud providers via LiteLLM.
 
 ## Configuration
 
@@ -304,7 +305,7 @@ Shared across all projects. Controls the embedding model and environment variabl
 ```yaml
 embedding:
   provider: sentence-transformers                    # or "litellm"
-  model: sentence-transformers/all-MiniLM-L6-v2
+  model: Snowflake/snowflake-arctic-embed-xs
   device: mps                                        # optional: cpu, cuda, mps (auto-detected if omitted)
   min_interval_ms: 300                               # optional: pace LiteLLM embedding requests to reduce 429s; defaults to 5 for LiteLLM
 
@@ -376,7 +377,7 @@ See [`src/cocoindex_code/chunking.py`](./src/cocoindex_code/chunking.py) for the
 
 ## Embedding Models
 
-By default, a local SentenceTransformers model ([sentence-transformers/all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)) is used — no API key required. To use a different model, edit `~/.cocoindex_code/global_settings.yml`.
+With the `[default]` extra installed, `ccc init` defaults to a local SentenceTransformers model ([Snowflake/snowflake-arctic-embed-xs](https://huggingface.co/Snowflake/snowflake-arctic-embed-xs)) — no API key required. To use a different model, edit `~/.cocoindex_code/global_settings.yml`.
 
 > The `envs` entries below are only needed if the key isn't already in your shell environment — the daemon inherits your environment automatically.
 

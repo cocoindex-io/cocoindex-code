@@ -47,7 +47,7 @@ def _patch_user_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def test_default_user_settings() -> None:
     s = default_user_settings()
     assert s.embedding.provider == "sentence-transformers"
-    assert "all-MiniLM-L6-v2" in s.embedding.model
+    assert s.embedding.model == "Snowflake/snowflake-arctic-embed-xs"
     assert s.embedding.device is None
     assert s.embedding.min_interval_ms is None
     assert s.envs == {}
@@ -137,7 +137,7 @@ def test_save_default_settings_writes_explicit_embedding() -> None:
     content = user_settings_path().read_text()
     assert "provider:" in content
     assert "model:" in content
-    assert "sentence-transformers" in content
+    assert "Snowflake/snowflake-arctic-embed-xs" in content
 
 
 def test_load_project_settings_missing_file_raises(tmp_path: Path) -> None:
@@ -334,3 +334,48 @@ def test_resolve_chunker_registry_not_callable() -> None:
     # os.path is a module attribute that is a string — not callable.
     with pytest.raises(ValueError, match="not callable"):
         _resolve_chunker_registry([ChunkerMapping(ext="toml", module="os:sep")])
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_save_initial_user_settings_round_trip() -> None:
+    from cocoindex_code.settings import (
+        save_initial_user_settings,
+        user_settings_path,
+    )
+
+    emb = EmbeddingSettings(
+        provider="sentence-transformers",
+        model="Snowflake/snowflake-arctic-embed-xs",
+    )
+    path = save_initial_user_settings(emb)
+    content = path.read_text()
+
+    # Hint comment and the four commented env-var examples.
+    assert "ccc doctor" in content
+    assert "# envs:" in content
+    for key in ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "VOYAGE_API_KEY"):
+        assert f"#   {key}:" in content
+
+    # Must round-trip through the normal loader.
+    loaded = load_user_settings()
+    assert loaded.embedding.provider == "sentence-transformers"
+    assert loaded.embedding.model == "Snowflake/snowflake-arctic-embed-xs"
+
+    # user_settings_path() is the same path returned by save_initial_user_settings.
+    assert path == user_settings_path()
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_save_initial_user_settings_model_with_colon() -> None:
+    """Regression: LiteLLM model names can contain `:`; must stay parseable."""
+    from cocoindex_code.settings import save_initial_user_settings
+
+    emb = EmbeddingSettings(
+        provider="litellm",
+        model="ollama_chat/llama3:latest",
+    )
+    save_initial_user_settings(emb)
+
+    loaded = load_user_settings()
+    assert loaded.embedding.provider == "litellm"
+    assert loaded.embedding.model == "ollama_chat/llama3:latest"

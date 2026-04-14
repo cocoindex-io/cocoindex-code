@@ -9,7 +9,7 @@ Shared across all projects. Controls the embedding model and extra environment v
 ```yaml
 embedding:
   provider: sentence-transformers   # or "litellm" (default when provider is omitted)
-  model: sentence-transformers/all-MiniLM-L6-v2
+  model: Snowflake/snowflake-arctic-embed-xs
   device: mps                       # optional: cpu, cuda, mps (auto-detected if omitted)
   min_interval_ms: 300              # optional: pace LiteLLM embedding requests to reduce 429s; defaults to 5 for LiteLLM
 
@@ -34,7 +34,7 @@ envs:                               # extra environment variables for the daemon
 ```yaml
 embedding:
   provider: sentence-transformers
-  model: sentence-transformers/all-MiniLM-L6-v2    # default, lightweight
+  model: Snowflake/snowflake-arctic-embed-xs        # default, lightweight
 ```
 
 ```yaml

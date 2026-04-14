@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import pathlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Union
+from typing import TYPE_CHECKING, Annotated, NamedTuple, Union
 
 import cocoindex as coco
 import numpy as np
@@ -39,6 +40,41 @@ embedder: Embedder | None = None
 
 # Query prompt name — set alongside embedder by create_embedder().
 query_prompt_name: str | None = None
+
+
+def is_sentence_transformers_installed() -> bool:
+    """Return True if the `sentence_transformers` package can be imported.
+
+    Uses `find_spec` rather than `import` to avoid triggering the slow,
+    torch-loading import as a side effect of the check.
+    """
+    return importlib.util.find_spec("sentence_transformers") is not None
+
+
+class EmbeddingCheckResult(NamedTuple):
+    """Outcome of a single embed-test call. See `check_embedding`.
+
+    Exactly one of ``dim`` / ``error`` is set: ``error is None`` means success.
+    """
+
+    dim: int | None
+    error: str | None
+
+
+async def check_embedding(embedder: Embedder) -> EmbeddingCheckResult:
+    """Run a single embed call against *embedder* and report dim or error.
+
+    Never raises. Used by both the daemon's doctor path (`daemon._check_model`)
+    and the CLI's init flow (`cli._test_embedding_model`).
+    """
+    try:
+        vec = await embedder.embed("hello world")
+        return EmbeddingCheckResult(dim=len(vec), error=None)
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}".splitlines()[0]
+        if len(msg) > 500:
+            msg = msg[:500] + "…"
+        return EmbeddingCheckResult(dim=None, error=msg)
 
 
 def create_embedder(settings: EmbeddingSettings) -> Embedder:

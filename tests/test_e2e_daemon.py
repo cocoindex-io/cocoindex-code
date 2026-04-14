@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from conftest import make_test_user_settings
 
 from cocoindex_code import client
 from cocoindex_code._version import __version__
@@ -21,7 +22,6 @@ from cocoindex_code.client import start_daemon, stop_daemon
 from cocoindex_code.daemon import daemon_socket_path
 from cocoindex_code.settings import (
     default_project_settings,
-    default_user_settings,
     save_project_settings,
     save_user_settings,
 )
@@ -54,7 +54,7 @@ def e2e_daemon() -> Iterator[tuple[str, Path]]:
     os.environ["COCOINDEX_CODE_DIR"] = str(base_dir)
 
     try:
-        save_user_settings(default_user_settings())
+        save_user_settings(make_test_user_settings())
         save_project_settings(project_dir, default_project_settings())
 
         proc = start_daemon()

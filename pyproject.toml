@@ -24,7 +24,6 @@ classifiers = [
 dependencies = [
     "mcp>=1.0.0",
     "cocoindex[litellm]==1.0.0a43",
-    "sentence-transformers>=2.2.0",
     "sqlite-vec>=0.1.0",
     "pydantic>=2.0.0",
     "numpy>=1.24.0",
@@ -33,9 +32,16 @@ dependencies = [
     "msgspec>=0.19.0",
     "pathspec>=0.12.1",
     "pyyaml>=6.0",
+    "questionary>=2.0.0",
 ]
 
 [project.optional-dependencies]
+embeddings-local = [
+    "cocoindex[sentence-transformers]==1.0.0a43",
+]
+default = [
+    "cocoindex[sentence-transformers]==1.0.0a43",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
@@ -43,6 +49,7 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
     "prek>=0.1.0",
+    "cocoindex[sentence-transformers]==1.0.0a43",
 ]
 
 [project.scripts]
@@ -76,6 +83,7 @@ dev = [
     "mypy>=1.0.0",
     "prek>=0.1.0",
     "types-pyyaml>=6.0.12.20250915",
+    "cocoindex[sentence-transformers]==1.0.0a43",
 ]
 
 [tool.uv]
