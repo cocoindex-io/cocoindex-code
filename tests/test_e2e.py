@@ -838,12 +838,16 @@ async def test_daemon_check_model_maps_failure_to_doctor_result() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dockerfile_install_line_uses_default_extra() -> None:
-    """Dockerfile should install via `cocoindex-code[default]`, no separate ST pin."""
+def test_dockerfile_install_line_uses_full_extra() -> None:
+    """Dockerfile should install via `cocoindex-code[full]` (not the old
+    `[default]` alias) and should not hard-pin sentence-transformers.
+    """
     repo_root = Path(__file__).resolve().parent.parent
     content = (repo_root / "docker" / "Dockerfile").read_text()
-    assert "cocoindex-code[default]" in content
+    assert "cocoindex-code[full]" in content
+    assert "cocoindex-code[default]" not in content
     assert "sentence-transformers>=" not in content
+    assert "sentence-transformers==" not in content
 
 
 # ---------------------------------------------------------------------------

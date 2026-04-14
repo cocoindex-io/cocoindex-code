@@ -26,6 +26,9 @@ def docker_image() -> str:
     """Build the image once per test session, installing cocoindex-code from the
     local source tree (not PyPI) so tests exercise the current changes. Returns the tag.
     """
+    # Tests exercise the `full` variant so `ccc init -f` in non-TTY mode can
+    # fall back to sentence-transformers (the slim variant requires
+    # `--litellm-model`, which would add setup boilerplate to every test).
     tag = "cocoindex-code:pytest"
     subprocess.run(
         [
@@ -34,7 +37,9 @@ def docker_image() -> str:
             "-f",
             str(DOCKERFILE),
             "--build-arg",
-            "CCC_INSTALL_SPEC=/ccc-src[default]",
+            "CCC_VARIANT=full",
+            "--build-arg",
+            "CCC_INSTALL_SPEC=/ccc-src[full]",
             "-t",
             tag,
             str(REPO_ROOT),

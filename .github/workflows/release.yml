@@ -112,7 +112,7 @@ jobs:
           --repo '${{ github.repository }}'
 
   publish-docker:
-    name: Build & push Docker image to Docker Hub and GHCR
+    name: Build & push Docker image (${{ matrix.variant }})
     # Runs on real releases, and on manual dispatch with `test_docker=true`
     # for verifying registry credentials before the first release.
     if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.test_docker)
@@ -123,6 +123,17 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # slim (default) — LiteLLM-only, ~300 MB. Publishes as `:latest`.
+          - variant: slim
+            install_spec: /ccc-src
+          # full — bundles sentence-transformers + torch + baked model,
+          # ~2 GB. Publishes as `:full`.
+          - variant: full
+            install_spec: /ccc-src[full]
     steps:
       - uses: actions/checkout@v4
 
@@ -151,25 +162,43 @@ jobs:
 
       - name: Compute image tags
         id: tags
-        # Real releases: push `:latest` and `:<version>` to both registries.
-        # Manual dispatches: push only `:test` so we don't clobber `:latest`.
+        # Tag scheme:
+        #   slim on release:  :latest, :<version>
+        #   full on release:  :full,   :<version>-full
+        #   slim on dispatch: :test
+        #   full on dispatch: :test-full
+        # Dispatched tags stay out of the `:latest` / `:<version>` namespace
+        # so manual test runs don't clobber what users pull.
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            {
-              echo "tags<<EOF"
-              echo "cocoindex/cocoindex-code:latest"
-              echo "cocoindex/cocoindex-code:${{ github.ref_name }}"
-              echo "ghcr.io/cocoindex-io/cocoindex-code:latest"
-              echo "ghcr.io/cocoindex-io/cocoindex-code:${{ github.ref_name }}"
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
+          variant="${{ matrix.variant }}"
+          if [ "$variant" = "slim" ]; then
+              slim_suffix=""
           else
-            {
-              echo "tags<<EOF"
-              echo "cocoindex/cocoindex-code:test"
-              echo "ghcr.io/cocoindex-io/cocoindex-code:test"
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
+              slim_suffix="-$variant"
+          fi
+          if [ "${{ github.event_name }}" = "release" ]; then
+              version="${{ github.ref_name }}"
+              if [ "$variant" = "slim" ]; then
+                  latest_tag="latest"
+              else
+                  latest_tag="$variant"
+              fi
+              {
+                  echo "tags<<EOF"
+                  echo "cocoindex/cocoindex-code:${latest_tag}"
+                  echo "cocoindex/cocoindex-code:${version}${slim_suffix}"
+                  echo "ghcr.io/cocoindex-io/cocoindex-code:${latest_tag}"
+                  echo "ghcr.io/cocoindex-io/cocoindex-code:${version}${slim_suffix}"
+                  echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+          else
+              test_tag="test${slim_suffix}"
+              {
+                  echo "tags<<EOF"
+                  echo "cocoindex/cocoindex-code:${test_tag}"
+                  echo "ghcr.io/cocoindex-io/cocoindex-code:${test_tag}"
+                  echo "EOF"
+              } >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push to both registries
@@ -186,11 +215,11 @@ jobs:
           # PyPI's CDN yet (which happened on v0.2.24 release), and ensures
           # the image matches the tagged commit byte-for-byte.
           build-args: |
-            CCC_INSTALL_SPEC=/ccc-src[default]
+            CCC_VARIANT=${{ matrix.variant }}
+            CCC_INSTALL_SPEC=${{ matrix.install_spec }}
           tags: ${{ steps.tags.outputs.tags }}
-          # Persist BuildKit's layer cache across workflow runs in the GitHub
-          # Actions cache. The Dockerfile is structured so the heavy base-deps
-          # layer (~1GB of torch + friends) reuses across releases — this is
-          # what lets subsequent builds skip that layer entirely.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Per-variant BuildKit cache so slim and full don't evict each
+          # other's layers. The heavy `deps` layer (torch + friends for
+          # full; empty for slim) reuses across releases.
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}

@@ -36,10 +36,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# `embeddings-local` is the primary feature extra: it pulls in
+# `sentence-transformers` (via cocoindex) so local embeddings work without
+# an API key.
 embeddings-local = [
     "cocoindex[sentence-transformers]==1.0.0a43",
 ]
-default = [
+# `full` is the umbrella "batteries-included" alias. Today it's just
+# `embeddings-local`, but we expect to bundle more optional niceties under
+# it over time — users who want everything can keep using `[full]` and pick
+# up the additions automatically. The name also matches the Docker
+# `:full` image variant for consistency across install paths. Contents are
+# inlined rather than self-referencing `cocoindex-code[embeddings-local]`
+# to avoid resolver edge cases with older pip.
+full = [
     "cocoindex[sentence-transformers]==1.0.0a43",
 ]
 dev = [

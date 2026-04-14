@@ -327,7 +327,7 @@ def _resolve_embedding_choice(
             return EmbeddingSettings(provider="sentence-transformers", model=DEFAULT_ST_MODEL)
         _typer.echo(
             "Error: sentence-transformers is not installed and stdin is not a TTY.\n"
-            "Either install the extra (`pip install cocoindex-code[embeddings-local]`)\n"
+            "Either install the extra (`pip install 'cocoindex-code[embeddings-local]'`)\n"
             "or pass `--litellm-model MODEL` to select a LiteLLM model.",
             err=True,
         )

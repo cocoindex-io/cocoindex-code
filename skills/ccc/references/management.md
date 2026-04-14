@@ -5,11 +5,11 @@
 Install CocoIndex Code via pipx. Two install styles:
 
 ```bash
-pipx install 'cocoindex-code[default]'   # batteries included (local embeddings via sentence-transformers)
+pipx install 'cocoindex-code[full]'      # batteries included (local embeddings via sentence-transformers)
 pipx install cocoindex-code              # slim (LiteLLM-only; requires a cloud embedding provider + API key)
 ```
 
-The `[default]` extra pulls in `sentence-transformers` so the first-run default (local embeddings, no API key) works out of the box. The slim install is for environments where you don't want the torch/transformers deps and plan to use a LiteLLM-supported cloud provider instead.
+The `[full]` extra pulls in `sentence-transformers` so the first-run default (local embeddings, no API key) works out of the box. The slim install is for environments where you don't want the torch/transformers deps and plan to use a LiteLLM-supported cloud provider instead.
 
 To upgrade to the latest version:
 
