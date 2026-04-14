@@ -187,8 +187,10 @@ def test_linux_puid_gives_host_owned_files(
 
     name = f"ccc-e2e-puid-{uuid.uuid4().hex[:8]}"
     host_ws = str(fixture_workspace)
-    uid = os.getuid()
-    gid = os.getgid()
+    # os.getuid/getgid only exist on POSIX; the skipif above already gates
+    # this test to Linux, so getattr lets mypy pass on Windows runners.
+    uid = os.getuid()  # type: ignore[attr-defined,unused-ignore]
+    gid = os.getgid()  # type: ignore[attr-defined,unused-ignore]
     try:
         subprocess.run(
             [
