@@ -221,5 +221,10 @@ jobs:
           # Per-variant BuildKit cache so slim and full don't evict each
           # other's layers. The heavy `deps` layer (torch + friends for
           # full; empty for slim) reuses across releases.
-          cache-from: type=gha,scope=${{ matrix.variant }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+          # Registry-backed BuildKit cache, stored as a separate tag
+          # (`buildcache-<variant>`) on the same GHCR package. Independent of
+          # branch/tag, so cache reuses across releases (every release tag is
+          # a different ref, which would have made GHA-scoped caching miss).
+          # `mode=max` exports all layers, including intermediate ones.
+          cache-from: type=registry,ref=ghcr.io/cocoindex-io/cocoindex-code:buildcache-${{ matrix.variant }}
+          cache-to: type=registry,ref=ghcr.io/cocoindex-io/cocoindex-code:buildcache-${{ matrix.variant }},mode=max
