@@ -25,7 +25,7 @@ async def test_run_embedding_request_retries_rate_limit_errors(
         attempts += 1
         assert model == "text-embedding-3-small"
         assert input == ["hello"]
-        assert kwargs == {}
+        assert kwargs == {"encoding_format": "float"}
         if attempts == 1:
             raise Exception("Rate limit exceeded. Please try again in 250ms")
         return SimpleNamespace(data=[{"embedding": [1.0, 2.0]}])
@@ -54,7 +54,7 @@ async def test_run_embedding_request_applies_min_interval_between_requests(
 
     async def fake_aembedding(*, model: str, input: list[str], **kwargs: Any) -> Any:
         assert model == "text-embedding-3-small"
-        assert kwargs == {}
+        assert kwargs == {"encoding_format": "float"}
         inputs_seen.append(input)
         return SimpleNamespace(data=[{"embedding": [1.0, 2.0]}])
 

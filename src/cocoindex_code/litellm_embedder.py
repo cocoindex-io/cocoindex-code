@@ -85,6 +85,7 @@ class PacedLiteLLMEmbedder(LiteLLMEmbedder):
             response = await self._aembedding_with_rate_limit_retries(
                 model=self._model,
                 input=input,
+                encoding_format="float",
                 **kwargs,
             )
 
