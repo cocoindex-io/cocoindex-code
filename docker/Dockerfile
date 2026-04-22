@@ -48,7 +48,7 @@ RUN pip install --quiet uv
 # this layer on upgrade.
 ARG CCC_VARIANT=slim
 RUN if [ "$CCC_VARIANT" = "full" ]; then \
-        uv pip install --system --prerelease=allow sentence-transformers; \
+        uv pip install --system sentence-transformers; \
     fi
 
 ENV HF_HOME=/var/cocoindex/cache/huggingface \
@@ -101,6 +101,4 @@ RUN --mount=type=bind,source=.,target=/ccc-src,rw=true \
             CCC_INSTALL_SPEC="cocoindex-code"; \
         fi; \
     fi; \
-    uv pip install --system --prerelease=allow \
-        "cocoindex>=1.0.0a33" \
-        "${CCC_INSTALL_SPEC}"
+    uv pip install --system "${CCC_INSTALL_SPEC}"

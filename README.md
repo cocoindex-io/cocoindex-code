@@ -52,7 +52,7 @@ pipx upgrade cocoindex-code                  # upgrade
 
 Using [uv](https://docs.astral.sh/uv/getting-started/installation/):
 ```bash
-uv tool install --upgrade 'cocoindex-code[full]' --prerelease explicit --with "cocoindex>=1.0.0a24"
+uv tool install --upgrade 'cocoindex-code[full]'
 ```
 
 Two install styles — they mirror the Docker image variants of the same names:
@@ -683,7 +683,7 @@ pipx upgrade cocoindex-code       # upgrade
 
 Using uv (install or upgrade):
 ```bash
-uv tool install --upgrade cocoindex-code --prerelease explicit --with "cocoindex>=1.0.0a24"
+uv tool install --upgrade cocoindex-code
 ```
 
 ## Legacy: Environment Variables
