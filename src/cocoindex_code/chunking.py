@@ -24,6 +24,6 @@ from cocoindex.resources.chunk import Chunk, TextPosition
 ChunkerFn = _Callable[[_pathlib.Path, str], tuple[str | None, list[Chunk]]]
 
 # tracked=False: callables are not fingerprint-able; daemon restart re-indexes anyway.
-CHUNKER_REGISTRY = _coco.ContextKey[dict[str, ChunkerFn]]("chunker_registry", tracked=False)
+CHUNKER_REGISTRY = _coco.ContextKey[dict[str, ChunkerFn]]("chunker_registry")
 
 __all__ = ["Chunk", "ChunkerFn", "CHUNKER_REGISTRY", "TextPosition"]

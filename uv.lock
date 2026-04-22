@@ -6,9 +6,6 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 
-[options]
-prerelease-mode = "explicit"
-
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
@@ -339,7 +336,7 @@ wheels = [
 
 [[package]]
 name = "cocoindex"
-version = "1.0.0a43"
+version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -351,17 +348,17 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "watchfiles" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2c/ae/89036ba4b5890c76de18b118195f08f1000b77b428be243cdfb26f48cb62/cocoindex-1.0.0a43.tar.gz", hash = "sha256:6569c91b6e01951d5d3419942ba5d0ef952ba89006f021ab25a28306d3400e55", size = 329738, upload-time = "2026-04-09T19:36:17.448Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7a/95/8c4e721c8c013c953db555ee9ae1b89059c34783fe7371296d71ae9076b8/cocoindex-1.0.0.tar.gz", hash = "sha256:5c9c732806be5b2749bb9e9d331d69452ac6a68bfc43f28ce5e50ccf0b17de0f", size = 359838, upload-time = "2026-04-22T06:41:22.868Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4b/8f/14a2c53b4b84eb2f928261e88e0fb0a80d387c950a1f1604ddcecf30d428/cocoindex-1.0.0a43-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:a9b91f3da9b8b42ee5dd6939d804e7bbf41b6ec8d91125bee2b0f00b61123e9c", size = 6484139, upload-time = "2026-04-09T19:36:15.966Z" },
-    { url = "https://files.pythonhosted.org/packages/aa/7f/3008551d2c45b5e47c7c5ff02b784fe442cd2a14e9aeec27017a80a76842/cocoindex-1.0.0a43-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:0919ff6e788720973c999388e9d2ff718cc6d16e9daa478c36a151789cfd2705", size = 6589417, upload-time = "2026-04-09T19:36:12.786Z" },
-    { url = "https://files.pythonhosted.org/packages/df/7c/eda090462a6fc7354a777a082d5097103e453cc01bb21c18b5ead6e6a159/cocoindex-1.0.0a43-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:4c2a4335a904743a7371585fc8df0b1b1d8a9a4953c46cf63ced57e573928e0f", size = 6398791, upload-time = "2026-04-09T19:36:05.941Z" },
-    { url = "https://files.pythonhosted.org/packages/4c/65/b5c3d95ef194cb6816d7c660ca7e163453f233fc2e67e54699a09beab466/cocoindex-1.0.0a43-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:ba810b8ae47dd772ebd89fc3bdc1cc57a94630f38cc0d2dae0c1fb7966cef708", size = 6595432, upload-time = "2026-04-09T19:36:09.452Z" },
-    { url = "https://files.pythonhosted.org/packages/c8/0c/05fcefdc56510c2cbecaf83efe9213d0a0d80720d60aea1895a70a02a6a0/cocoindex-1.0.0a43-cp311-abi3-win_amd64.whl", hash = "sha256:868a96f19e2ba629fac73a6131a682865df2f0f15f64eedb18f3f0bd403b1f4a", size = 6817206, upload-time = "2026-04-09T19:36:18.539Z" },
-    { url = "https://files.pythonhosted.org/packages/1a/b0/6bf1fbf30126d50f772388746965ea5a00b4476b70d48571c11fa909c1b0/cocoindex-1.0.0a43-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:65541e78681716079f99b3212654280212a7ca972401dfbd6315b76fd314ddb6", size = 6586540, upload-time = "2026-04-09T19:36:14.227Z" },
-    { url = "https://files.pythonhosted.org/packages/e2/f7/ba86b961885a8ebdc1dfaf3aea73309708e606aaf8016bd55d52bbdbfdea/cocoindex-1.0.0a43-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:e4169191eebc33db66c35f280d1d970c1b8badb335f82a0a0c0951f6a464913a", size = 6390430, upload-time = "2026-04-09T19:36:07.924Z" },
-    { url = "https://files.pythonhosted.org/packages/cf/78/05c08b2253b5f0be9082a8bf6d868326c0b96b6025f05b40ffa4e92276dd/cocoindex-1.0.0a43-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:bb0c157e5ce8ac36b2708e63ac46ea6eb0dba79a1621d930411b9fe1c2570515", size = 6589096, upload-time = "2026-04-09T19:36:11.27Z" },
-    { url = "https://files.pythonhosted.org/packages/4b/8a/ab014c6a522173b6fecd6d0f4913bfbbdc369e3b35cc5bd2c81dd78ee946/cocoindex-1.0.0a43-cp314-cp314t-win_amd64.whl", hash = "sha256:4217047a9195508ac2c0af70ec46c8a2943ce60c95c4b449d0e1c06aec74979c", size = 6806702, upload-time = "2026-04-09T19:36:20.342Z" },
+    { url = "https://files.pythonhosted.org/packages/32/84/48a2c4f8b31364b422a5a72d66279dcd307c6a53abc89df70ca13296a6f2/cocoindex-1.0.0-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:898f450144d9ce151b6954a07df53f8f0bdaa4815da3825bd2e32e4b925a6f9e", size = 7712412, upload-time = "2026-04-22T06:41:20.878Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/8e/5c6d1117fe7e5d946498352aa375a8f7b5b1b6df00c85957d6abfa9ab3c5/cocoindex-1.0.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:e1c922414d388f141fe9925a5192c721c7a70336cbea735e813e95ed791f5992", size = 7753754, upload-time = "2026-04-22T06:41:16.412Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/34/b0de4ae2fe10983e04d1bdb123dd2ba7ef422f3939cabf4f688b93965987/cocoindex-1.0.0-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:298d277a6c304084dd31b8b4af164ebe1cf89921e7dc9506527e5cdf3cdb1212", size = 7604605, upload-time = "2026-04-22T06:41:07.184Z" },
+    { url = "https://files.pythonhosted.org/packages/82/ce/e3762d4426a1438eb8ad0afe317e4dbdd8b5194062656125c30ba835541e/cocoindex-1.0.0-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:117c604a9a9af6976d45216973de67675cea79e562f070ce0489c1de0a79faee", size = 7866061, upload-time = "2026-04-22T06:41:11.965Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/2c/cf9d8666346cd6c2da883a86862bb6e21d2af941364bb195eda4e96ee8f5/cocoindex-1.0.0-cp311-abi3-win_amd64.whl", hash = "sha256:0ac34d46fc7a6693a31a8188df9f76e715653d14b954b6fc3e2b6e4550754a05", size = 8038477, upload-time = "2026-04-22T06:41:24.635Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/5b/ea9d9389c1dbd6b9cf5658402914d5a2260912797913e7423dd5c73ca9d9/cocoindex-1.0.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:01d55e13bc9bb27eb4a28783006e364dbc5fcc3789476730541b753cd7618059", size = 7749403, upload-time = "2026-04-22T06:41:18.486Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/93/cb72f2f2ae5b073ea2e062907c979369fa2eb0db00019ce29af9e939bf1e/cocoindex-1.0.0-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:92463c46064d29a1c228e1528b34805000e04b1146a8fabc42cbdb7d1f165db8", size = 7601383, upload-time = "2026-04-22T06:41:09.714Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/70/689dae314c7c320a37588af0faebeaa1ecd85027c82753b91345c64b87df/cocoindex-1.0.0-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:e74fcf39bd70da99e20c971486bbae420abf4930ffc1011a063d85d7ba20f0d9", size = 7861049, upload-time = "2026-04-22T06:41:14.075Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/89/1226642a4d56e31396f015c9942c8cf7657a8d98064ae8e8cf8ff0d577ad/cocoindex-1.0.0-cp314-cp314t-win_amd64.whl", hash = "sha256:42fa7f046352ed0ee888d500ae04eb9388bd3f003047bb5251d2113fc302cf2d", size = 8022474, upload-time = "2026-04-22T06:41:27.142Z" },
 ]
 
 [package.optional-dependencies]
@@ -420,10 +417,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cocoindex", extras = ["litellm"], specifier = "==1.0.0a43" },
-    { name = "cocoindex", extras = ["sentence-transformers"], marker = "extra == 'dev'", specifier = "==1.0.0a43" },
-    { name = "cocoindex", extras = ["sentence-transformers"], marker = "extra == 'embeddings-local'", specifier = "==1.0.0a43" },
-    { name = "cocoindex", extras = ["sentence-transformers"], marker = "extra == 'full'", specifier = "==1.0.0a43" },
+    { name = "cocoindex", extras = ["litellm"], specifier = ">=1.0.0,<1.1.0" },
+    { name = "cocoindex", extras = ["sentence-transformers"], marker = "extra == 'dev'", specifier = ">=1.0.0,<1.1.0" },
+    { name = "cocoindex", extras = ["sentence-transformers"], marker = "extra == 'embeddings-local'", specifier = ">=1.0.0,<1.1.0" },
+    { name = "cocoindex", extras = ["sentence-transformers"], marker = "extra == 'full'", specifier = ">=1.0.0,<1.1.0" },
     { name = "einops", specifier = ">=0.8.2" },
     { name = "mcp", specifier = ">=1.0.0" },
     { name = "msgspec", specifier = ">=0.19.0" },
@@ -445,7 +442,7 @@ provides-extras = ["dev", "embeddings-local", "full"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "cocoindex", extras = ["sentence-transformers"], specifier = "==1.0.0a43" },
+    { name = "cocoindex", extras = ["sentence-transformers"], specifier = ">=1.0.0,<1.1.0" },
     { name = "mypy", specifier = ">=1.0.0" },
     { name = "prek", specifier = ">=0.1.0" },
     { name = "pytest", specifier = ">=7.0.0" },

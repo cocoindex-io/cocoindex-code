@@ -31,9 +31,9 @@ _QUERY_PROMPT_MODELS = {"nomic-ai/nomic-embed-code", "nomic-ai/CodeRankEmbed"}
 Embedder = Union["SentenceTransformerEmbedder", "LiteLLMEmbedder"]
 
 # Context keys
-EMBEDDER = coco.ContextKey[Embedder]("embedder")
-SQLITE_DB = coco.ContextKey[sqlite.ManagedConnection]("index_db", tracked=False)
-CODEBASE_DIR = coco.ContextKey[pathlib.Path]("codebase", tracked=False)
+EMBEDDER = coco.ContextKey[Embedder]("embedder", detect_change=True)
+SQLITE_DB = coco.ContextKey[sqlite.ManagedConnection]("index_db")
+CODEBASE_DIR = coco.ContextKey[pathlib.Path]("codebase")
 
 # Module-level variable — set by daemon at startup (needed for CodeChunk annotation).
 embedder: Embedder | None = None
