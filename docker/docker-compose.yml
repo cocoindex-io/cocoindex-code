@@ -10,12 +10,13 @@
 # workspace. Set COCOINDEX_HOST_WORKSPACE=/path/to/code to mount a narrower
 # directory instead.
 #
-# Using GHCR instead of Docker Hub? Change the image below to
-# `ghcr.io/cocoindex-io/cocoindex-code:latest`.
+# Override the image via COCOINDEX_CODE_IMAGE — for example:
+#   COCOINDEX_CODE_IMAGE=cocoindex/cocoindex-code:full docker compose up -d
+#   COCOINDEX_CODE_IMAGE=ghcr.io/cocoindex-io/cocoindex-code:latest docker compose up -d
 
 services:
   cocoindex-code:
-    image: cocoindex/cocoindex-code:latest
+    image: ${COCOINDEX_CODE_IMAGE:-cocoindex/cocoindex-code:latest}
     container_name: cocoindex-code
     volumes:
       - ${COCOINDEX_HOST_WORKSPACE:-${HOME}}:/workspace

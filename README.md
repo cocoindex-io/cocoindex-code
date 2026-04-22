@@ -219,15 +219,17 @@ The rest of this section uses `:latest` — substitute `:full` in the `image:` /
 
 ### Quick start — `docker compose up -d`
 
-Grab [`docker/docker-compose.yml`](./docker/docker-compose.yml) from this repo and run:
+Bring it up in one line — no clone needed (bash / zsh):
 
 ```bash
 # macOS / Windows
-docker compose up -d
+docker compose -f <(curl -L https://raw.githubusercontent.com/cocoindex-io/cocoindex-code/refs/heads/main/docker/docker-compose.yml) up -d
 
 # Linux (aligns file ownership on bind-mounted paths with your host user)
-PUID=$(id -u) PGID=$(id -g) docker compose up -d
+PUID=$(id -u) PGID=$(id -g) docker compose -f <(curl -L https://raw.githubusercontent.com/cocoindex-io/cocoindex-code/refs/heads/main/docker/docker-compose.yml) up -d
 ```
+
+Or grab [`docker/docker-compose.yml`](./docker/docker-compose.yml) and run `docker compose up -d` next to it (works on any shell, including Windows cmd / PowerShell).
 
 By default your home directory is mounted into the container (set
 `COCOINDEX_HOST_WORKSPACE` to narrow this to a specific code folder). Index
@@ -235,9 +237,12 @@ data and the embedding model cache persist in a Docker volume across
 restarts. Your global settings file at `$HOME/.cocoindex_code/global_settings.yml`
 is visible and editable on the host; edits take effect on your next `ccc` command.
 
-> **GHCR:** to pull from GitHub Container Registry instead of Docker Hub,
-> change the `image:` line in your copy of `docker-compose.yml` to
-> `ghcr.io/cocoindex-io/cocoindex-code:latest`.
+> **Pick a different image:** set `COCOINDEX_CODE_IMAGE` to override the
+> default. For example, the `:full` variant or GHCR:
+> ```bash
+> COCOINDEX_CODE_IMAGE=cocoindex/cocoindex-code:full docker compose up -d
+> COCOINDEX_CODE_IMAGE=ghcr.io/cocoindex-io/cocoindex-code:latest docker compose up -d
+> ```
 
 ### Or: `docker run`
 
