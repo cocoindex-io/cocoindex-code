@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .schema import QueryResult
-from .shared import EMBEDDER, SQLITE_DB, query_prompt_name
+from .shared import EMBEDDER, QUERY_EMBED_PARAMS, SQLITE_DB
 
 
 def _l2_to_score(distance: float) -> float:
@@ -106,9 +106,10 @@ async def query_codebase(
 
     db = env.get_context(SQLITE_DB)
     embedder = env.get_context(EMBEDDER)
+    query_params = env.get_context(QUERY_EMBED_PARAMS)
 
     # Generate query embedding.
-    query_embedding = await embedder.embed(query, query_prompt_name)
+    query_embedding = await embedder.embed(query, **query_params)
 
     embedding_bytes = query_embedding.astype("float32").tobytes()
 

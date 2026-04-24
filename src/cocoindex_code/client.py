@@ -65,6 +65,38 @@ logger = logging.getLogger(__name__)
 
 _daemon_ensured = False
 
+# Tracks which daemon-side handshake warnings have already been surfaced to
+# the user in this process. We print each distinct warning at most once per
+# `ccc` invocation — see `_print_handshake_warnings`.
+_surfaced_warnings: set[str] = set()
+
+
+def print_warning(message: str) -> None:
+    """Render a user-facing warning to stderr with a uniform style.
+
+    Prefixes with ``Warning:`` and renders in yellow when stderr is a TTY;
+    falls through as plain text for pipes / files / CI logs.  Intended as
+    the single entry point for warnings the user should notice — reuse it
+    for any new warning rather than inventing a local style.
+    """
+    import click
+
+    click.secho(f"Warning: {message}", fg="yellow", err=True)
+
+
+def _print_handshake_warnings(resp: HandshakeResponse) -> None:
+    """Print any new daemon-side warnings to stderr (once per process).
+
+    The daemon populates ``HandshakeResponse.warnings`` on every handshake;
+    the dedup set here ensures a warning is printed at most once within a
+    single CLI invocation even though several connections are opened.
+    """
+    for w in resp.warnings:
+        if w in _surfaced_warnings:
+            continue
+        _surfaced_warnings.add(w)
+        print_warning(w)
+
 
 def _is_daemon_supervised() -> bool:
     """True when an external supervisor (Docker entrypoint loop, systemd, …) owns
@@ -146,6 +178,7 @@ def _raw_connect_and_handshake() -> Connection:
     if not resp.ok or _needs_restart(resp):
         conn.close()
         raise DaemonVersionError(resp)
+    _print_handshake_warnings(resp)
     return conn
 
 
@@ -452,6 +485,7 @@ def stop_daemon() -> None:
     """
     global _daemon_ensured  # noqa: PLW0603
     _daemon_ensured = False
+    _surfaced_warnings.clear()
     pid_path = daemon_pid_path()
 
     pid: int | None = None

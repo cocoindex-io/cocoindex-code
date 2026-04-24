@@ -351,7 +351,7 @@ def test_save_initial_user_settings_round_trip() -> None:
         provider="sentence-transformers",
         model="Snowflake/snowflake-arctic-embed-xs",
     )
-    path = save_initial_user_settings(emb)
+    path = save_initial_user_settings(emb, defaults_applied=False)
     content = path.read_text()
 
     # Hint comment and the four commented env-var examples.
@@ -378,7 +378,7 @@ def test_save_initial_user_settings_model_with_colon() -> None:
         provider="litellm",
         model="ollama_chat/llama3:latest",
     )
-    save_initial_user_settings(emb)
+    save_initial_user_settings(emb, defaults_applied=False)
 
     loaded = load_user_settings()
     assert loaded.embedding.provider == "litellm"
@@ -519,3 +519,105 @@ def test_daemon_runtime_dir_falls_back_to_user_settings_dir(
     monkeypatch.delenv("COCOINDEX_CODE_RUNTIME_DIR", raising=False)
     monkeypatch.setenv("COCOINDEX_CODE_DIR", str(settings_dir))
     assert daemon_runtime_dir() == settings_dir
+
+
+# ---------------------------------------------------------------------------
+# indexing_params / query_params round-trip and templates
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_embedding_params_missing_load_as_none(tmp_path: Path) -> None:
+    path = tmp_path / ".cocoindex_code" / "global_settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("embedding:\n  provider: litellm\n  model: m\n")
+    loaded = load_user_settings()
+    assert loaded.embedding.indexing_params is None
+    assert loaded.embedding.query_params is None
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_embedding_params_roundtrip_preserves_empty_dict() -> None:
+    settings = UserSettings(
+        embedding=EmbeddingSettings(
+            provider="sentence-transformers",
+            model="x/y",
+            indexing_params={"prompt_name": "passage"},
+            query_params={},  # explicit empty — must round-trip as {} not None
+        ),
+    )
+    save_user_settings(settings)
+    loaded = load_user_settings()
+    assert loaded.embedding.indexing_params == {"prompt_name": "passage"}
+    assert loaded.embedding.query_params == {}
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_embedding_params_omit_when_none() -> None:
+    settings = UserSettings(
+        embedding=EmbeddingSettings(
+            provider="litellm",
+            model="m",
+        ),
+    )
+    save_user_settings(settings)
+    from cocoindex_code.settings import user_settings_path
+
+    content = user_settings_path().read_text()
+    assert "indexing_params" not in content
+    assert "query_params" not in content
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_save_initial_writes_populated_defaults_no_template() -> None:
+    from cocoindex_code.settings import save_initial_user_settings, user_settings_path
+
+    emb = EmbeddingSettings(
+        provider="sentence-transformers",
+        model="nomic-ai/CodeRankEmbed",
+        query_params={"prompt_name": "query"},
+    )
+    save_initial_user_settings(emb, defaults_applied=True)
+    content = user_settings_path().read_text()
+
+    # Populated as real YAML keys
+    assert "query_params:" in content
+    assert "prompt_name: query" in content
+    # No commented-out template hint
+    assert "# indexing_params: {}" not in content
+    assert "# query_params: {}" not in content
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_save_initial_writes_comment_template_for_unknown_sentence_transformers() -> None:
+    from cocoindex_code.settings import save_initial_user_settings, user_settings_path
+
+    emb = EmbeddingSettings(
+        provider="sentence-transformers",
+        model="unknown/model",
+    )
+    save_initial_user_settings(emb, defaults_applied=False)
+    content = user_settings_path().read_text()
+
+    assert "# indexing_params: {}" in content
+    assert "# query_params: {}" in content
+    assert "prompt_name" in content
+    # litellm-only keys should not appear
+    assert "input_type" not in content
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_save_initial_writes_comment_template_for_unknown_litellm() -> None:
+    from cocoindex_code.settings import save_initial_user_settings, user_settings_path
+
+    emb = EmbeddingSettings(
+        provider="litellm",
+        model="someprovider/unknown",
+    )
+    save_initial_user_settings(emb, defaults_applied=False)
+    content = user_settings_path().read_text()
+
+    assert "# indexing_params: {}" in content
+    assert "# query_params: {}" in content
+    assert "input_type" in content
+    assert "dimensions" in content

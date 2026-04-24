@@ -54,12 +54,16 @@ def test_is_sentence_transformers_installed_false_when_find_spec_returns_none(
 
 
 class _StubOkEmbedder:
-    async def embed(self, text: str) -> Any:
+    def __init__(self) -> None:
+        self.last_kwargs: dict[str, Any] | None = None
+
+    async def embed(self, text: str, **kwargs: Any) -> Any:
+        self.last_kwargs = dict(kwargs)
         return np.zeros(384, dtype=np.float32)
 
 
 class _StubErrEmbedder:
-    async def embed(self, text: str) -> Any:
+    async def embed(self, text: str, **kwargs: Any) -> Any:
         raise RuntimeError("boom")
 
 
@@ -75,3 +79,15 @@ async def test_check_embedding_error() -> None:
     assert result.error is not None
     assert result.error.startswith("RuntimeError:")
     assert "boom" in result.error
+
+
+async def test_check_embedding_forwards_params() -> None:
+    stub = _StubOkEmbedder()
+    await check_embedding(stub, {"prompt_name": "passage"})
+    assert stub.last_kwargs == {"prompt_name": "passage"}
+
+
+async def test_check_embedding_no_params_forwards_empty() -> None:
+    stub = _StubOkEmbedder()
+    await check_embedding(stub)
+    assert stub.last_kwargs == {}

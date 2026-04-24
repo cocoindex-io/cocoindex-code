@@ -612,14 +612,20 @@ def _fake_doctor_ok(
     """Stand-in for ``client.doctor`` that returns a single OK Model Check."""
     from cocoindex_code.protocol import DoctorCheckResult
 
-    ok = DoctorCheckResult(
-        name="Model Check",
+    indexing_ok = DoctorCheckResult(
+        name="Model Check (indexing)",
         ok=True,
-        details=["Embedding dimension: 384"],
+        details=["params: {} (no extra kwargs)", "Embedding dimension: 384"],
+        errors=[],
+    )
+    query_ok = DoctorCheckResult(
+        name="Model Check (query)",
+        ok=True,
+        details=["params: {} (no extra kwargs)", "Embedding dimension: 384"],
         errors=[],
     )
     done = DoctorCheckResult(name="done", ok=True, details=[], errors=[])
-    return [ok, done]
+    return [indexing_ok, query_ok, done]
 
 
 @pytest.fixture()
@@ -766,13 +772,19 @@ def test_init_model_test_failure_is_non_fatal(
         on_result: object = None,
     ) -> list[DoctorCheckResult]:
         fail = DoctorCheckResult(
-            name="Model Check",
+            name="Model Check (indexing)",
             ok=False,
-            details=[],
+            details=["params: {} (no extra kwargs)"],
             errors=["AuthenticationError: missing key"],
         )
+        query_ok = DoctorCheckResult(
+            name="Model Check (query)",
+            ok=True,
+            details=["params: {} (no extra kwargs)", "Embedding dimension: 384"],
+            errors=[],
+        )
         done = DoctorCheckResult(name="done", ok=True, details=[], errors=[])
-        return [fail, done]
+        return [fail, query_ok, done]
 
     monkeypatch.setattr("cocoindex_code.client.doctor", _fake_doctor_fail)
     result = runner.invoke(
@@ -821,13 +833,16 @@ async def test_daemon_check_model_maps_failure_to_doctor_result() -> None:
     from cocoindex_code.daemon import _check_model
 
     class _BoomEmbedder:
-        async def embed(self, text: str) -> object:  # noqa: ARG002
+        async def embed(self, text: str, **kwargs: object) -> object:  # noqa: ARG002
             raise RuntimeError("boom")
 
-    result = await _check_model(_BoomEmbedder())
-    assert result.name == "Model Check"
+    from typing import cast
+
+    from cocoindex_code.shared import Embedder
+
+    result = await _check_model(cast(Embedder, _BoomEmbedder()), label="indexing", params={})
+    assert result.name == "Model Check (indexing)"
     assert result.ok is False
-    assert result.details == []
     assert len(result.errors) == 1
     assert result.errors[0].startswith("RuntimeError:")
     assert "boom" in result.errors[0]

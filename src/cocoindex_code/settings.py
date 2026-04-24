@@ -93,6 +93,11 @@ class EmbeddingSettings:
     provider: str = "litellm"
     device: str | None = None
     min_interval_ms: int | None = None
+    # Extra kwargs spread into ``embedder.embed()`` during indexing/query.
+    # ``None`` means the user did not set the key; ``{}`` is an explicit empty
+    # dict (used to opt out of the legacy-bridge warning).
+    indexing_params: dict[str, Any] | None = None
+    query_params: dict[str, Any] | None = None
 
 
 @dataclass
@@ -410,6 +415,10 @@ def _embedding_settings_to_dict(embedding: EmbeddingSettings) -> dict[str, Any]:
         d["device"] = embedding.device
     if embedding.min_interval_ms is not None:
         d["min_interval_ms"] = embedding.min_interval_ms
+    if embedding.indexing_params is not None:
+        d["indexing_params"] = dict(embedding.indexing_params)
+    if embedding.query_params is not None:
+        d["query_params"] = dict(embedding.query_params)
     return d
 
 
@@ -432,6 +441,13 @@ def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
         emb_kwargs["device"] = emb_dict["device"]
     if "min_interval_ms" in emb_dict:
         emb_kwargs["min_interval_ms"] = emb_dict["min_interval_ms"]
+    # indexing_params / query_params: missing → None (dataclass default);
+    # present-but-null → {} (treat the same as an empty dict, since both mean
+    # "user acknowledged the key and wants no extra kwargs").
+    if "indexing_params" in emb_dict:
+        emb_kwargs["indexing_params"] = dict(emb_dict["indexing_params"] or {})
+    if "query_params" in emb_dict:
+        emb_kwargs["query_params"] = dict(emb_dict["query_params"] or {})
     embedding = EmbeddingSettings(**emb_kwargs)
     envs = d.get("envs", {})
     return UserSettings(embedding=embedding, envs=envs)
@@ -514,21 +530,53 @@ _INITIAL_ENVS_COMMENT = (
     "#   VOYAGE_API_KEY: ...\n"
 )
 
+# Comment-template blocks inserted after `embedding:` when we don't have
+# curated defaults for the chosen model, so users know the fields exist.
+# Keyed by provider name.
+_PARAMS_COMMENT_BY_PROVIDER: dict[str, str] = {
+    "sentence-transformers": (
+        "  #\n"
+        "  # Extra kwargs passed to the embedder. Supported keys:\n"
+        "  #   prompt_name\n"
+        "  # indexing_params: {}\n"
+        "  # query_params: {}\n"
+    ),
+    "litellm": (
+        "  #\n"
+        "  # Extra kwargs passed to the embedder. Supported keys:\n"
+        "  #   input_type, dimensions\n"
+        "  # indexing_params: {}\n"
+        "  # query_params: {}\n"
+    ),
+}
 
-def save_initial_user_settings(embedding: EmbeddingSettings) -> Path:
+
+def save_initial_user_settings(
+    embedding: EmbeddingSettings,
+    defaults_applied: bool,
+) -> Path:
     """Write the initial global_settings.yml with comment hints and env examples.
 
     Only used by `ccc init` on first-time setup. Emits only the `embedding:`
     block from the input; the `envs:` section is a commented-out template.
     Subsequent programmatic writes use `save_user_settings` and do not
     preserve comments.
+
+    When ``defaults_applied`` is False, a provider-specific commented-out
+    template for ``indexing_params`` / ``query_params`` is inserted under the
+    ``embedding:`` block so the user sees the fields exist.
     """
     emb_block = _yaml.safe_dump(
         {"embedding": _embedding_settings_to_dict(embedding)},
         default_flow_style=False,
         sort_keys=False,
     )
-    content = _INITIAL_HEADER + emb_block + _INITIAL_ENVS_COMMENT
+    content = _INITIAL_HEADER + emb_block
+    if not defaults_applied:
+        hint = _PARAMS_COMMENT_BY_PROVIDER.get(embedding.provider)
+        if hint is not None:
+            content += hint
+    content += _INITIAL_ENVS_COMMENT
 
     path = user_settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -24,6 +24,7 @@ from ._daemon_paths import (
 )
 from ._version import __version__
 from .chunking import ChunkerFn as _ChunkerFn
+from .embedder_params import resolve_embedder_params
 from .project import Project
 from .protocol import (
     DaemonEnvRequest,
@@ -56,6 +57,7 @@ from .protocol import (
 )
 from .settings import (
     ChunkerMapping,
+    UserSettings,
     format_path_for_display,
     get_host_path_mappings,
     global_settings_mtime_us,
@@ -67,6 +69,27 @@ from .settings import (
 from .shared import Embedder, check_embedding, create_embedder
 
 logger = logging.getLogger(__name__)
+
+
+def _build_backward_compat_warning(
+    user_settings: UserSettings,
+    settings_path: Path,
+) -> str:
+    """Compose the one-time handshake warning for legacy-bridge models.
+
+    Fired when a user's settings omit ``indexing_params`` / ``query_params`` for
+    a model that was previously hardcoded to use ``prompt_name="query"`` for
+    queries.  See embedder_defaults.LEGACY_QUERY_PROMPT_MODELS.
+    """
+    return (
+        f"Your embedding model ({user_settings.embedding.model}) was previously "
+        f'hardcoded to use prompt_name="query" for queries. Add the following to '
+        f"{settings_path} to keep this behavior and silence this warning:\n"
+        f"\n"
+        f"  embedding:\n"
+        f"    query_params:\n"
+        f"      prompt_name: query\n"
+    )
 
 
 def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> dict[str, _ChunkerFn]:
@@ -105,10 +128,19 @@ class ProjectRegistry:
 
     _projects: dict[str, Project]
     _embedder: Embedder | None
+    indexing_params: dict[str, Any]
+    query_params: dict[str, Any]
 
-    def __init__(self, embedder: Embedder | None) -> None:
+    def __init__(
+        self,
+        embedder: Embedder | None,
+        indexing_params: dict[str, Any] | None = None,
+        query_params: dict[str, Any] | None = None,
+    ) -> None:
         self._projects = {}
         self._embedder = embedder
+        self.indexing_params = dict(indexing_params) if indexing_params else {}
+        self.query_params = dict(query_params) if query_params else {}
 
     async def get_project(self, project_root: str) -> Project:
         """Get or create a Project for the given root. Lazy initialization."""
@@ -120,7 +152,13 @@ class ProjectRegistry:
             root = Path(project_root)
             project_settings = load_project_settings(root)
             chunker_registry = _resolve_chunker_registry(project_settings.chunkers)
-            project = await Project.create(root, self._embedder, chunker_registry=chunker_registry)
+            project = await Project.create(
+                root,
+                self._embedder,
+                indexing_params=self.indexing_params,
+                query_params=self.query_params,
+                chunker_registry=chunker_registry,
+            )
             self._projects[project_root] = project
         return self._projects[project_root]
 
@@ -168,6 +206,7 @@ async def handle_connection(
     on_shutdown: Callable[[], None],
     settings_mtime_us: int | None,
     settings_env_names: list[str],
+    handshake_warnings: list[str],
 ) -> None:
     """Handle a single client connection (per-request model).
 
@@ -193,6 +232,7 @@ async def handle_connection(
                     ok=ok,
                     daemon_version=__version__,
                     global_settings_mtime_us=settings_mtime_us,
+                    warnings=list(handshake_warnings),
                 )
             )
         )
@@ -260,8 +300,19 @@ async def _handle_doctor(
     appear before project settings in the output.
     """
     if req.project_root is None:
-        # Global-scope checks
-        yield DoctorResponse(result=await _check_model(registry._embedder))
+        # Global-scope checks — two separate embed calls because indexing and
+        # query may pass different kwargs (asymmetric embedding models), and
+        # either side can fail independently (e.g. a malformed input_type).
+        yield DoctorResponse(
+            result=await _check_model(
+                registry._embedder, label="indexing", params=registry.indexing_params
+            )
+        )
+        yield DoctorResponse(
+            result=await _check_model(
+                registry._embedder, label="query", params=registry.query_params
+            )
+        )
     else:
         # Project-scope checks
         yield DoctorResponse(result=await _check_file_walk(req.project_root))
@@ -274,31 +325,39 @@ async def _handle_doctor(
     )
 
 
-async def _check_model(embedder: Embedder | None) -> DoctorCheckResult:
-    """Test the embedding model by embedding a short string.
+async def _check_model(
+    embedder: Embedder | None,
+    label: str,
+    params: dict[str, Any],
+) -> DoctorCheckResult:
+    """Test the embedding model by embedding a short string using *params*.
 
-    Returns a failed result when the embedder is ``None`` (daemon running in
-    no-settings mode).
+    *label* appears in the check's name (e.g. ``"indexing"`` / ``"query"``) so
+    users see which side of the config the result corresponds to.  Returns a
+    failed result when the embedder is ``None`` (daemon running in no-settings
+    mode).
     """
+    name = f"Model Check ({label})"
     if embedder is None:
         return DoctorCheckResult(
-            name="Model Check",
+            name=name,
             ok=False,
             details=[],
             errors=["Daemon has no global settings loaded. Run `ccc init` to set up."],
         )
-    result = await check_embedding(embedder)
+    result = await check_embedding(embedder, params)
+    params_detail = f"params: {params}" if params else "params: {} (no extra kwargs)"
     if result.error is None:
         return DoctorCheckResult(
-            name="Model Check",
+            name=name,
             ok=True,
-            details=[f"Embedding dimension: {result.dim}"],
+            details=[params_detail, f"Embedding dimension: {result.dim}"],
             errors=[],
         )
     return DoctorCheckResult(
-        name="Model Check",
+        name=name,
         ok=False,
-        details=[],
+        details=[params_detail],
         errors=[result.error],
     )
 
@@ -506,11 +565,27 @@ def run_daemon() -> None:
     # provider/model picker in `ccc init`.
     settings_mtime_us = global_settings_mtime_us()  # None when file is missing
     embedder: Embedder | None
+    indexing_params: dict[str, Any] = {}
+    query_params: dict[str, Any] = {}
+    handshake_warnings: list[str] = []
     if user_settings_path().is_file():
         user_settings = load_user_settings()
         settings_env_keys = list(user_settings.envs.keys())
         for key, value in user_settings.envs.items():
             os.environ[key] = value
+        # Resolve params BEFORE constructing the embedder so invalid configs
+        # fail fast without paying the model-load cost.
+        try:
+            embedder_params = resolve_embedder_params(user_settings.embedding)
+        except ValueError:
+            logger.exception("Invalid embedder params in global_settings.yml")
+            sys.exit(1)
+        indexing_params = embedder_params.indexing
+        query_params = embedder_params.query
+        if embedder_params.used_backward_compat:
+            handshake_warnings.append(
+                _build_backward_compat_warning(user_settings, user_settings_path())
+            )
         embedder = create_embedder(user_settings.embedding)
     else:
         settings_env_keys = []
@@ -532,7 +607,11 @@ def run_daemon() -> None:
     logger.info("Daemon starting (PID %d, version %s)", os.getpid(), __version__)
 
     start_time = time.monotonic()
-    registry = ProjectRegistry(embedder)
+    registry = ProjectRegistry(
+        embedder,
+        indexing_params=indexing_params,
+        query_params=query_params,
+    )
 
     sock_path = daemon_socket_path()
     if sys.platform != "win32":
@@ -560,6 +639,7 @@ def run_daemon() -> None:
                 _request_shutdown,
                 settings_mtime_us,
                 settings_env_keys,
+                handshake_warnings,
             )
         )
         tasks.add(task)

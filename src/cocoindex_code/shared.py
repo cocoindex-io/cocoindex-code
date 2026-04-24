@@ -6,7 +6,7 @@ import importlib.util
 import logging
 import pathlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, NamedTuple, Union
+from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Union
 
 import cocoindex as coco
 import numpy as np
@@ -24,9 +24,6 @@ logger = logging.getLogger(__name__)
 SBERT_PREFIX = "sbert/"
 DEFAULT_LITELLM_MIN_INTERVAL_MS = 5
 
-# Models that define a "query" prompt for asymmetric retrieval.
-_QUERY_PROMPT_MODELS = {"nomic-ai/nomic-embed-code", "nomic-ai/CodeRankEmbed"}
-
 # Type alias
 Embedder = Union["SentenceTransformerEmbedder", "LiteLLMEmbedder"]
 
@@ -34,9 +31,8 @@ Embedder = Union["SentenceTransformerEmbedder", "LiteLLMEmbedder"]
 EMBEDDER = coco.ContextKey[Embedder]("embedder", detect_change=True)
 SQLITE_DB = coco.ContextKey[sqlite.ManagedConnection]("index_db")
 CODEBASE_DIR = coco.ContextKey[pathlib.Path]("codebase")
-
-# Query prompt name — set by create_embedder().
-query_prompt_name: str | None = None
+INDEXING_EMBED_PARAMS = coco.ContextKey[dict[str, Any]]("indexing_embed_params")
+QUERY_EMBED_PARAMS = coco.ContextKey[dict[str, Any]]("query_embed_params")
 
 
 def is_sentence_transformers_installed() -> bool:
@@ -58,29 +54,30 @@ class EmbeddingCheckResult(NamedTuple):
     error: str | None
 
 
-async def check_embedding(embedder: Embedder) -> EmbeddingCheckResult:
+async def check_embedding(
+    embedder: Embedder,
+    params: dict[str, Any] | None = None,
+) -> EmbeddingCheckResult:
     """Run a single embed call against *embedder* and report dim or error.
 
-    Never raises. Used by both the daemon's doctor path (`daemon._check_model`)
-    and the CLI's init flow (`cli._test_embedding_model`).
+    *params* are spread into ``embed()`` so callers can verify indexing vs
+    query params separately (they may use different keys at runtime).
+
+    Never raises. Used by the daemon's doctor path (`daemon._check_model`).
     """
+    kwargs = dict(params) if params else {}
     try:
-        vec = await embedder.embed("hello world")
+        vec = await embedder.embed("hello world", **kwargs)
         return EmbeddingCheckResult(dim=len(vec), error=None)
     except Exception as e:
-        msg = f"{type(e).__name__}: {e}".splitlines()[0]
+        msg = " ".join(f"{type(e).__name__}: {e}".splitlines())
         if len(msg) > 500:
             msg = msg[:500] + "…"
         return EmbeddingCheckResult(dim=None, error=msg)
 
 
 def create_embedder(settings: EmbeddingSettings) -> Embedder:
-    """Create and return an embedder instance based on settings.
-
-    Also sets the module-level ``query_prompt_name`` variable.
-    """
-    global query_prompt_name
-
+    """Create and return an embedder instance based on settings."""
     if settings.provider == "sentence-transformers":
         from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
@@ -89,7 +86,6 @@ def create_embedder(settings: EmbeddingSettings) -> Embedder:
         if model_name.startswith(SBERT_PREFIX):
             model_name = model_name[len(SBERT_PREFIX) :]
 
-        query_prompt_name = "query" if model_name in _QUERY_PROMPT_MODELS else None
         instance: Embedder = SentenceTransformerEmbedder(
             model_name,
             device=settings.device,
@@ -108,7 +104,6 @@ def create_embedder(settings: EmbeddingSettings) -> Embedder:
             settings.model,
             min_interval_ms=min_interval_ms,
         )
-        query_prompt_name = None
         logger.info(
             "Embedding model (LiteLLM): %s | min_interval_ms: %s",
             settings.model,

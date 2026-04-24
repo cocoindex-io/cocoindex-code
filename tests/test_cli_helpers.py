@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from cocoindex_code import cli
 from cocoindex_code.cli import (
     add_to_gitignore,
     remove_from_gitignore,
@@ -203,3 +204,74 @@ def test_apply_host_cwd_noop_when_unset(
 
     assert Path.cwd() == original_cwd
     assert capsys.readouterr().err == ""
+
+
+# ---------------------------------------------------------------------------
+# ccc init — auto-populate indexing_params / query_params from curated table
+# ---------------------------------------------------------------------------
+
+
+def test_init_auto_populates_known_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """For a known model, `ccc init` writes real indexing/query params into the
+    file and prints an 'Applied recommended defaults' message.
+    """
+    from cocoindex_code.settings import EmbeddingSettings, load_user_settings
+
+    user_dir = tmp_path / ".cocoindex_code"
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(user_dir))
+
+    monkeypatch.setattr(
+        cli,
+        "_resolve_embedding_choice",
+        lambda **_kw: EmbeddingSettings(provider="litellm", model="cohere/embed-english-v3.0"),
+    )
+    monkeypatch.setattr(cli, "_run_init_model_check", lambda path: None)
+
+    cli._setup_user_settings_interactive(litellm_model_flag=None)
+
+    loaded = load_user_settings()
+    assert loaded.embedding.provider == "litellm"
+    assert loaded.embedding.model == "cohere/embed-english-v3.0"
+    assert loaded.embedding.indexing_params == {"input_type": "search_document"}
+    assert loaded.embedding.query_params == {"input_type": "search_query"}
+
+    out = capsys.readouterr().out
+    assert "Applied recommended defaults" in out
+
+
+def test_init_writes_comment_template_for_unknown_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """For a model outside the curated table, `ccc init` writes a commented-out
+    template block under ``embedding:`` instead of real keys.
+    """
+    from cocoindex_code.settings import (
+        EmbeddingSettings,
+        load_user_settings,
+        user_settings_path,
+    )
+
+    user_dir = tmp_path / ".cocoindex_code"
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(user_dir))
+
+    monkeypatch.setattr(
+        cli,
+        "_resolve_embedding_choice",
+        lambda **_kw: EmbeddingSettings(provider="litellm", model="someprovider/unknown-model"),
+    )
+    monkeypatch.setattr(cli, "_run_init_model_check", lambda path: None)
+
+    cli._setup_user_settings_interactive(litellm_model_flag=None)
+
+    content = user_settings_path().read_text()
+    # Commented template present, no populated keys
+    assert "# indexing_params: {}" in content
+    assert "# query_params: {}" in content
+    loaded = load_user_settings()
+    assert loaded.embedding.indexing_params is None
+    assert loaded.embedding.query_params is None

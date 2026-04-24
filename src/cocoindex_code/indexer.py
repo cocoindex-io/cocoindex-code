@@ -19,6 +19,7 @@ from .settings import load_gitignore_spec, load_project_settings
 from .shared import (
     CODEBASE_DIR,
     EMBEDDER,
+    INDEXING_EMBED_PARAMS,
     SQLITE_DB,
     CodeChunk,
 )
@@ -140,6 +141,7 @@ async def process_file(
 ) -> None:
     """Process a single file: chunk, embed, and store."""
     embedder = coco.use_context(EMBEDDER)
+    indexing_params = coco.use_context(INDEXING_EMBED_PARAMS)
 
     try:
         content = await file.read_text()
@@ -185,7 +187,7 @@ async def process_file(
                 content=chunk.text,
                 start_line=chunk.start.line,
                 end_line=chunk.end.line,
-                embedding=await embedder.embed(chunk.text),
+                embedding=await embedder.embed(chunk.text, **indexing_params),
             )
         )
 

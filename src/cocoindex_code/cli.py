@@ -436,6 +436,7 @@ def _run_init_model_check(settings_path: Path) -> None:
 
 def _setup_user_settings_interactive(litellm_model_flag: str | None) -> None:
     """Interactive global-settings setup — only runs when settings are missing."""
+    from .embedder_defaults import lookup_defaults
     from .shared import is_sentence_transformers_installed
 
     embedding = _resolve_embedding_choice(
@@ -444,9 +445,22 @@ def _setup_user_settings_interactive(litellm_model_flag: str | None) -> None:
         tty=sys.stdin.isatty(),
     )
 
-    path = save_initial_user_settings(embedding)
+    # Apply curated defaults if the model is in our table.
+    indexing_defaults, query_defaults = lookup_defaults(embedding.provider, embedding.model)
+    defaults_applied = indexing_defaults is not None or query_defaults is not None
+    if defaults_applied:
+        embedding.indexing_params = indexing_defaults or {}
+        embedding.query_params = query_defaults or {}
+
+    path = save_initial_user_settings(embedding, defaults_applied=defaults_applied)
     _typer.echo()
     _typer.echo(f"Created user settings: {format_path_for_display(path)}")
+
+    if defaults_applied:
+        _typer.echo()
+        _typer.echo(f"Applied recommended defaults for {embedding.model}:")
+        _typer.echo(f"  indexing_params: {embedding.indexing_params}")
+        _typer.echo(f"  query_params:    {embedding.query_params}")
 
     _typer.echo()
     _typer.echo(f"Testing embedding model: {embedding.provider} / {embedding.model}")

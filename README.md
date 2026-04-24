@@ -393,6 +393,14 @@ embedding:
   device: mps                                        # optional: cpu, cuda, mps (auto-detected if omitted)
   min_interval_ms: 300                               # optional: pace LiteLLM embedding requests to reduce 429s; defaults to 5 for LiteLLM
 
+  # Optional extra kwargs passed to the embedder, separately for indexing vs query.
+  # `ccc init` auto-populates these for known models (e.g. Cohere, Voyage, Nvidia NIM,
+  # nomic-ai code-retrieval models, Snowflake arctic-embed).
+  # indexing_params:
+  #   input_type: search_document        # litellm: input_type, dimensions
+  # query_params:
+  #   input_type: search_query           # sentence-transformers: prompt_name
+
 envs:                                                # extra environment variables for the daemon
   OPENAI_API_KEY: your-key                           # only needed if not already in your shell environment
 ```
@@ -400,6 +408,30 @@ envs:                                                # extra environment variabl
 > **Note:** The daemon inherits your shell environment. If an API key (e.g. `OPENAI_API_KEY`) is already set as an environment variable, you don't need to duplicate it in `envs`. The `envs` field is only for values that aren't in your environment.
 
 > **Custom location:** set `COCOINDEX_CODE_DIR` to place `global_settings.yml` somewhere other than `~/.cocoindex_code/` — useful if you want the file to live alongside your projects (e.g. on a synced folder).
+
+#### `indexing_params` / `query_params`
+
+Some embedding models expose different modes for documents vs queries (asymmetric retrieval). For example, Cohere's v3 models want `input_type: search_document` when embedding corpus content and `input_type: search_query` when embedding a user query; several SentenceTransformers models use `prompt_name: passage` / `prompt_name: query` for the same purpose. These knobs live under `indexing_params` and `query_params`:
+
+```yaml
+embedding:
+  provider: litellm
+  model: cohere/embed-english-v3.0
+  indexing_params:
+    input_type: search_document
+  query_params:
+    input_type: search_query
+```
+
+`ccc init` populates these automatically for models it recognizes — including all Cohere v3, Voyage, Nvidia NIM, Gemini embedding (`gemini/gemini-embedding-*`, `gemini/text-embedding-*`, `gemini/embedding-*` — LiteLLM auto-maps `input_type` to Gemini's `task_type`), `nomic-ai/CodeRankEmbed`, `nomic-ai/nomic-embed-code`, `nomic-ai/nomic-embed-text-v1`/`v1.5`, `mixedbread-ai/mxbai-embed-large-v1`, and the `Snowflake/snowflake-arctic-embed-*` family — and prints the chosen defaults. For other models, it leaves a commented-out template under `embedding:` so you can fill it in by hand.
+
+OpenAI embeddings (`text-embedding-3-*`, `text-embedding-ada-002`) are intentionally not in the list: they're symmetric and have no equivalent knob.
+
+**Accepted keys:** `prompt_name` (sentence-transformers), `input_type` and `dimensions` (litellm). Other keys are rejected at daemon startup with a clear error.
+
+**Doctor checks both sides.** `ccc doctor` exercises the model once with `indexing_params` and once with `query_params`, reporting each as a separate `Model Check (indexing)` / `Model Check (query)` entry — so a misconfiguration on one side is diagnosable without hiding behind the other.
+
+**Legacy-bridge warning:** if you're upgrading from an earlier version and your `global_settings.yml` uses `nomic-ai/CodeRankEmbed` or `nomic-ai/nomic-embed-code` without `indexing_params` / `query_params`, the daemon continues to apply the previous behavior (`prompt_name: query` at query time) and prints a one-time warning asking you to make the setting explicit. You can silence the warning by adding an empty block such as `query_params: {}`.
 
 ### Project Settings (`<project>/.cocoindex_code/settings.yml`)
 

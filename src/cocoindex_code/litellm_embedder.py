@@ -13,6 +13,8 @@ import numpy as np
 from cocoindex.ops.litellm import LiteLLMEmbedder, litellm
 from numpy.typing import NDArray
 
+litellm.drop_params = True
+
 logger = logging.getLogger(__name__)
 
 _RATE_LIMIT_DELAY_RE = re.compile(r"Please try again in ([0-9.]+)(ms|s)", re.IGNORECASE)

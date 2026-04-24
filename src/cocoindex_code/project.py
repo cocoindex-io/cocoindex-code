@@ -6,6 +6,7 @@ import asyncio
 import sqlite3
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
+from typing import Any
 
 import cocoindex as coco
 from cocoindex.connectors import sqlite as coco_sqlite
@@ -34,6 +35,8 @@ from .settings import (
 from .shared import (
     CODEBASE_DIR,
     EMBEDDER,
+    INDEXING_EMBED_PARAMS,
+    QUERY_EMBED_PARAMS,
     SQLITE_DB,
     Embedder,
 )
@@ -257,9 +260,11 @@ class Project:
     async def create(
         project_root: Path,
         embedder: Embedder,
+        indexing_params: dict[str, Any],
+        query_params: dict[str, Any],
         chunker_registry: dict[str, ChunkerFn] | None = None,
     ) -> Project:
-        """Create a project with explicit embedder.
+        """Create a project with explicit embedder and per-call params.
 
         Project-level settings and .gitignore are NOT cached here — the
         indexer loads them fresh from disk on every run so that user edits
@@ -268,6 +273,11 @@ class Project:
         Args:
             project_root: Root directory of the codebase to index.
             embedder: Embedding model instance.
+            indexing_params: Extra kwargs spread into ``embedder.embed()`` during
+                indexing (e.g. ``{"prompt_name": "passage"}``).  Pass ``{}`` for
+                no extras.
+            query_params: Extra kwargs spread into ``embedder.embed()`` for the
+                query side.
             chunker_registry: Optional mapping of file suffix (e.g. ``".toml"``)
                 to a ``ChunkerFn``. When a suffix matches, the registered
                 chunker is called instead of the built-in splitter.
@@ -287,6 +297,8 @@ class Project:
         context.provide(CODEBASE_DIR, project_root)
         context.provide(SQLITE_DB, coco_sqlite.connect(str(target_sqlite_db), load_vec=True))
         context.provide(EMBEDDER, embedder)
+        context.provide(INDEXING_EMBED_PARAMS, dict(indexing_params))
+        context.provide(QUERY_EMBED_PARAMS, dict(query_params))
         context.provide(CHUNKER_REGISTRY, dict(chunker_registry) if chunker_registry else {})
 
         env = coco.Environment(settings, context_provider=context)
