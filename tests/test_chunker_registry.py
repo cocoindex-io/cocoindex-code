@@ -12,12 +12,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pytest
 from cocoindex.connectors import sqlite as coco_sqlite
 from cocoindex.resources.schema import VectorSchema
 from example_toml_chunker import toml_chunker
 
-import cocoindex_code.shared as _shared
 from cocoindex_code.chunking import CHUNKER_REGISTRY, Chunk, TextPosition
 from cocoindex_code.project import Project
 from cocoindex_code.settings import ProjectSettings
@@ -44,14 +42,11 @@ class _StubEmbedder:
 
 async def _index_project(
     project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
     **create_kwargs: Any,
 ) -> Project:
     """Create a Project and run a full index pass."""
     settings = ProjectSettings(include_patterns=["**/*.*"], exclude_patterns=["**/.cocoindex_code"])
     stub = _StubEmbedder()
-    # shared.embedder is read by CodeChunk.embedding at schema resolution time.
-    monkeypatch.setattr(_shared, "embedder", stub)
     from cocoindex_code.settings import save_project_settings
 
     save_project_settings(project_root, settings)
@@ -104,25 +99,23 @@ flag = true
 # ---------------------------------------------------------------------------
 
 
-async def test_default_registry_is_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_default_registry_is_empty(tmp_path: Path) -> None:
     """CHUNKER_REGISTRY is an empty dict when no registry is passed."""
     (tmp_path / ".git").mkdir()
     (tmp_path / "hello.py").write_text("x = 1\n")
 
-    project = await _index_project(tmp_path, monkeypatch)
+    project = await _index_project(tmp_path)
     registry = project.env.get_context(CHUNKER_REGISTRY)
     assert isinstance(registry, dict)
     assert registry == {}
 
 
-async def test_unregistered_suffix_uses_splitter(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_unregistered_suffix_uses_splitter(tmp_path: Path) -> None:
     """Files with no registered chunker are processed by RecursiveSplitter."""
     (tmp_path / ".git").mkdir()
     (tmp_path / "sample.py").write_text("def foo():\n    return 1\n")
 
-    await _index_project(tmp_path, monkeypatch)
+    await _index_project(tmp_path)
     chunks = _query_chunks(tmp_path)
 
     assert len(chunks) >= 1
@@ -130,14 +123,12 @@ async def test_unregistered_suffix_uses_splitter(
     assert any("foo" in c["content"] for c in chunks)
 
 
-async def test_registered_chunker_is_called(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_registered_chunker_is_called(tmp_path: Path) -> None:
     """A registered ChunkerFn splits files and may override the language."""
     (tmp_path / ".git").mkdir()
     (tmp_path / "config.toml").write_text(_TOML_CONTENT)
 
-    await _index_project(tmp_path, monkeypatch, chunker_registry={".toml": toml_chunker})
+    await _index_project(tmp_path, chunker_registry={".toml": toml_chunker})
     chunks = _query_chunks(tmp_path)
 
     assert len(chunks) == 2
@@ -147,9 +138,7 @@ async def test_registered_chunker_is_called(
     assert all(c["language"] == "toml" for c in chunks)
 
 
-async def test_chunker_language_none_preserves_detected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_chunker_language_none_preserves_detected(tmp_path: Path) -> None:
     """When ChunkerFn returns language=None, detect_code_language() is used."""
 
     def _passthrough_chunker(path: Path, content: str) -> tuple[str | None, list[Chunk]]:
@@ -159,21 +148,19 @@ async def test_chunker_language_none_preserves_detected(
     (tmp_path / ".git").mkdir()
     (tmp_path / "script.py").write_text("x = 1\n")
 
-    await _index_project(tmp_path, monkeypatch, chunker_registry={".py": _passthrough_chunker})
+    await _index_project(tmp_path, chunker_registry={".py": _passthrough_chunker})
     chunks = _query_chunks(tmp_path)
 
     assert all(c["language"] == "python" for c in chunks)
 
 
-async def test_registry_does_not_affect_other_suffixes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_registry_does_not_affect_other_suffixes(tmp_path: Path) -> None:
     """Registering a chunker for .toml does not affect .py files."""
     (tmp_path / ".git").mkdir()
     (tmp_path / "config.toml").write_text(_TOML_CONTENT)
     (tmp_path / "code.py").write_text("def bar():\n    pass\n")
 
-    await _index_project(tmp_path, monkeypatch, chunker_registry={".toml": toml_chunker})
+    await _index_project(tmp_path, chunker_registry={".toml": toml_chunker})
     chunks = _query_chunks(tmp_path)
 
     toml_chunks = [c for c in chunks if c["language"] == "toml"]

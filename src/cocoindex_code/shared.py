@@ -35,10 +35,7 @@ EMBEDDER = coco.ContextKey[Embedder]("embedder", detect_change=True)
 SQLITE_DB = coco.ContextKey[sqlite.ManagedConnection]("index_db")
 CODEBASE_DIR = coco.ContextKey[pathlib.Path]("codebase")
 
-# Module-level variable — set by daemon at startup (needed for CodeChunk annotation).
-embedder: Embedder | None = None
-
-# Query prompt name — set alongside embedder by create_embedder().
+# Query prompt name — set by create_embedder().
 query_prompt_name: str | None = None
 
 
@@ -80,9 +77,9 @@ async def check_embedding(embedder: Embedder) -> EmbeddingCheckResult:
 def create_embedder(settings: EmbeddingSettings) -> Embedder:
     """Create and return an embedder instance based on settings.
 
-    Also sets the module-level ``embedder`` and ``query_prompt_name`` variables.
+    Also sets the module-level ``query_prompt_name`` variable.
     """
-    global embedder, query_prompt_name
+    global query_prompt_name
 
     if settings.provider == "sentence-transformers":
         from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
@@ -118,7 +115,6 @@ def create_embedder(settings: EmbeddingSettings) -> Embedder:
             min_interval_ms,
         )
 
-    embedder = instance
     return instance
 
 
