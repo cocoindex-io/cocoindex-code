@@ -76,8 +76,26 @@ async def check_embedding(
         return EmbeddingCheckResult(dim=None, error=msg)
 
 
-def create_embedder(settings: EmbeddingSettings) -> Embedder:
-    """Create and return an embedder instance based on settings."""
+def create_embedder(
+    settings: EmbeddingSettings,
+    indexing_params: dict[str, Any] | None = None,
+) -> Embedder:
+    """Create and return an embedder instance based on settings.
+
+    For LiteLLM embedders, *indexing_params* (e.g. ``{"input_type": "passage"}``)
+    are passed to the constructor as default kwargs forwarded into every
+    ``litellm.aembedding`` call — including paths that don't go through
+    :data:`INDEXING_EMBED_PARAMS` (e.g. the dimension probe in ``_get_dim``,
+    or any helper that calls ``embed()`` with no per-side kwargs). Per-call
+    overrides (the ``query_params`` spread at query time) still take effect
+    because :meth:`LiteLLMEmbedder._embed` overlays kwargs on top of the
+    constructor's ``self._kwargs``.
+
+    *indexing_params* is ignored for sentence-transformers — its constructor
+    doesn't accept arbitrary kwargs; ``prompt_name`` is a per-call argument
+    only and the indexing default is supplied at the call site via
+    :data:`INDEXING_EMBED_PARAMS`.
+    """
     if settings.provider == "sentence-transformers":
         from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
@@ -103,6 +121,7 @@ def create_embedder(settings: EmbeddingSettings) -> Embedder:
         instance = PacedLiteLLMEmbedder(
             settings.model,
             min_interval_ms=min_interval_ms,
+            **(dict(indexing_params) if indexing_params else {}),
         )
         logger.info(
             "Embedding model (LiteLLM): %s | min_interval_ms: %s",

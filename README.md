@@ -397,7 +397,7 @@ embedding:
   # `ccc init` auto-populates these for known models (e.g. Cohere, Voyage, Nvidia NIM,
   # nomic-ai code-retrieval models, Snowflake arctic-embed).
   # indexing_params:
-  #   input_type: search_document        # litellm: input_type, dimensions
+  #   input_type: search_document        # litellm: input_type
   # query_params:
   #   input_type: search_query           # sentence-transformers: prompt_name
 
@@ -427,7 +427,7 @@ embedding:
 
 OpenAI embeddings (`text-embedding-3-*`, `text-embedding-ada-002`) are intentionally not in the list: they're symmetric and have no equivalent knob.
 
-**Accepted keys:** `prompt_name` (sentence-transformers), `input_type` and `dimensions` (litellm). Other keys are rejected at daemon startup with a clear error.
+**Accepted keys:** `prompt_name` (sentence-transformers) and `input_type` (litellm). Other keys are rejected at daemon startup with a clear error. Note: `dimensions` is intentionally not exposed here — output dimension must be identical for indexing and query, so it's a model-wide setting rather than a per-side knob.
 
 **Doctor checks both sides.** `ccc doctor` exercises the model once with `indexing_params` and once with `query_params`, reporting each as a separate `Model Check (indexing)` / `Model Check (query)` entry — so a misconfiguration on one side is diagnosable without hiding behind the other.
 

@@ -544,7 +544,7 @@ _PARAMS_COMMENT_BY_PROVIDER: dict[str, str] = {
     "litellm": (
         "  #\n"
         "  # Extra kwargs passed to the embedder. Supported keys:\n"
-        "  #   input_type, dimensions\n"
+        "  #   input_type\n"
         "  # indexing_params: {}\n"
         "  # query_params: {}\n"
     ),

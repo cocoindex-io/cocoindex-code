@@ -21,13 +21,14 @@ __all__ = [
 
 
 # Accepted kwargs per provider.  Intentionally minimal — we only expose knobs
-# that users have reason to tune.  ``normalize_embeddings`` (sentence-
-# transformers) and ``encoding_format`` (litellm) are deliberately excluded
-# because other code assumes unit vectors (query._l2_to_score) and float
-# payloads (litellm_embedder hardcodes encoding_format="float").
+# that users have reason to tune AND that make sense per-side (indexing vs
+# query).  Excluded keys:
+#   - ``normalize_embeddings`` (sentence-transformers): query._l2_to_score
+#     assumes unit vectors.
+#   - ``encoding_format`` (litellm): litellm_embedder hardcodes "float".
 _ACCEPTED_KWARGS: dict[str, frozenset[str]] = {
     "sentence-transformers": frozenset({"prompt_name"}),
-    "litellm": frozenset({"input_type", "dimensions"}),
+    "litellm": frozenset({"input_type"}),
 }
 
 

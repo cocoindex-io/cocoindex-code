@@ -14,9 +14,13 @@ from cocoindex_code.settings import EmbeddingSettings
 
 def test_validate_params_accepts_known_keys() -> None:
     validate_params("sentence-transformers", {}, {"prompt_name": "query"})
-    validate_params(
-        "litellm", {"input_type": "passage"}, {"input_type": "query", "dimensions": 512}
-    )
+    validate_params("litellm", {"input_type": "passage"}, {"input_type": "query"})
+
+
+def test_validate_params_rejects_dimensions() -> None:
+    """`dimensions` is a model-wide setting, not a per-side knob — must be rejected."""
+    with pytest.raises(ValueError, match="dimensions"):
+        validate_params("litellm", {"dimensions": 512}, {})
 
 
 def test_validate_params_rejects_unknown_key() -> None:

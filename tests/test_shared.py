@@ -39,6 +39,33 @@ def test_create_embedder_uses_paced_litellm_embedder() -> None:
     assert embedder._min_request_interval_seconds == 0.3
 
 
+def test_create_embedder_litellm_passes_indexing_params_as_constructor_default() -> None:
+    """Indexing params become default kwargs forwarded into every litellm call —
+    covering paths that don't go through INDEXING_EMBED_PARAMS (dim probe, etc.).
+    """
+    embedder = create_embedder(
+        EmbeddingSettings(provider="litellm", model="cohere/embed-english-v3.0"),
+        indexing_params={"input_type": "search_document"},
+    )
+    assert isinstance(embedder, PacedLiteLLMEmbedder)
+    assert embedder._kwargs == {"input_type": "search_document"}
+
+
+def test_create_embedder_sentence_transformers_ignores_indexing_params() -> None:
+    """The SentenceTransformer constructor doesn't accept arbitrary kwargs;
+    indexing_params is silently ignored for that provider.
+    """
+    embedder = create_embedder(
+        EmbeddingSettings(
+            provider="sentence-transformers", model="sentence-transformers/all-MiniLM-L6-v2"
+        ),
+        indexing_params={"prompt_name": "passage"},
+    )
+    # No exception, and prompt_name is not stashed on the constructor —
+    # it's a per-call argument supplied via the embed() call site.
+    assert not isinstance(embedder, PacedLiteLLMEmbedder)
+
+
 def test_is_sentence_transformers_installed_true_in_dev() -> None:
     # Dev env pulls in sentence-transformers via the `dev` extras group.
     assert is_sentence_transformers_installed() is True

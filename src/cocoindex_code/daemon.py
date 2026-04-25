@@ -586,7 +586,7 @@ def run_daemon() -> None:
             handshake_warnings.append(
                 _build_backward_compat_warning(user_settings, user_settings_path())
             )
-        embedder = create_embedder(user_settings.embedding)
+        embedder = create_embedder(user_settings.embedding, indexing_params=indexing_params)
     else:
         settings_env_keys = []
         embedder = None

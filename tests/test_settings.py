@@ -620,4 +620,6 @@ def test_save_initial_writes_comment_template_for_unknown_litellm() -> None:
     assert "# indexing_params: {}" in content
     assert "# query_params: {}" in content
     assert "input_type" in content
-    assert "dimensions" in content
+    # `dimensions` is intentionally NOT in the litellm template — it must be
+    # the same on both sides, so we don't expose it as a per-side knob.
+    assert "dimensions" not in content
