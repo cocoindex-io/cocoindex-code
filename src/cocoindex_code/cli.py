@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import functools
 import os
+import signal
+import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -38,6 +40,18 @@ app = _typer.Typer(
 
 daemon_app = _typer.Typer(name="daemon", help="Manage the daemon process.")
 app.add_typer(daemon_app, name="daemon")
+config_app = _typer.Typer(name="config", help="Validate and inspect coco-config.yml files.")
+repos_app = _typer.Typer(name="repos", help="Sync and inspect configured repositories.")
+workspace_app = _typer.Typer(name="workspace", help="Index and watch multi-repository workspaces.")
+codebase_app = _typer.Typer(name="codebase", help="Codebase indexing and intelligence tools.")
+codebase_graph_app = _typer.Typer(name="graph", help="Inspect dependency and symbol graph data.")
+codebase_context_app = _typer.Typer(name="context", help="Inspect configured context artifacts.")
+app.add_typer(config_app, name="config")
+app.add_typer(repos_app, name="repos")
+app.add_typer(workspace_app, name="workspace")
+app.add_typer(codebase_app, name="codebase")
+codebase_app.add_typer(codebase_graph_app, name="graph")
+codebase_app.add_typer(codebase_context_app, name="context")
 
 
 @app.callback()
@@ -534,6 +548,523 @@ def index() -> None:
     print_index_stats(_client.project_status(project_root))
 
 
+# ------------------------- Multi-repo & Config CLI -------------------------
+def _load_workspace(config_path: str | None):
+    from .config import load_codebase_config
+    from .multi_repo import MultiRepoOrchestrator
+
+    cfg, cfg_path = load_codebase_config(config_path)
+    return MultiRepoOrchestrator(cfg, cfg_path), cfg_path
+
+
+def _sync_repos_impl(config_path: str | None, repo_ids: list[str], force: bool) -> None:
+    orchestrator, _ = _load_workspace(config_path)
+    _typer.echo("Syncing repositories...")
+    results = orchestrator.sync_and_link_repos(repo_ids=repo_ids or None, force=force)
+    for r in results:
+        _typer.echo(
+            f"{r.repo_id}: fetched={r.fetched} skipped={r.skipped} "
+            f"removed={r.removed} bytes={r.bytes_downloaded} errors={len(r.errors)}"
+        )
+
+
+def _config_validate_impl(config_path: str | None) -> None:
+    try:
+        _, cfg_path = _load_workspace(config_path)
+        _typer.echo(f"Config OK: {cfg_path}")
+    except Exception as e:
+        _typer.echo(f"Config validation failed: {e}", err=True)
+        raise _typer.Exit(code=1)
+
+
+def _config_show_impl(config_path: str | None) -> None:
+    import json
+
+    orchestrator, _ = _load_workspace(config_path)
+    try:
+        data = orchestrator.config.model_dump()
+    except Exception:
+        data = orchestrator.config.dict()
+    _typer.echo(json.dumps(data, indent=2))
+
+
+def _repo_status_impl(config_path: str | None) -> None:
+    import json
+
+    orchestrator, _ = _load_workspace(config_path)
+    _typer.echo(json.dumps(orchestrator.run_status(), indent=2))
+
+
+def _workspace_index_impl(
+    config_path: str | None,
+    repo_ids: list[str],
+    force: bool,
+    skip_sync: bool,
+    skip_declarations: bool,
+    changed_paths_file: str | None,
+    refresh_semantic_index: bool,
+    strict: bool,
+) -> None:
+    if not skip_declarations:
+        _typer.echo(
+            "Native declaration graph indexing is available through "
+            "`ccc codebase graph build`; semantic workspace indexing will run here.",
+            err=True,
+        )
+        if strict:
+            raise _typer.Exit(code=1)
+
+    orchestrator, _ = _load_workspace(config_path)
+    repo_filter = repo_ids or None
+    changed_paths = None
+    if changed_paths_file:
+        from .multi_repo import read_changed_paths_file
+
+        changed_paths = read_changed_paths_file(changed_paths_file)
+    if changed_paths_file and not refresh_semantic_index:
+        sync_scope = repo_filter
+        if sync_scope is None and changed_paths:
+            sync_scope = orchestrator.repo_ids_for_changed_paths(changed_paths) or None
+        orchestrator.link_repos(repo_ids=sync_scope)
+        _typer.echo(
+            f"Changed paths were provided ({len(changed_paths or [])}); "
+            "semantic refresh skipped by request."
+        )
+        return
+
+    if changed_paths_file:
+        output = orchestrator.incremental_unified_index(
+            repo_ids=repo_filter, skip_sync=False, changed_paths=changed_paths
+        )
+    else:
+        if skip_sync:
+            orchestrator.link_repos(repo_ids=repo_filter)
+            output = orchestrator.build_unified_index(repo_ids=repo_filter, skip_sync=True)
+        elif force:
+            orchestrator.sync_and_link_repos(repo_ids=repo_filter, force=True)
+            output = orchestrator.build_unified_index(repo_ids=repo_filter, skip_sync=True)
+        else:
+            output = orchestrator.build_unified_index(repo_ids=repo_filter, skip_sync=False)
+    if output.strip():
+        _typer.echo(output.strip())
+
+
+def _workspace_watch_paths(config_path: Path) -> tuple[Path, Path, Path]:
+    state_dir = config_path.parent / ".cocoindex_code"
+    return (
+        state_dir / "workspace-watch.pid",
+        state_dir / "workspace-watch.log",
+        state_dir / "workspace-watch-changed-paths.txt",
+    )
+
+
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _workspace_watch_status(config_path: Path) -> None:
+    pid_file, log_file, _ = _workspace_watch_paths(config_path)
+    if not pid_file.exists():
+        _typer.echo("Workspace watcher not running.")
+        return
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except ValueError:
+        _typer.echo(f"Workspace watcher has invalid pid file: {pid_file}", err=True)
+        raise _typer.Exit(code=1)
+    if _pid_is_alive(pid):
+        _typer.echo(f"Workspace watcher running (pid {pid}).")
+        _typer.echo(f"Log: {log_file}")
+        return
+    _typer.echo(f"Workspace watcher not running; removing stale pid {pid}.")
+    pid_file.unlink(missing_ok=True)
+
+
+def _workspace_watch_stop(config_path: Path) -> None:
+    pid_file, _, _ = _workspace_watch_paths(config_path)
+    if not pid_file.exists():
+        _typer.echo("Workspace watcher not running.")
+        return
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except ValueError:
+        pid_file.unlink(missing_ok=True)
+        _typer.echo("Removed invalid workspace watcher pid file.")
+        return
+    if _pid_is_alive(pid):
+        os.kill(pid, signal.SIGTERM)
+        _typer.echo(f"Stopped workspace watcher (pid {pid}).")
+    else:
+        _typer.echo(f"Removed stale workspace watcher pid file (pid {pid}).")
+    pid_file.unlink(missing_ok=True)
+
+
+def _workspace_watch_start(config_path: Path, interval: float) -> None:
+    pid_file, log_file, _ = _workspace_watch_paths(config_path)
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text(encoding="utf-8").strip())
+        except ValueError:
+            pid = -1
+        if pid > 0 and _pid_is_alive(pid):
+            _typer.echo(f"Workspace watcher already running (pid {pid}).")
+            return
+        pid_file.unlink(missing_ok=True)
+
+    log_fh = log_file.open("a", encoding="utf-8")
+    cmd = [
+        sys.argv[0],
+        "workspace",
+        "watch",
+        "--config",
+        str(config_path),
+        "--interval",
+        str(interval),
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(config_path.parent),
+        stdin=subprocess.DEVNULL,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
+    _typer.echo(f"Workspace watcher started (pid {proc.pid}).")
+    _typer.echo(f"Log: {log_file}")
+
+
+def _compile_pathspec(patterns: list[str]):
+    import pathspec
+
+    return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+
+
+def _workspace_file_snapshot(orchestrator: object) -> dict[str, tuple[int, int]]:
+    from .config import RepoType
+
+    snapshot: dict[str, tuple[int, int]] = {}
+    common_prune_dirs = {
+        ".git",
+        ".cocoindex_code",
+        ".venv",
+        "node_modules",
+        "dist",
+        "build",
+        "out",
+        ".next",
+        ".turbo",
+        ".cache",
+        "__pycache__",
+    }
+    for repo in getattr(orchestrator, "config").repos:
+        if not getattr(repo, "enabled", True) or repo.type != RepoType.local:
+            continue
+        root = orchestrator._resolve_local_repo_path(repo)  # noqa: SLF001
+        if not root.exists():
+            continue
+        settings = orchestrator._coalesced_repo_settings(repo)  # noqa: SLF001
+        include_patterns = (
+            settings.get("include_patterns") or getattr(orchestrator, "config").include_patterns
+        )
+        exclude_patterns = (
+            settings.get("exclude_patterns") or getattr(orchestrator, "config").exclude_patterns
+        )
+        include_spec = _compile_pathspec(list(include_patterns or ["**/*"]))
+        exclude_spec = _compile_pathspec(list(exclude_patterns or []))
+
+        for dirpath, dirnames, filenames in os.walk(root):
+            rel_dir = Path(dirpath).relative_to(root).as_posix()
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if d not in common_prune_dirs
+                and not exclude_spec.match_file(f"{d}/" if rel_dir == "." else f"{rel_dir}/{d}/")
+            ]
+            for filename in filenames:
+                file_path = Path(dirpath) / filename
+                rel = file_path.relative_to(root).as_posix()
+                if not include_spec.match_file(rel) or exclude_spec.match_file(rel):
+                    continue
+                try:
+                    stat = file_path.stat()
+                except OSError:
+                    continue
+                snapshot[f"{repo.id}/{rel}"] = (stat.st_mtime_ns, stat.st_size)
+    return snapshot
+
+
+def _workspace_watch_foreground(config_path: str | None, interval: float) -> None:
+    orchestrator, cfg_path = _load_workspace(config_path)
+    _, _, changed_paths_file = _workspace_watch_paths(cfg_path)
+    changed_paths_file.parent.mkdir(parents=True, exist_ok=True)
+    previous = _workspace_file_snapshot(orchestrator)
+    _typer.echo(f"Watching workspace from {cfg_path}. Press Ctrl-C to stop.")
+    try:
+        while True:
+            import time
+
+            time.sleep(interval)
+            current = _workspace_file_snapshot(orchestrator)
+            changed = sorted(
+                path
+                for path in set(previous) | set(current)
+                if previous.get(path) != current.get(path)
+            )
+            if not changed:
+                continue
+            changed_paths_file.write_text("\n".join(changed) + "\n", encoding="utf-8")
+            _typer.echo(f"Detected {len(changed)} changed indexed path(s).")
+            output = orchestrator.incremental_unified_index(
+                skip_sync=False,
+                changed_paths=changed,
+            )
+            if output.strip():
+                _typer.echo(output.strip())
+            previous = _workspace_file_snapshot(orchestrator)
+    except KeyboardInterrupt:
+        _typer.echo("Stopped workspace watcher.")
+
+
+def _enabled_repo_ids(orchestrator: object) -> list[str]:
+    repos = getattr(orchestrator, "config").repos
+    return [repo.id for repo in repos if getattr(repo, "enabled", True)]
+
+
+def _default_repo_id(orchestrator: object, repo_id: str | None) -> str:
+    if repo_id:
+        return repo_id
+    repo_ids = _enabled_repo_ids(orchestrator)
+    if not repo_ids:
+        _typer.echo("No enabled repositories in config.", err=True)
+        raise _typer.Exit(code=1)
+    return repo_ids[0]
+
+
+def _workspace_declarations_db(orchestrator: object) -> Path:
+    unified_root = getattr(orchestrator, "unified_root")
+    declarations_db = unified_root / ".cocoindex_code" / "declarations.db"
+    if declarations_db.exists():
+        return declarations_db
+    return target_sqlite_db_path(unified_root)
+
+
+def _project_graph_db(project_root: Path) -> Path:
+    declarations_db = project_root / ".cocoindex_code" / "declarations.db"
+    if declarations_db.exists():
+        return declarations_db
+    return target_sqlite_db_path(project_root)
+
+
+def _configured_repo_root(orchestrator: object, repo_id: str) -> Path:
+    from .config import RepoType
+
+    repo = getattr(orchestrator, "config").repo_by_id(repo_id)
+    if repo is None:
+        _typer.echo(f"Unknown repo id: {repo_id}", err=True)
+        raise _typer.Exit(code=1)
+
+    if repo.type == RepoType.local:
+        root = Path(repo.path or ".")
+        if not root.is_absolute():
+            root = getattr(orchestrator, "repo_root_hint") / root
+        return root.resolve()
+
+    return (getattr(orchestrator, "unified_root") / repo.id).resolve()
+
+
+def _print_json(data: object) -> None:
+    import json
+
+    _typer.echo(json.dumps(data, indent=2, sort_keys=True))
+
+
+def _impact_impl(
+    config_path: str | None,
+    repo_id: str | None,
+    ref_spec: str,
+    path_prefix: str | None,
+    top_n: int,
+) -> dict[str, object]:
+    from .mcp_handlers import detect_changes_tool
+
+    orchestrator, _ = _load_workspace(config_path)
+    rid = _default_repo_id(orchestrator, repo_id)
+    result = detect_changes_tool(
+        _workspace_declarations_db(orchestrator),
+        _configured_repo_root(orchestrator, rid),
+        rid,
+        ref_spec,
+        path_prefix=path_prefix,
+        top_n=top_n,
+    )
+    return result
+
+
+def _analytics_impl(
+    config_path: str | None,
+    repo_id: str | None,
+    recompute: bool,
+    hub_limit: int,
+    community_limit: int,
+) -> dict[str, object]:
+    from .analytics.centrality import compute_centrality
+    from .analytics.communities import compute_communities
+    from .mcp_handlers import get_architecture_overview_tool, get_knowledge_gaps_tool
+
+    orchestrator, _ = _load_workspace(config_path)
+    rid = repo_id
+    db_path = _workspace_declarations_db(orchestrator)
+    result: dict[str, object] = {}
+    if recompute:
+        result["centrality"] = compute_centrality(db_path, repo_id=rid)
+        result["communities_compute"] = compute_communities(db_path, repo_id=rid)
+    result["architecture"] = get_architecture_overview_tool(
+        db_path,
+        repo_id=rid,
+        hub_limit=hub_limit,
+        community_limit=community_limit,
+    )
+    result["knowledge_gaps"] = get_knowledge_gaps_tool(db_path, repo_id=rid)
+    return result
+
+
+@repos_app.command("sync")
+def repos_sync(
+    config: str | None = _typer.Option(None, "--config", "-c", help="Path to coco-config.yml"),
+    repo_id: list[str] = _typer.Option([], "--repo-id", help="One or more repo ids to sync"),
+    force: bool = _typer.Option(False, "--force", help="Force resync"),
+) -> None:
+    """Sync configured repositories and create symlinks in the unified root."""
+    _sync_repos_impl(config, repo_id, force)
+
+
+@config_app.command("validate")
+def config_validate_nested(
+    config: str | None = _typer.Option(None, "--config", "-c", help="Path to coco-config.yml"),
+) -> None:
+    """Validate a coco-config.yml file."""
+    _config_validate_impl(config)
+
+
+@config_app.command("show")
+def config_show_nested(
+    config: str | None = _typer.Option(None, "--config", "-c", help="Path to coco-config.yml"),
+) -> None:
+    """Pretty-print the loaded config."""
+    _config_show_impl(config)
+
+
+@repos_app.command("status")
+def repos_status(
+    config: str | None = _typer.Option(None, "--config", "-c", help="Path to coco-config.yml"),
+) -> None:
+    """Show status of configured repositories (synced_at, file counts, rate limits)."""
+    _repo_status_impl(config)
+
+
+@workspace_app.command("index")
+def workspace_index(
+    config: str | None = _typer.Option(None, "--config", "-c", help="Path to coco-config.yml"),
+    repo_id: list[str] = _typer.Option([], "--repo-id", help="One or more repo ids to index"),
+    force: bool = _typer.Option(False, "--force", help="Force repository sync"),
+    skip_sync: bool = _typer.Option(False, "--skip-sync", help="Skip repository sync"),
+    skip_declarations: bool = _typer.Option(False, "--skip-declarations", help="Skip declarations"),
+    changed_paths_file: str | None = _typer.Option(None, "--changed-paths-file"),
+    refresh_semantic_index: bool = _typer.Option(False, "--refresh-semantic-index"),
+    strict: bool = _typer.Option(False, "--strict", help="Fail on degraded unsupported steps"),
+) -> None:
+    """Index a configured multi-repository workspace."""
+    _workspace_index_impl(
+        config,
+        repo_id,
+        force,
+        skip_sync,
+        skip_declarations,
+        changed_paths_file,
+        refresh_semantic_index,
+        strict,
+    )
+
+
+@workspace_app.command("watch")
+def workspace_watch(
+    config: str | None = _typer.Option(None, "--config", "-c", help="Path to coco-config.yml"),
+    daemon: str | None = _typer.Option(None, "--daemon", help="start, stop, or status"),
+    interval: float = _typer.Option(5.0, "--interval", min=1.0, help="Polling interval seconds"),
+) -> None:
+    """Watch a configured workspace and run incremental indexing on changes."""
+    if daemon not in (None, "start", "stop", "status"):
+        _typer.echo("Error: --daemon must be start, stop, or status.", err=True)
+        raise _typer.Exit(code=1)
+    _, cfg_path = _load_workspace(config)
+    if daemon == "status":
+        _workspace_watch_status(cfg_path)
+        return
+    if daemon == "stop":
+        _workspace_watch_stop(cfg_path)
+        return
+    if daemon == "start":
+        _workspace_watch_start(cfg_path, interval)
+        return
+    _workspace_watch_foreground(config, interval)
+
+
+@app.command()
+def impact(
+    ref_spec: str = _typer.Argument("HEAD", help="Git ref/range to diff against"),
+    config: str | None = _typer.Option(None, "--config", "-c", help="Path to coco-config.yml"),
+    repo: str | None = _typer.Option(None, "--repo", help="Configured repo id"),
+    path_prefix: str | None = _typer.Option(None, "--path-prefix", help="Limit changed paths"),
+    top_n: int = _typer.Option(20, "--top-n", min=1, help="Maximum declarations to return"),
+) -> None:
+    """Map git changes to affected declarations and risk scores."""
+    result = _impact_impl(config, repo, ref_spec, path_prefix, top_n)
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@app.command()
+def review(
+    ref_spec: str = _typer.Argument("HEAD", help="Git ref/range to diff against"),
+    config: str | None = _typer.Option(None, "--config", "-c", help="Path to coco-config.yml"),
+    repo: str | None = _typer.Option(None, "--repo", help="Configured repo id"),
+    path_prefix: str | None = _typer.Option(None, "--path-prefix", help="Limit changed paths"),
+    top_n: int = _typer.Option(20, "--top-n", min=1, help="Maximum declarations to return"),
+) -> None:
+    """Emit review-oriented change impact context as JSON."""
+    result = _impact_impl(config, repo, ref_spec, path_prefix, top_n)
+    _print_json({"success": result.get("success", False), "review": result})
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@app.command()
+def analytics(
+    config: str | None = _typer.Option(None, "--config", "-c", help="Path to coco-config.yml"),
+    repo: str | None = _typer.Option(None, "--repo", help="Configured repo id"),
+    recompute: bool = _typer.Option(False, "--recompute", help="Recompute graph analytics first"),
+    hub_limit: int = _typer.Option(20, "--hub-limit", min=1),
+    community_limit: int = _typer.Option(10, "--community-limit", min=1),
+) -> None:
+    """Print architecture and knowledge-gap analytics for a configured workspace."""
+    result = _analytics_impl(config, repo, recompute, hub_limit, community_limit)
+    _print_json(result)
+    failures = [
+        value
+        for value in result.values()
+        if isinstance(value, dict) and value.get("success") is False
+    ]
+    if failures:
+        raise _typer.Exit(code=1)
+
+
 @app.command()
 @_catch_daemon_start_error
 def search(
@@ -587,6 +1118,455 @@ def status() -> None:
         _typer.echo(f"Index DB: {format_path_for_display(db_path)}")
 
     print_index_stats(_client.project_status(project_root))
+
+
+@codebase_app.command("index")
+@_catch_daemon_start_error
+def codebase_index() -> None:
+    """Create or update the local codebase index."""
+    from .code_graph_indexer import index_code_declarations
+
+    project_root = require_project_root()
+    index()
+    graph = index_code_declarations(project_root, _project_graph_db(project_root), repo_id="local")
+    _typer.echo(f"Graph index: {graph['files']} files, {graph['declarations']} declarations")
+
+
+@codebase_app.command("update")
+@_catch_daemon_start_error
+def codebase_update() -> None:
+    """Refresh the local codebase index after edits."""
+    codebase_index()
+
+
+@codebase_graph_app.command("build")
+def codebase_graph_build(
+    repo: str | None = _typer.Option(None, "--repo", help="Optional repository id"),
+) -> None:
+    """Build or refresh native declaration graph data."""
+    from .code_graph_indexer import index_code_declarations
+
+    project_root = require_project_root()
+    result = index_code_declarations(
+        project_root, _project_graph_db(project_root), repo_id=repo or "local"
+    )
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@codebase_app.command("search")
+@_catch_daemon_start_error
+def codebase_search(
+    query: list[str] = _typer.Argument(..., help="Search query"),
+    mode: str = _typer.Option(
+        "hybrid", "--mode", help="Search mode: hybrid, vector, keyword, or grep"
+    ),
+    lang: list[str] = _typer.Option([], "--lang", help="Filter by language"),
+    path: str | None = _typer.Option(None, "--path", help="Filter by file path prefix"),
+    limit: int = _typer.Option(10, "--limit", min=1, max=100),
+    refresh: bool = _typer.Option(False, "--refresh", help="Refresh index before searching"),
+) -> None:
+    """Search with semantic, keyword, hybrid, or grep mode."""
+    project_root = require_project_root()
+    query_str = " ".join(query)
+    mode_value = mode.lower()
+    if mode_value not in {"hybrid", "vector", "keyword", "grep"}:
+        _typer.echo("Error: --mode must be hybrid, vector, keyword, or grep.", err=True)
+        raise _typer.Exit(code=1)
+    if refresh:
+        _run_index_with_progress(str(project_root))
+
+    if mode_value == "vector":
+        resp = _search_with_wait_spinner(
+            project_root=str(project_root),
+            query=query_str,
+            languages=lang or None,
+            paths=[path] if path else None,
+            limit=limit,
+            offset=0,
+        )
+        print_search_results(resp)
+        return
+
+    if mode_value == "grep":
+        from .mcp_handlers import ripgrep_bounded_tool
+
+        _print_json(
+            ripgrep_bounded_tool(
+                str(project_root),
+                query_str,
+                path_prefix=path,
+                max_matches=limit,
+            )
+        )
+        return
+
+    from . import client as _client
+    from . import hybrid_search as _hybrid_search
+
+    db_path = target_sqlite_db_path(project_root)
+    _hybrid_search.ensure_fts_index(db_path, force_rebuild=refresh)
+    keyword_results = _hybrid_search.keyword_search(
+        db_path,
+        query_str,
+        limit=limit,
+        path_prefix=path,
+        language=lang[0] if lang else None,
+    )
+    if mode_value == "keyword":
+        _print_json({"success": True, "results": [hit.__dict__ for hit in keyword_results]})
+        return
+
+    vector_resp = _client.search(
+        str(project_root),
+        query_str,
+        languages=lang or None,
+        paths=[path] if path else None,
+        limit=limit,
+    )
+    vector_results = [
+        {
+            "file_path": result.file_path,
+            "language": result.language,
+            "content": result.content,
+            "start_line": result.start_line,
+            "end_line": result.end_line,
+            "score": result.score,
+        }
+        for result in vector_resp.results
+    ]
+    fused = _hybrid_search.reciprocal_rank_fusion(
+        vector_results=vector_results, keyword_results=keyword_results, limit=limit
+    )
+    _print_json({"success": True, "results": fused})
+
+
+@codebase_app.command("status")
+@_catch_daemon_start_error
+def codebase_status() -> None:
+    """Show index and graph status for the current project."""
+    status()
+
+
+@codebase_graph_app.command("stats")
+def codebase_graph_stats(
+    repo: str | None = _typer.Option(None, "--repo", help="Optional repository id"),
+) -> None:
+    """Show graph statistics."""
+    from .mcp_handlers import codebase_graph_stats_tool
+
+    result = codebase_graph_stats_tool(_project_graph_db(require_project_root()), repo_id=repo)
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@codebase_graph_app.command("query")
+def codebase_graph_query(
+    file_path: str = _typer.Argument(..., help="Relative file path"),
+    repo: str | None = _typer.Option(None, "--repo", help="Optional repository id"),
+) -> None:
+    """Show imports, imported-by files, and symbols for a file."""
+    from .mcp_handlers import codebase_graph_query_tool
+
+    result = codebase_graph_query_tool(
+        _project_graph_db(require_project_root()), file_path, repo_id=repo
+    )
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@codebase_graph_app.command("circular")
+def codebase_graph_circular(
+    repo: str | None = _typer.Option(None, "--repo", help="Optional repository id"),
+    limit: int = _typer.Option(50, "--limit", min=1, max=500),
+) -> None:
+    """Find file-level circular dependencies."""
+    from .mcp_handlers import codebase_graph_circular_tool
+
+    result = codebase_graph_circular_tool(
+        _project_graph_db(require_project_root()), repo_id=repo, limit=limit
+    )
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@codebase_graph_app.command("visualize")
+def codebase_graph_visualize(
+    repo: str | None = _typer.Option(None, "--repo", help="Optional repository id"),
+    limit: int = _typer.Option(120, "--limit", min=1, max=500),
+) -> None:
+    """Return a Mermaid dependency graph."""
+    from .declarations_db import db_connection
+
+    db_path = _project_graph_db(require_project_root())
+    try:
+        with db_connection(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT c.file_path AS from_file, d.file_path AS to_file
+                FROM calls c
+                JOIN declarations d ON d.id = c.callee_decl_id
+                WHERE c.callee_decl_id IS NOT NULL
+                  AND c.file_path != d.file_path
+                  AND (? IS NULL OR c.repo_id = ?)
+                LIMIT ?
+                """,
+                (repo, repo, limit),
+            ).fetchall()
+        lines = ["graph TD"]
+        for row in rows:
+            src = str(row["from_file"]).replace("-", "_").replace("/", "_").replace(".", "_")
+            dst = str(row["to_file"]).replace("-", "_").replace("/", "_").replace(".", "_")
+            lines.append(f'  {src}["{row["from_file"]}"] --> {dst}["{row["to_file"]}"]')
+        _print_json({"success": True, "mode": "mermaid", "mermaid": "\n".join(lines)})
+    except Exception as exc:
+        _print_json({"success": False, "error": str(exc)})
+        raise _typer.Exit(code=1)
+
+
+@codebase_graph_app.command("remove")
+def codebase_graph_remove() -> None:
+    """Remove derived graph edges and analytics from the current project."""
+    from .declarations_db import db_connection
+
+    try:
+        deleted = {}
+        with db_connection(_project_graph_db(require_project_root())) as conn:
+            for table in (
+                "calls",
+                "inherits",
+                "centrality",
+                "communities",
+                "tests",
+                "declarations",
+                "imports",
+                '"references"',
+                "file_signatures",
+            ):
+                deleted[table] = conn.execute(f"DELETE FROM {table}").rowcount
+        _print_json({"success": True, "removed": deleted})
+    except Exception as exc:
+        _print_json({"success": False, "error": str(exc)})
+        raise _typer.Exit(code=1)
+
+
+@codebase_app.command("impact")
+def codebase_impact(
+    target: str = _typer.Argument(..., help="File path or symbol name"),
+    repo: str | None = _typer.Option(None, "--repo", help="Optional repository id"),
+    depth: int = _typer.Option(3, "--depth", min=1, max=10),
+    max_nodes: int = _typer.Option(200, "--max-nodes", min=1, max=1000),
+) -> None:
+    """Show blast radius for a file path or symbol name."""
+    from .mcp_handlers import codebase_impact_tool
+
+    result = codebase_impact_tool(
+        _project_graph_db(require_project_root()),
+        target=target,
+        repo_id=repo,
+        depth=depth,
+        max_nodes=max_nodes,
+    )
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@codebase_app.command("flow")
+def codebase_flow(
+    entrypoint: str | None = _typer.Argument(None, help="Optional entrypoint symbol"),
+    file: str | None = _typer.Option(None, "--file", help="File path to disambiguate"),
+    repo: str | None = _typer.Option(None, "--repo", help="Optional repository id"),
+    depth: int = _typer.Option(5, "--depth", min=1, max=10),
+) -> None:
+    """Trace forward call flow, or list likely entrypoints when omitted."""
+    from .mcp_handlers import codebase_flow_tool
+
+    result = codebase_flow_tool(
+        _project_graph_db(require_project_root()),
+        entrypoint=entrypoint,
+        file=file,
+        repo_id=repo,
+        depth=depth,
+    )
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@codebase_app.command("symbol")
+def codebase_symbol(
+    name: str = _typer.Argument(..., help="Symbol name"),
+    file: str | None = _typer.Option(None, "--file", help="File path to disambiguate"),
+    repo: str | None = _typer.Option(None, "--repo", help="Optional repository id"),
+) -> None:
+    """Show definition, callers, and callees for a symbol."""
+    from .mcp_handlers import codebase_symbol_tool
+
+    result = codebase_symbol_tool(
+        _project_graph_db(require_project_root()), name=name, file=file, repo_id=repo
+    )
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@codebase_app.command("symbols")
+def codebase_symbols(
+    file: str | None = _typer.Option(None, "--file", help="Filter by file"),
+    query: str | None = _typer.Option(None, "--query", help="Filter by symbol name"),
+    repo: str | None = _typer.Option(None, "--repo", help="Optional repository id"),
+    limit: int = _typer.Option(200, "--limit", min=1, max=1000),
+) -> None:
+    """List symbols by file or name."""
+    from .mcp_handlers import codebase_symbols_tool
+
+    result = codebase_symbols_tool(
+        _project_graph_db(require_project_root()),
+        file=file,
+        query=query,
+        repo_id=repo,
+        limit=limit,
+    )
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@codebase_context_app.command("list")
+def codebase_context_list() -> None:
+    """List configured context artifacts."""
+    from .mcp_handlers import codebase_context_list_tool
+
+    result = codebase_context_list_tool(require_project_root())
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@codebase_context_app.command("index")
+def codebase_context_index() -> None:
+    """Index configured context artifact metadata."""
+    from .mcp_handlers import codebase_context_index_tool
+
+    result = codebase_context_index_tool(require_project_root())
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@codebase_context_app.command("search")
+def codebase_context_search(
+    query: list[str] = _typer.Argument(..., help="Search query"),
+    artifact: str | None = _typer.Option(None, "--artifact", help="Optional artifact name"),
+    limit: int = _typer.Option(10, "--limit", min=1, max=100),
+) -> None:
+    """Search configured context artifacts."""
+    from .mcp_handlers import codebase_context_search_tool
+
+    result = codebase_context_search_tool(
+        require_project_root(), " ".join(query), artifact=artifact, limit=limit
+    )
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@codebase_context_app.command("remove")
+def codebase_context_remove() -> None:
+    """Remove indexed context artifact metadata."""
+    from .mcp_handlers import codebase_context_remove_tool
+
+    result = codebase_context_remove_tool(require_project_root())
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
+@codebase_app.command("health")
+@_catch_daemon_start_error
+def codebase_health() -> None:
+    """Check daemon and local project health."""
+    from . import client as _client
+
+    project_root = require_project_root()
+    try:
+        daemon = _client.daemon_status()
+        project = _client.project_status(str(project_root))
+        _print_json(
+            {
+                "success": True,
+                "daemon": {
+                    "version": daemon.version,
+                    "uptime_seconds": daemon.uptime_seconds,
+                    "projects": [p.project_root for p in daemon.projects],
+                },
+                "project": {
+                    "index_exists": project.index_exists,
+                    "files": project.total_files,
+                    "chunks": project.total_chunks,
+                    "indexing": project.indexing,
+                },
+            }
+        )
+    except Exception as exc:
+        _print_json({"success": False, "error": str(exc)})
+        raise _typer.Exit(code=1)
+
+
+@codebase_app.command("projects")
+@_catch_daemon_start_error
+def codebase_projects() -> None:
+    """List projects loaded in the daemon."""
+    from . import client as _client
+
+    try:
+        daemon = _client.daemon_status()
+        _print_json(
+            {
+                "success": True,
+                "projects": [
+                    {"project_root": p.project_root, "indexing": p.indexing}
+                    for p in daemon.projects
+                ],
+            }
+        )
+    except Exception as exc:
+        _print_json({"success": False, "error": str(exc)})
+        raise _typer.Exit(code=1)
+
+
+@codebase_app.command("about")
+def codebase_about() -> None:
+    """Explain available codebase tools."""
+    _print_json(
+        {
+            "success": True,
+            "name": "cocoindex-code",
+            "summary": (
+                "Native codebase intelligence: hybrid search, dependency graph, "
+                "impact analysis, symbols, and context artifacts."
+            ),
+            "tools": [
+                "codebase index",
+                "codebase update",
+                "codebase search",
+                "codebase status",
+                "codebase graph *",
+                "codebase impact",
+                "codebase flow",
+                "codebase symbol",
+                "codebase symbols",
+                "codebase context *",
+                "codebase health",
+                "codebase projects",
+            ],
+        }
+    )
 
 
 @app.command()
