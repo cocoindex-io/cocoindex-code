@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import os
 import signal
 import subprocess
@@ -534,6 +535,64 @@ def init(
 
     _typer.echo("You can edit the settings files to customize indexing behavior.")
     _typer.echo("Run `ccc index` to build the index.")
+
+
+@app.command()
+def install(
+    host: str = _typer.Option(
+        "auto",
+        "--host",
+        help="Host to register with: auto, codex, claude, opencode, or generic.",
+    ),
+    server_name: str = _typer.Option(
+        "cocoindex-code",
+        "--server-name",
+        help="Registered MCP server name.",
+    ),
+    apply: bool = _typer.Option(
+        False,
+        "--apply",
+        help="Apply the registration immediately when the selected host supports it.",
+    ),
+) -> None:
+    """Print or apply host-specific MCP registration for cocoindex-code."""
+    from .install import apply_install_plan, available_hosts, build_install_plan, supported_hosts
+
+    try:
+        plan = build_install_plan(host, server_name=server_name)
+    except ValueError as exc:
+        _print_json(
+            {
+                "success": False,
+                "error": str(exc),
+                "supported_hosts": supported_hosts(),
+            }
+        )
+        raise _typer.Exit(code=1)
+    payload: dict[str, object] = {
+        "success": True,
+        "host": plan.host,
+        "server_name": plan.server_name,
+        "detected_hosts": available_hosts(),
+        "command": plan.command,
+        "apply_supported": plan.apply_supported,
+        "message": plan.message,
+        "next_steps": list(plan.next_steps),
+    }
+    if plan.apply_command is not None:
+        payload["apply_command"] = plan.apply_command
+    if plan.snippet is not None:
+        payload["snippet"] = json.loads(plan.snippet)
+
+    if apply:
+        result = apply_install_plan(plan)
+        payload["applied"] = result
+        if not result.get("success", False):
+            payload["success"] = False
+
+    _print_json(payload)
+    if not payload.get("success", False):
+        raise _typer.Exit(code=1)
 
 
 @app.command()

@@ -61,6 +61,32 @@ Two install styles — they mirror the Docker image variants of the same names:
 
 Next, set up your [coding agent integration](#coding-agent-integration) — or jump to [Manual CLI Usage](#manual-cli-usage) if you prefer direct control.
 
+### Fastest Local Path
+
+If you want shell-native code search first and agent integration second:
+
+```bash
+cgrep "where do we set up auth?"
+cgrep watch
+ccc install --apply
+```
+
+- `cgrep` is the fast local CLI for hybrid semantic + keyword + grep-backed search.
+- `ccc install --apply` registers the MCP server with Claude Code or Codex when those CLIs are available.
+- Use both together: `cgrep` in the terminal, `codebase_*` tools inside your coding agent.
+
+### Host Install
+
+If you already have a coding-agent host installed, let `ccc` generate the right MCP registration for you:
+
+```bash
+ccc install                 # auto-detects Codex / Claude / OpenCode / generic MCP JSON
+ccc install --apply         # applies registration for supported hosts (Codex, Claude)
+ccc install --host generic  # prints a generic MCP JSON snippet
+```
+
+`ccc install` now prints host-specific next steps as JSON, including the matching `cgrep` and MCP usage flow for Claude Code and Codex.
+
 ## Coding Agent Integration
 
 ### Skill (Recommended)
@@ -75,6 +101,11 @@ That's it — no `ccc init` or `ccc index` needed. The skill teaches the agent t
 
 The agent uses semantic search automatically when it would be helpful. You can also nudge it explicitly — just ask it to search the codebase, e.g. *"find how user sessions are managed"*, or type `/ccc` to invoke the skill directly.
 
+Recommended pairing for Claude Code and Codex:
+
+- Use `cgrep` in the terminal when you want quick interactive search results without leaving the shell.
+- Use MCP / skill integration when you want the agent to combine search with symbol, graph, impact, or workflow context.
+
 Works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and other skill-compatible agents.
 
 ### MCP Server
@@ -86,6 +117,17 @@ Alternatively, use `ccc mcp` to run as an MCP server:
 
 ```bash
 claude mcp add cocoindex-code -- ccc mcp
+ccc install --apply --host claude
+```
+
+Then:
+
+```bash
+# terminal-native search
+cgrep "request validation flow"
+
+# agent-native context
+# ask Claude Code to use codebase_search / codebase_symbol / codebase_workflow
 ```
 </details>
 
@@ -94,6 +136,17 @@ claude mcp add cocoindex-code -- ccc mcp
 
 ```bash
 codex mcp add cocoindex-code -- ccc mcp
+ccc install --apply --host codex
+```
+
+Then:
+
+```bash
+# terminal-native search
+cgrep "incremental indexing logic"
+
+# agent-native context
+# ask Codex to use codebase_search / codebase_symbol / codebase_workflow
 ```
 </details>
 
@@ -153,6 +206,8 @@ Returns matching code chunks with file path, language, code content, line number
 You can also use the CLI directly — useful for manual control, running indexing after changing settings, checking status, or searching outside an agent.
 
 ```bash
+cgrep "authentication logic"            # local hybrid search, auto-bootstraps at repo root
+cgrep watch                             # keep the local index warm as files change
 ccc init                                # initialize project (creates settings)
 ccc index                               # build the index
 ccc search "authentication logic"       # search!
@@ -166,9 +221,12 @@ The background daemon starts automatically on first use.
 
 | Command | Description |
 |---------|-------------|
+| `cgrep <query>` | Local shell-native hybrid search. Auto-bootstraps at the nearest repo root. |
+| `cgrep watch` | Keep the current repo indexed as files change. |
 | `ccc init` | Initialize a project — creates settings files, adds `.cocoindex_code/` to `.gitignore` |
 | `ccc index` | Build or update the index (auto-inits if needed). Shows streaming progress. |
 | `ccc search <query>` | Semantic search across the codebase |
+| `ccc install` | Generate or apply host-specific MCP registration |
 | `ccc status` | Show index stats (chunk count, file count, language breakdown) |
 | `ccc mcp` | Run as MCP server in stdio mode |
 | `ccc doctor` | Run diagnostics — checks settings, daemon, model, file matching, and index health |
@@ -180,6 +238,9 @@ The background daemon starts automatically on first use.
 ### Search Options
 
 ```bash
+cgrep "database schema"                            # hybrid search
+cgrep "query handler" src/utils -m 5 -c           # path-scoped local search with content
+cgrep watch                                        # keep the repo indexed in the background
 ccc search database schema                           # basic search
 ccc search --lang python --lang markdown schema      # filter by language
 ccc search --path 'src/utils/*' query handler        # filter by path
@@ -188,6 +249,7 @@ ccc search --refresh database schema                 # update index first, then 
 ```
 
 By default, `ccc search` scopes results to your current working directory (relative to the project root). Use `--path` to override.
+`cgrep` behaves similarly for path scoping, but defaults to hybrid retrieval and bootstraps from the nearest git root when no `.cocoindex_code/settings.yml` exists yet.
 
 ## Docker
 
@@ -285,6 +347,14 @@ ccc() {
 Now `cd` into any project under your workspace and run `ccc init`, `ccc index`,
 `ccc search ...`, `ccc status`, etc. — it just works.
 
+If you also want `cgrep` from the host shell:
+
+```bash
+cgrep() {
+  docker exec -it -e COCOINDEX_CODE_HOST_CWD="$PWD" cocoindex-code cgrep "$@"
+}
+```
+
 ### Connect your coding agent
 
 <details>
@@ -295,6 +365,12 @@ Register MCP from inside the target project so `$PWD` points there:
 ```bash
 claude mcp add cocoindex-code -- docker exec -i \
   -e COCOINDEX_CODE_HOST_CWD="$PWD" cocoindex-code ccc mcp
+```
+
+For local shell search against the same containerized repo:
+
+```bash
+docker exec -it -e COCOINDEX_CODE_HOST_CWD="$PWD" cocoindex-code cgrep "request validation flow"
 ```
 
 Or via `.mcp.json`:
@@ -330,6 +406,12 @@ Or via `.mcp.json`:
 ```bash
 codex mcp add cocoindex-code -- docker exec -i \
   -e COCOINDEX_CODE_HOST_CWD="$PWD" cocoindex-code ccc mcp
+```
+
+For local shell search against the same containerized repo:
+
+```bash
+docker exec -it -e COCOINDEX_CODE_HOST_CWD="$PWD" cocoindex-code cgrep "incremental indexing logic"
 ```
 </details>
 

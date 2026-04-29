@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -134,6 +135,22 @@ def test_codebase_context_index_and_remove_use_local_manifest(tmp_path: Path) ->
     assert removed["success"] is True
     assert removed["removed"] == 1
     assert not manifest.exists()
+
+
+def test_install_command_prints_generic_snippet() -> None:
+    result = runner.invoke(app, ["install", "--host", "generic"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["host"] == "generic"
+    assert payload["snippet"]["mcpServers"]["cocoindex-code"]["command"] == "ccc"
+    assert any("cgrep" in step for step in payload["next_steps"])
+
+
+def test_install_command_rejects_unknown_host() -> None:
+    result = runner.invoke(app, ["install", "--host", "cursor"])
+
+    assert result.exit_code == 1
 
 
 def test_cli_exposes_codebase_namespace() -> None:

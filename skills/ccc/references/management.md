@@ -1,5 +1,7 @@
 # ccc Management
 
+This reference covers installation, initialization, daemon operations, validation, and cleanup.
+
 ## Installation
 
 Install CocoIndex Code via pipx. Two install styles:
@@ -18,6 +20,22 @@ pipx upgrade cocoindex-code
 ```
 
 After installation, the `ccc` command is available globally.
+
+If you want host-specific MCP registration help after install:
+
+```bash
+ccc install
+ccc install --apply
+```
+
+For the best Claude Code / Codex setup, use both surfaces:
+
+```bash
+cgrep "your query"          # shell-native local search
+ccc install --apply         # MCP registration for Claude Code / Codex
+```
+
+Use `cgrep` when you want quick local search results in the terminal. Use MCP when the agent needs richer repository-native tools such as `codebase_search`, `codebase_symbol`, `codebase_impact`, or `codebase_workflow`.
 
 ## Project Initialization
 
@@ -49,6 +67,16 @@ Use `-f` to skip the confirmation prompt if `ccc init` detects a potential paren
 
 After initialization, edit the settings files if needed (see [settings.md](settings.md) for format details), then run `ccc index` to build the initial index. If the model test printed `[FAIL]` during `init`, edit `global_settings.yml` (and optionally add API keys under the commented `envs:` block) and verify with `ccc doctor` before indexing.
 
+## Common Daily Commands
+
+```bash
+ccc index
+ccc search "authentication middleware"
+ccc codebase workflow review --ref-spec HEAD~3..HEAD
+ccc codebase workflow onboard
+ccc codebase graph visualize --format html --output graph.html
+```
+
 ## Troubleshooting
 
 ### Diagnostics
@@ -71,6 +99,12 @@ ccc status
 
 This shows whether indexing is ongoing and index statistics.
 
+To inspect the codebase intelligence layer specifically:
+
+```bash
+ccc codebase status
+```
+
 ### Daemon Management
 
 The daemon starts automatically on first use. To check its status:
@@ -92,6 +126,8 @@ To stop the daemon:
 ```bash
 ccc daemon stop
 ```
+
+If you need to remove only the loaded project from the daemon but keep the daemon alive, use the MCP `codebase_remove` tool from an agent host.
 
 ## Cleanup
 
