@@ -51,6 +51,13 @@ class ResultRow:
     score: float
 
 
+def _display_file_path(file_path: str) -> str:
+    """Render relative paths consistently without duplicating `./`."""
+    if file_path.startswith(("./", "/")):
+        return file_path
+    return f"./{file_path}"
+
+
 _KNOWN_COMMANDS = {"search", "watch"}
 
 
@@ -137,9 +144,18 @@ def _ensure_search_scope(raw_path: str | None, *, watch_root: bool = False) -> S
     return _normalize_search_path(project_root, None if watch_root else raw_path, cwd)
 
 
+def _index_needs_refresh(project_root: Path) -> bool:
+    """Return True when the local index is missing or effectively empty."""
+    try:
+        status = _client.project_status(str(project_root))
+    except Exception:
+        return True
+    return (not status.index_exists) or status.total_chunks <= 0
+
+
 def _maybe_refresh_index(project_root: Path, *, sync: bool) -> None:
     db_path = target_sqlite_db_path(project_root)
-    if sync or not db_path.exists():
+    if sync or not db_path.exists() or _index_needs_refresh(project_root):
         from .cli import _run_index_with_progress
 
         _run_index_with_progress(str(project_root))
@@ -253,7 +269,7 @@ def _hybrid_rows(
     vector_rows = _vector_rows(
         project_root,
         query,
-        limit=limit,
+        limit=limit + offset,
         offset=0,
         languages=languages,
         path_globs=path_globs,
@@ -319,7 +335,7 @@ def _keyword_only_rows(
             start_line=row.start_line,
             end_line=row.end_line,
             content=row.content,
-            language=None,
+            language=row.language,
             score=row.score,
         )
         for row in rows[offset : offset + limit]
@@ -369,15 +385,33 @@ def _run_search(
     languages: list[str] | None,
 ) -> list[ResultRow]:
     mode_value = mode.lower()
+    if mode_value == "grep":
+        return _grep_rows(scope.project_root, query, limit=limit, path_prefix=scope.path_prefix)
+
+    if _index_needs_refresh(scope.project_root):
+        print_warning("Index is missing or empty; falling back to grep for this search.")
+        return _grep_rows(scope.project_root, query, limit=limit, path_prefix=scope.path_prefix)
+
     if mode_value == "vector":
-        return _vector_rows(
-            scope.project_root,
-            query,
-            limit=limit,
-            offset=offset,
-            languages=languages,
-            path_globs=scope.path_globs,
-        )
+        try:
+            return _vector_rows(
+                scope.project_root,
+                query,
+                limit=limit,
+                offset=offset,
+                languages=languages,
+                path_globs=scope.path_globs,
+            )
+        except TimeoutError:
+            print_warning("Vector search timed out; falling back to keyword search.")
+            return _keyword_only_rows(
+                scope.project_root,
+                query,
+                limit=limit,
+                offset=offset,
+                languages=languages,
+                path_prefix=scope.path_prefix,
+            )
     if mode_value == "keyword":
         return _keyword_only_rows(
             scope.project_root,
@@ -387,18 +421,27 @@ def _run_search(
             languages=languages,
             path_prefix=scope.path_prefix,
         )
-    if mode_value == "grep":
-        return _grep_rows(scope.project_root, query, limit=limit, path_prefix=scope.path_prefix)
     if mode_value == "hybrid":
-        return _hybrid_rows(
-            scope.project_root,
-            query,
-            limit=limit,
-            offset=offset,
-            languages=languages,
-            path_globs=scope.path_globs,
-            path_prefix=scope.path_prefix,
-        )
+        try:
+            return _hybrid_rows(
+                scope.project_root,
+                query,
+                limit=limit,
+                offset=offset,
+                languages=languages,
+                path_globs=scope.path_globs,
+                path_prefix=scope.path_prefix,
+            )
+        except TimeoutError:
+            print_warning("Hybrid vector phase timed out; falling back to keyword search.")
+            return _keyword_only_rows(
+                scope.project_root,
+                query,
+                limit=limit,
+                offset=offset,
+                languages=languages,
+                path_prefix=scope.path_prefix,
+            )
     raise click.ClickException(f"Invalid mode {mode!r}; expected hybrid, vector, keyword, or grep.")
 
 
@@ -409,7 +452,7 @@ def _render_results(rows: list[ResultRow], *, show_content: bool) -> None:
     for row in rows:
         language = f" [{row.language}]" if row.language else ""
         click.echo(
-            f"./{row.file_path}:{row.start_line}-{row.end_line}{language} "
+            f"{_display_file_path(row.file_path)}:{row.start_line}-{row.end_line}{language} "
             f"(score {row.score:.3f})"
         )
         if show_content:
@@ -487,7 +530,8 @@ def search(
         rerank=rerank,
     )
     scope = _ensure_search_scope(path)
-    _maybe_refresh_index(scope.project_root, sync=sync)
+    if sync:
+        _maybe_refresh_index(scope.project_root, sync=sync)
     rows = _run_search(
         scope,
         query,
@@ -548,3 +592,7 @@ def main(argv: list[str] | None = None) -> None:
     """Script entry point with default-command rewriting."""
     args = _normalize_argv(list(sys.argv[1:] if argv is None else argv))
     cli.main(args=args, prog_name="cgrep", standalone_mode=True)
+
+
+if __name__ == "__main__":
+    main()
