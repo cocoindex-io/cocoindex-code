@@ -419,7 +419,7 @@ Mode B — multi-language / multi-repo:
         )]
 
     try:
-        chunker_registry = resolve_chunker_registry(chunker_mappings)
+        chunker_registry = resolve_chunker_registry(chunker_mappings, project_root=sourcedir)
         _run_groups(
             groups=groups,
             sourcedir=sourcedir,

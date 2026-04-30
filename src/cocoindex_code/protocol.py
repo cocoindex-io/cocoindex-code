@@ -20,6 +20,7 @@ class IndexRequest(_msgspec.Struct, tag="index"):
 class SearchRequest(_msgspec.Struct, tag="search"):
     project_root: str
     query: str
+    request_id: str = ""
     languages: list[str] | None = None
     paths: list[str] | None = None
     limit: int = 5
@@ -115,9 +116,19 @@ class SearchResult(_msgspec.Struct):
 
 class SearchResponse(_msgspec.Struct, tag="search"):
     success: bool
+    request_id: str = ""
     results: list[SearchResult] = []
     total_returned: int = 0
     offset: int = 0
+    message: str | None = None
+    freshness: str = "current"
+    degraded_mode: str | None = None
+
+
+class SearchWaitingNotice(_msgspec.Struct, tag="search_waiting"):
+    request_id: str = ""
+    phase: str
+    elapsed_seconds: float = 0.0
     message: str | None = None
 
 
@@ -128,6 +139,8 @@ class ProjectStatusResponse(_msgspec.Struct, tag="project_status"):
     languages: dict[str, int]
     progress: IndexingProgress | None = None
     index_exists: bool = True
+    freshness: str = "current"
+    degraded_modes: list[str] = []
 
 
 class DaemonProjectInfo(_msgspec.Struct):
@@ -182,6 +195,7 @@ Response = (
     | IndexResponse
     | IndexProgressUpdate
     | IndexWaitingNotice
+    | SearchWaitingNotice
     | SearchResponse
     | ProjectStatusResponse
     | DaemonStatusResponse
@@ -193,7 +207,7 @@ Response = (
 )
 
 IndexStreamResponse = IndexProgressUpdate | IndexWaitingNotice | IndexResponse | ErrorResponse
-SearchStreamResponse = IndexWaitingNotice | SearchResponse | ErrorResponse
+SearchStreamResponse = IndexWaitingNotice | SearchWaitingNotice | SearchResponse | ErrorResponse
 DoctorStreamResponse = DoctorResponse | ErrorResponse
 
 # ---------------------------------------------------------------------------

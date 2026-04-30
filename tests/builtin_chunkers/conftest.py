@@ -15,6 +15,7 @@ from __future__ import annotations
 import sys
 import types
 from dataclasses import dataclass, field
+from importlib.util import find_spec
 from pathlib import Path
 from typing import List
 
@@ -91,6 +92,9 @@ class ContextKey:
 
 def _install_stubs() -> None:
     """Inject minimal cocoindex modules needed by builtin chunker tests."""
+    if find_spec("cocoindex.resources.chunk") is not None and find_spec("cocoindex.ops.text") is not None:
+        return
+
     if "cocoindex.resources.chunk" not in sys.modules:
         coco = types.ModuleType("cocoindex")
         coco.ContextKey = ContextKey  # type: ignore[attr-defined]

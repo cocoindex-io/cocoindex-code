@@ -282,6 +282,7 @@ class MultiRepoOrchestrator:
     def _link_path(self, link: Path, target: Path) -> None:
         """Create or update symlink efficiently, avoiding unnecessary resolution."""
         logger.debug(f"Creating/updating symlink: {link} -> {target}")
+        target_text = str(target)
 
         # Fast path: if link doesn't exist, just create it
         if not link.exists() and not link.is_symlink():
@@ -294,8 +295,8 @@ class MultiRepoOrchestrator:
         # Link exists; check if it's already pointing to the right place
         if link.is_symlink():
             try:
-                current = link.resolve()
-                if current == target.resolve():
+                current = os.readlink(link)
+                if current == target_text:
                     logger.debug(f"Symlink already correct: {link}")
                     return  # Already correct, skip
             except OSError as e:

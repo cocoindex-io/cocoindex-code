@@ -27,6 +27,7 @@ from cocoindex_code.protocol import (
     SearchRequest,
     SearchResponse,
     SearchResult,
+    SearchWaitingNotice,
     StopRequest,
     StopResponse,
     decode_request,
@@ -97,6 +98,19 @@ def test_encode_decode_search_response_with_results() -> None:
     assert len(decoded.results) == 1
     assert decoded.results[0].file_path == "main.py"
     assert decoded.results[0].score == 0.95
+
+
+def test_encode_decode_search_waiting_notice() -> None:
+    resp = SearchWaitingNotice(
+        phase="search",
+        elapsed_seconds=3.5,
+        message="Search still running",
+    )
+    data = encode_response(resp)
+    decoded = decode_response(data)
+    assert isinstance(decoded, SearchWaitingNotice)
+    assert decoded.phase == "search"
+    assert decoded.elapsed_seconds == 3.5
 
 
 def test_encode_decode_error_response() -> None:

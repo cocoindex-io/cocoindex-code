@@ -8,9 +8,32 @@ from __future__ import annotations
 
 import os
 import sys
+import hashlib
 from pathlib import Path
 
-from .settings import user_settings_dir
+from .settings import find_project_root, user_settings_dir
+
+
+def _workspace_identity() -> str | None:
+    override = os.environ.get("COCOINDEX_CODE_ROOT_PATH")
+    if override:
+        return str(Path(override).resolve())
+    try:
+        cwd = Path.cwd().resolve()
+    except OSError:
+        return None
+    root = find_project_root(cwd)
+    return str((root or cwd).resolve())
+
+
+def _workspace_runtime_dir(base_dir: Path) -> Path:
+    identity = _workspace_identity()
+    if not identity:
+        return base_dir
+    digest = hashlib.md5(identity.encode("utf-8")).hexdigest()[:12]
+    leaf = Path(identity).name or "workspace"
+    safe_leaf = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in leaf)[:40]
+    return base_dir / "workspaces" / f"{safe_leaf}-{digest}"
 
 
 def daemon_runtime_dir() -> Path:
@@ -28,7 +51,7 @@ def daemon_runtime_dir() -> Path:
     override = os.environ.get("COCOINDEX_CODE_RUNTIME_DIR")
     if override:
         return Path(override)
-    return user_settings_dir()
+    return _workspace_runtime_dir(user_settings_dir())
 
 
 def connection_family() -> str:
@@ -39,8 +62,6 @@ def connection_family() -> str:
 def daemon_socket_path() -> str:
     """Return the daemon socket/pipe address."""
     if sys.platform == "win32":
-        import hashlib
-
         # Hash the runtime dir so COCOINDEX_CODE_RUNTIME_DIR (or the
         # COCOINDEX_CODE_DIR fallback) overrides produce unique pipe names,
         # preventing conflicts between different daemon instances (tests,

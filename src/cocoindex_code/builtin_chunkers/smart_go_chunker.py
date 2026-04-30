@@ -55,7 +55,7 @@ def _ast_chunks(
     content: str, language: str, allowed_types: set[str]
 ) -> list[Chunk]:
     """Parse content with tree-sitter and extract declaration chunks."""
-    parser = _get_parser(language)
+    parser = get_parser(language)
     content_bytes = content.encode("utf-8")
     tree = parser.parse(content_bytes)
     spans = _collect_top_level_spans(tree.root_node, allowed_types)
@@ -143,14 +143,14 @@ def go_chunker(path: Path, content: str) -> tuple[str | None, list[Chunk]]:
                 end=_pos(len(content_bytes), content_bytes),
             )
         ]
-    
+
     try:
         chunks = _ast_chunks(content, "go", _GO_SPLIT_NODES)
         if chunks:
             return "go", chunks
     except Exception as _exc:
         import traceback; traceback.print_exc()
-    
+
     # Fallback to generic splitter
     fallback = _splitter.split(
         content,
@@ -161,7 +161,7 @@ def go_chunker(path: Path, content: str) -> tuple[str | None, list[Chunk]]:
     )
     if fallback:
         return "go", fallback
-    
+
     # Last-resort: single chunk
     content_bytes = content.encode("utf-8")
     return "go", [

@@ -62,3 +62,62 @@ def test_indexed_path_query_filters_ann_candidates_without_full_scan(monkeypatch
     )
     assert [row[0] for row in rows] == ["src/a.py", "scripts/b.py"]
     assert calls
+
+
+def test_indexed_path_query_falls_back_to_exact_scan_for_sparse_prefixes(monkeypatch) -> None:
+    conn = sqlite3.connect(":memory:")
+    exact_calls: list[tuple[int, int, list[str] | None]] = []
+
+    def fake_knn_query(_conn, _embedding_bytes, k: int, language: str | None = None):
+        return [
+            ("src/a.py", "python", "a", 1, 1, 0.01),
+            ("docs/c.md", "markdown", "c", 3, 3, 0.03),
+        ]
+
+    def fake_full_scan_query(
+        _conn,
+        _embedding_bytes,
+        limit: int,
+        offset: int,
+        languages=None,
+        paths=None,
+    ):
+        exact_calls.append((limit, offset, paths))
+        return [
+            ("src/a.py", "python", "a", 1, 1, 0.01),
+            ("src/deep/b.py", "python", "b", 2, 2, 0.02),
+        ]
+
+    monkeypatch.setattr("cocoindex_code.query._knn_query", fake_knn_query)
+    monkeypatch.setattr("cocoindex_code.query._full_scan_query", fake_full_scan_query)
+
+    rows = _indexed_path_query(conn, b"embed", limit=2, offset=0, paths=["src"])
+    assert [row[0] for row in rows] == ["src/a.py", "src/deep/b.py"]
+    assert exact_calls == [(2, 0, ["src"])]
+
+
+def test_indexed_path_query_globs_use_exact_scan(monkeypatch) -> None:
+    exact_calls: list[list[str] | None] = []
+
+    def fake_full_scan_query(
+        _conn,
+        _embedding_bytes,
+        limit: int,
+        offset: int,
+        languages=None,
+        paths=None,
+    ):
+        exact_calls.append(paths)
+        return [("scripts/build.py", "python", "b", 1, 1, 0.01)]
+
+    monkeypatch.setattr("cocoindex_code.query._full_scan_query", fake_full_scan_query)
+
+    rows = _indexed_path_query(
+        sqlite3.connect(":memory:"),
+        b"embed",
+        limit=1,
+        offset=0,
+        paths=["scripts/*.py"],
+    )
+    assert [row[0] for row in rows] == ["scripts/build.py"]
+    assert exact_calls == [["scripts/*.py"]]

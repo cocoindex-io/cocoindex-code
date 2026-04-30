@@ -117,8 +117,8 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-explicit_package_bases = true
 files = ["src"]
+exclude = ["^tests/", "^tests/e2e_docker_fixtures/"]
 
 [[tool.mypy.overrides]]
 # lancedb ships no py.typed marker; cocoindex's lancedb connector stubs live
@@ -134,7 +134,7 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # igraph, leidenalg, networkx, sqlite_vec ship no py.typed marker; optional deps.
-module = ["igraph", "igraph.*", "leidenalg", "leidenalg.*", "networkx", "networkx.*", "sqlite_vec", "sqlite_vec.*"]
+module = ["igraph", "igraph.*", "leidenalg", "leidenalg.*", "networkx", "networkx.*", "sqlite_vec", "sqlite_vec.*", "tree_sitter_languages", "tree_sitter_languages.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

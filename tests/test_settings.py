@@ -338,6 +338,29 @@ def test_resolve_chunker_registry_not_callable() -> None:
         resolve_chunker_registry([ChunkerMapping(ext="toml", module="os:sep")])
 
 
+def test_resolve_chunker_registry_prefers_project_root_over_shared_root(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    shared_root = tmp_path / "shared"
+    project_root.mkdir()
+    shared_root.mkdir()
+    (project_root / "demo_chunker.py").write_text(
+        "def chunker(path, content):\n    return 'project', []\n",
+        encoding="utf-8",
+    )
+    (shared_root / "demo_chunker.py").write_text(
+        "def chunker(path, content):\n    return 'shared', []\n",
+        encoding="utf-8",
+    )
+
+    registry = resolve_chunker_registry(
+        [ChunkerMapping(ext="toml", module="demo_chunker:chunker")],
+        project_root=project_root,
+        shared_roots=[shared_root],
+    )
+    language, _chunks = registry[".toml"](project_root / "x.toml", "value = 1")
+    assert language == "project"
+
+
 @pytest.mark.usefixtures("_patch_user_dir")
 def test_save_initial_user_settings_round_trip() -> None:
     from cocoindex_code.settings import (

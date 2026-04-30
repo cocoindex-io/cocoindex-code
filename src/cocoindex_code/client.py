@@ -48,6 +48,7 @@ from .protocol import (
     Response,
     SearchRequest,
     SearchResponse,
+    SearchWaitingNotice,
     StopRequest,
     StopResponse,
     decode_response,
@@ -56,6 +57,9 @@ from .protocol import (
 from .settings import normalize_input_path
 
 logger = logging.getLogger(__name__)
+
+_SEARCH_POLL_INTERVAL_S = 1.0
+_DEFAULT_SEARCH_TIMEOUT_S = 120.0
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +294,10 @@ def search(
     """
     project_root = normalize_input_path(project_root)
     conn = _connect_and_handshake()
+    timeout_s = float(
+        os.environ.get("COCOINDEX_CODE_SEARCH_TIMEOUT_SECONDS", _DEFAULT_SEARCH_TIMEOUT_S)
+    )
+    deadline = time.monotonic() + timeout_s
     try:
         conn.send_bytes(
             encode_request(
@@ -304,6 +312,14 @@ def search(
             )
         )
         while True:
+            if not conn.poll(_SEARCH_POLL_INTERVAL_S):
+                if on_waiting is not None:
+                    on_waiting()
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Search timed out after {timeout_s:.1f}s waiting for daemon response"
+                    )
+                continue
             try:
                 data = conn.recv_bytes()
             except EOFError:
@@ -312,6 +328,10 @@ def search(
             if isinstance(resp, ErrorResponse):
                 raise RuntimeError(f"Daemon error: {resp.message}")
             if isinstance(resp, IndexWaitingNotice):
+                if on_waiting is not None:
+                    on_waiting()
+                continue
+            if isinstance(resp, SearchWaitingNotice):
                 if on_waiting is not None:
                     on_waiting()
                 continue

@@ -49,6 +49,7 @@ from .protocol import (
     SearchRequest,
     SearchResponse,
     SearchStreamResponse,
+    SearchWaitingNotice,
     StopRequest,
     StopResponse,
     decode_request,
@@ -67,6 +68,26 @@ from .settings import (
 from .shared import Embedder, check_embedding, create_embedder
 
 logger = logging.getLogger(__name__)
+
+
+def _candidate_shared_chunker_roots(project_root: Path) -> list[Path]:
+    candidates: list[Path] = []
+
+    direct = project_root / "scripts" / "cocoindex"
+    if (direct / "chunkers").is_dir():
+        candidates.append(direct)
+
+    try:
+        children = list(project_root.iterdir()) if project_root.is_dir() else []
+    except OSError:
+        children = []
+
+    for child in children:
+        linked = child / "scripts" / "cocoindex"
+        if (linked / "chunkers").is_dir():
+            candidates.append(linked)
+
+    return candidates
 
 
 def _build_backward_compat_warning(
@@ -109,6 +130,8 @@ class ProjectRegistry:
     _embedder: Embedder | None
     indexing_params: dict[str, Any]
     query_params: dict[str, Any]
+    _project_locks: dict[str, asyncio.Lock]
+    _chunker_roots_by_project: dict[str, tuple[Path, ...]]
 
     def __init__(
         self,
@@ -120,25 +143,75 @@ class ProjectRegistry:
         self._embedder = embedder
         self.indexing_params = dict(indexing_params) if indexing_params else {}
         self.query_params = dict(query_params) if query_params else {}
+        self._project_locks = {}
+        self._chunker_roots_by_project = {}
 
-    async def get_project(self, project_root: str) -> Project:
+    def _shared_chunker_roots_for_project(self, project_root: str) -> tuple[Path, ...]:
+        cached = self._chunker_roots_by_project.get(project_root)
+        if cached is not None:
+            return cached
+        roots = tuple(_candidate_shared_chunker_roots(Path(project_root)))
+        self._chunker_roots_by_project[project_root] = roots
+        return roots
+
+    def _resolve_project_chunkers(self, project_root: str) -> dict[str, Any]:
+        root = Path(project_root)
+        project_settings = load_project_settings(root)
+        return resolve_chunker_registry(
+            project_settings.chunkers,
+            project_root=root,
+            shared_roots=self._shared_chunker_roots_for_project(project_root),
+        )
+
+    def _ensure_project_chunkers(self, project_root: str, project: Project) -> None:
+        if project.chunkers_ready:
+            return
+        started_at = time.monotonic()
+        chunker_registry = self._resolve_project_chunkers(project_root)
+        project.set_chunker_registry(chunker_registry)
+        logger.info(
+            "Prepared chunkers for %s in %.3fs",
+            project_root,
+            time.monotonic() - started_at,
+        )
+
+    async def get_project(self, project_root: str, *, require_chunkers: bool = False) -> Project:
         """Get or create a Project for the given root. Lazy initialization."""
         if self._embedder is None:
             raise RuntimeError(
                 "Daemon has no global settings loaded. Run `ccc init` to set up cocoindex-code."
             )
-        if project_root not in self._projects:
+        if project_root in self._projects:
+            project = self._projects[project_root]
+            if require_chunkers:
+                self._ensure_project_chunkers(project_root, project)
+            return project
+
+        lock = self._project_locks.setdefault(project_root, asyncio.Lock())
+        async with lock:
+            if project_root in self._projects:
+                project = self._projects[project_root]
+                if require_chunkers:
+                    self._ensure_project_chunkers(project_root, project)
+                return project
             root = Path(project_root)
-            project_settings = load_project_settings(root)
-            chunker_registry = resolve_chunker_registry(project_settings.chunkers)
+            started_at = time.monotonic()
             project = await Project.create(
                 root,
                 self._embedder,
                 indexing_params=self.indexing_params,
                 query_params=self.query_params,
-                chunker_registry=chunker_registry,
+                chunker_registry=None,
             )
+            if require_chunkers:
+                self._ensure_project_chunkers(project_root, project)
             self._projects[project_root] = project
+            logger.info(
+                "Loaded project %s in %.3fs (chunkers=%s)",
+                project_root,
+                time.monotonic() - started_at,
+                require_chunkers,
+            )
         return self._projects[project_root]
 
     def remove_project(self, project_root: str) -> bool:
@@ -146,6 +219,7 @@ class ProjectRegistry:
         import gc
 
         project = self._projects.pop(project_root, None)
+        self._chunker_roots_by_project.pop(project_root, None)
         if project is not None:
             project.close()
             del project
@@ -160,6 +234,7 @@ class ProjectRegistry:
         for project in self._projects.values():
             project.close()
         self._projects.clear()
+        self._chunker_roots_by_project.clear()
         gc.collect()
 
     def list_projects(self) -> list[DaemonProjectInfo]:
@@ -193,6 +268,7 @@ async def handle_connection(
     ``Request``.  Sends the response(s) and closes the connection.
     """
     loop = asyncio.get_event_loop()
+    req_name = "handshake"
     try:
         # 1. Handshake
         data: bytes = await loop.run_in_executor(None, conn.recv_bytes)
@@ -221,21 +297,39 @@ async def handle_connection(
         # 2. Single request
         data = await loop.run_in_executor(None, conn.recv_bytes)
         req = decode_request(data)
+        req_name = type(req).__name__
+        logger.info("Handling request: %s", req_name)
 
         result = await _dispatch(req, registry, start_time, on_shutdown, settings_env_names)
         if isinstance(result, AsyncIterator):
+            stream_error: Exception | None = None
             try:
                 async for resp in result:
                     conn.send_bytes(encode_response(resp))
+            except BrokenPipeError:
+                logger.warning("Client disconnected during streaming response for %s", req_name)
             except Exception as exc:
-                logger.exception("Error during streaming response")
-                conn.send_bytes(encode_response(ErrorResponse(message=str(exc))))
+                stream_error = exc
+
+            if stream_error is not None:
+                logger.error(
+                    "Error during streaming response for %s",
+                    req_name,
+                    exc_info=stream_error,
+                )
+                try:
+                    conn.send_bytes(encode_response(ErrorResponse(message=str(stream_error))))
+                except OSError:
+                    logger.warning(
+                        "Could not send error response for %s; client disconnected",
+                        req_name,
+                    )
         else:
             conn.send_bytes(encode_response(result))
     except (EOFError, OSError, asyncio.CancelledError):
-        pass
+        logger.warning("Connection ended while handling %s", req_name)
     except Exception:
-        logger.exception("Error handling connection")
+        logger.exception("Error handling connection for %s", req_name)
     finally:
         try:
             conn.close()
@@ -249,13 +343,43 @@ async def _search_with_wait(
     """Stream search response, waiting for ongoing indexing first."""
     yield IndexWaitingNotice()
     await project.wait_for_indexing_done()
+
+    async for resp in _stream_search_results(project, req):
+        yield resp
+
+
+async def _stream_search_results(
+    project: Project,
+    req: SearchRequest,
+) -> AsyncIterator[SearchStreamResponse]:
+    """Stream search results with periodic heartbeat notices."""
+    started_at = time.monotonic()
     try:
-        results = await project.search(
-            query=req.query,
-            languages=req.languages,
-            paths=req.paths,
-            limit=req.limit,
-            offset=req.offset,
+        search_task = asyncio.create_task(
+            project.search(
+                query=req.query,
+                languages=req.languages,
+                paths=req.paths,
+                limit=req.limit,
+                offset=req.offset,
+            )
+        )
+        while not search_task.done():
+            done, _ = await asyncio.wait({search_task}, timeout=1.0)
+            if done:
+                break
+            elapsed = time.monotonic() - started_at
+            yield SearchWaitingNotice(
+                phase="search",
+                elapsed_seconds=elapsed,
+                message="Search still running",
+            )
+        results = await search_task
+        logger.info(
+            "Search completed for %s in %.3fs with %d results",
+            project._project_root,
+            time.monotonic() - started_at,
+            len(results),
         )
         yield SearchResponse(
             success=True,
@@ -453,30 +577,19 @@ async def _dispatch(
     """
     try:
         if isinstance(req, IndexRequest):
-            project = await registry.get_project(req.project_root)
+            project = await registry.get_project(req.project_root, require_chunkers=True)
             return project.stream_index()
 
         if isinstance(req, SearchRequest):
             project = await registry.get_project(req.project_root)
             if not project.has_queryable_index():
+                project = await registry.get_project(req.project_root, require_chunkers=True)
                 await project.ensure_indexing_started()
 
             if project.should_wait_for_indexing and not project.has_queryable_index():
                 return _search_with_wait(project, req)
 
-            results = await project.search(
-                query=req.query,
-                languages=req.languages,
-                paths=req.paths,
-                limit=req.limit,
-                offset=req.offset,
-            )
-            return SearchResponse(
-                success=True,
-                results=results,
-                total_returned=len(results),
-                offset=req.offset,
-            )
+            return _stream_search_results(project, req)
 
         if isinstance(req, ProjectStatusRequest):
             project = await registry.get_project(req.project_root)

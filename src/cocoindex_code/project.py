@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -63,6 +65,17 @@ class Project:
     _index_lock: asyncio.Lock
     _initial_index_done: asyncio.Event
     _indexing_stats: IndexingProgress | None = None
+    _chunker_registry_ref: dict[str, ChunkerFn]
+    _chunkers_ready: bool
+    _normalized_query_params: tuple[tuple[str, str], ...]
+    _query_embedding_cache: OrderedDict[tuple[str, tuple[tuple[str, str], ...]], tuple[float, Any]]
+    _query_embedding_tasks: dict[
+        tuple[str, tuple[tuple[str, str], ...]],
+        asyncio.Task[Any],
+    ]
+
+    _QUERY_CACHE_MAX = 64
+    _QUERY_CACHE_TTL_S = 60.0
 
     def close(self) -> None:
         """Close project resources to release file handles (LMDB, SQLite)."""
@@ -150,6 +163,15 @@ class Project:
         asyncio.create_task(self.run_index(on_started=started))
         await started.wait()
 
+    def set_chunker_registry(self, chunker_registry: dict[str, ChunkerFn]) -> None:
+        self._chunker_registry_ref.clear()
+        self._chunker_registry_ref.update(chunker_registry)
+        self._chunkers_ready = True
+
+    @property
+    def chunkers_ready(self) -> bool:
+        return self._chunkers_ready
+
     async def stream_index(self) -> AsyncIterator[IndexStreamResponse]:
         """Run indexing, streaming progress updates and a final IndexResponse.
 
@@ -199,6 +221,41 @@ class Project:
             async with self._index_lock:
                 pass
 
+    def _query_cache_key(self, query: str) -> tuple[str, tuple[tuple[str, str], ...]]:
+        return (query, self._normalized_query_params)
+
+    async def _get_query_embedding(self, query: str) -> Any:
+        cache_key = self._query_cache_key(query)
+        now = time.monotonic()
+        cached = self._query_embedding_cache.get(cache_key)
+        if cached is not None:
+            cached_at, embedding = cached
+            if now - cached_at <= self._QUERY_CACHE_TTL_S:
+                self._query_embedding_cache.move_to_end(cache_key)
+                return embedding
+            self._query_embedding_cache.pop(cache_key, None)
+
+        in_flight = self._query_embedding_tasks.get(cache_key)
+        if in_flight is not None:
+            return await in_flight
+
+        async def _embed() -> Any:
+            embedder = self._env.get_context(EMBEDDER)
+            query_params = self._env.get_context(QUERY_EMBED_PARAMS)
+            return await embedder.embed(query, **query_params)
+
+        task = asyncio.create_task(_embed())
+        self._query_embedding_tasks[cache_key] = task
+        try:
+            embedding = await task
+        finally:
+            self._query_embedding_tasks.pop(cache_key, None)
+        self._query_embedding_cache[cache_key] = (now, embedding)
+        self._query_embedding_cache.move_to_end(cache_key)
+        while len(self._query_embedding_cache) > self._QUERY_CACHE_MAX:
+            self._query_embedding_cache.popitem(last=False)
+        return embedding
+
     async def search(
         self,
         query: str,
@@ -209,6 +266,7 @@ class Project:
     ) -> list[SearchResult]:
         """Search within this project."""
         target_db = _target_sqlite_db_path(self._project_root)
+        query_embedding = await self._get_query_embedding(query)
         results = await query_codebase(
             query=query,
             target_sqlite_db_path=target_db,
@@ -217,6 +275,7 @@ class Project:
             offset=offset,
             languages=languages,
             paths=paths,
+            query_embedding=query_embedding,
         )
         return [
             SearchResult(
@@ -325,7 +384,8 @@ class Project:
         context.provide(EMBEDDER, embedder)
         context.provide(INDEXING_EMBED_PARAMS, dict(indexing_params))
         context.provide(QUERY_EMBED_PARAMS, dict(query_params))
-        context.provide(CHUNKER_REGISTRY, dict(chunker_registry) if chunker_registry else {})
+        chunker_registry_ref = dict(chunker_registry) if chunker_registry else {}
+        context.provide(CHUNKER_REGISTRY, chunker_registry_ref)
 
         env = coco.Environment(settings, context_provider=context)
         app = coco.App(
@@ -342,6 +402,13 @@ class Project:
         result._project_root = project_root
         result._index_lock = asyncio.Lock()
         result._initial_index_done = asyncio.Event()
+        result._chunker_registry_ref = chunker_registry_ref
+        result._chunkers_ready = chunker_registry is not None
+        result._normalized_query_params = tuple(
+            sorted((str(k), repr(v)) for k, v in query_params.items())
+        )
+        result._query_embedding_cache = OrderedDict()
+        result._query_embedding_tasks = {}
         if target_sqlite_db.exists():
             try:
                 if target_sqlite_db.stat().st_size > 0:

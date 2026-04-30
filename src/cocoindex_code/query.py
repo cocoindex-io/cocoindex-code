@@ -150,8 +150,17 @@ def _indexed_path_query(
             )
 
         filtered = [row for row in candidates if _path_matches(str(row[0]), normalized_paths)]
-        if len(filtered) >= target or candidate_k >= max_candidate_k or len(candidates) < candidate_k:
+        if len(filtered) >= target:
             return filtered[offset : offset + limit]
+        if candidate_k >= max_candidate_k or len(candidates) < candidate_k:
+            return _full_scan_query(
+                conn,
+                embedding_bytes,
+                limit,
+                offset,
+                languages,
+                normalized_paths,
+            )
         candidate_k = min(candidate_k * 2, max_candidate_k)
 
 
@@ -163,6 +172,7 @@ async def query_codebase(
     offset: int = 0,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
+    query_embedding: Any | None = None,
 ) -> list[QueryResult]:
     """
     Perform vector similarity search using vec0 KNN index.
@@ -183,8 +193,9 @@ async def query_codebase(
     embedder = env.get_context(EMBEDDER)
     query_params = env.get_context(QUERY_EMBED_PARAMS)
 
-    # Generate query embedding.
-    query_embedding = await embedder.embed(query, **query_params)
+    # Generate query embedding unless already provided by the caller.
+    if query_embedding is None:
+        query_embedding = await embedder.embed(query, **query_params)
 
     embedding_bytes = query_embedding.astype("float32").tobytes()
 

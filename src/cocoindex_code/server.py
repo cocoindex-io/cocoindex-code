@@ -58,6 +58,64 @@ class SearchResultModel(BaseModel):
     message: str | None = None
 
 
+def _refresh_project_index(project_root: str) -> None:
+    from . import client as _client
+
+    _client.index(project_root)
+
+
+def _keyword_search_rows(
+    db_path: Path,
+    query: str,
+    limit: int,
+    paths: list[str] | None,
+    languages: list[str] | None,
+) -> list[Any]:
+    from . import hybrid_search as _hyb
+
+    return _hyb.keyword_search(
+        db_path,
+        query,
+        limit=limit,
+        path_prefixes=paths,
+        language=languages[0] if languages else None,
+    )
+
+
+def _vector_search_response(
+    project_root: str,
+    query: str,
+    limit: int,
+    offset: int,
+    languages: list[str] | None,
+    paths: list[str] | None,
+) -> Any:
+    from . import client as _client
+
+    return _client.search(
+        project_root=project_root,
+        query=query,
+        languages=languages,
+        paths=paths,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _rows_to_code_chunks(rows: list[Any]) -> list[CodeChunkResult]:
+    return [
+        CodeChunkResult(
+            file_path=row.file_path,
+            language=row.language,
+            content=row.content,
+            start_line=row.start_line,
+            end_line=row.end_line,
+            score=row.score,
+        )
+        for row in rows
+    ]
+
+
 # === Daemon-backed MCP server factory ===
 
 
@@ -79,7 +137,7 @@ def _db_stat_key(db_path: Path) -> tuple[int, int] | None:
     return (stat.st_mtime_ns, stat.st_size)
 
 
-def _ensure_fts_index_cached(db_path: Path, *, force_rebuild: bool = False) -> None:
+def _ensure_fts_index_cached(db_path: Path, force_rebuild: bool = False) -> None:
     from . import hybrid_search as _hyb
 
     cache_key = str(db_path.resolve())
@@ -160,8 +218,6 @@ def create_mcp_server(project_root: str) -> FastMCP:
         ),
     ) -> SearchResultModel:
         """Query the codebase index via the daemon."""
-        from . import client as _client
-
         loop = asyncio.get_running_loop()
         try:
             mode_value = mode.lower()
@@ -171,56 +227,59 @@ def create_mcp_server(project_root: str) -> FastMCP:
                     message=f"invalid mode {mode!r}; expected vector, keyword, or hybrid",
                 )
             if refresh_index:
-                await loop.run_in_executor(None, lambda: _client.index(project_root))
-            keyword_search_call = None
+                await loop.run_in_executor(None, _refresh_project_index, project_root)
+
+            keyword_search_args: (
+                tuple[Path, str, int, list[str] | None, list[str] | None] | None
+            ) = None
             if mode_value in {"keyword", "hybrid"}:
-                from . import hybrid_search as _hyb
                 from . import settings as _settings
 
                 db_path = _settings.target_sqlite_db_path(Path(project_root))
                 await loop.run_in_executor(
-                    None, lambda: _ensure_fts_index_cached(db_path, force_rebuild=refresh_index)
+                    None,
+                    _ensure_fts_index_cached,
+                    db_path,
+                    refresh_index,
                 )
-                keyword_search_call = lambda: _hyb.keyword_search(
+                keyword_search_args = (
                     db_path,
                     query,
-                    limit=limit,
-                    path_prefixes=paths,
-                    language=languages[0] if languages else None,
+                    limit,
+                    paths,
+                    languages,
                 )
                 if mode_value == "keyword":
-                    keyword_rows = await loop.run_in_executor(None, keyword_search_call)
+                    keyword_rows = await loop.run_in_executor(
+                        None,
+                        _keyword_search_rows,
+                        *keyword_search_args,
+                    )
                     return SearchResultModel(
                         success=True,
-                        results=[
-                            CodeChunkResult(
-                                file_path=r.file_path,
-                                language=languages[0] if languages else "",
-                                content=r.content,
-                                start_line=r.start_line,
-                                end_line=r.end_line,
-                                score=r.score,
-                            )
-                            for r in keyword_rows
-                        ],
+                        results=_rows_to_code_chunks(keyword_rows),
                         total_returned=len(keyword_rows),
                         offset=0,
                     )
-            vector_search_call = lambda: _client.search(
-                project_root=project_root,
-                query=query,
-                languages=languages,
-                paths=paths,
-                limit=limit,
-                offset=offset,
-            )
             if mode_value == "hybrid":
                 from . import hybrid_search as _hyb
-                if keyword_search_call is None:
-                    return SearchResultModel(success=False, message="keyword search was not initialized")
+                if keyword_search_args is None:
+                    return SearchResultModel(
+                        success=False,
+                        message="keyword search was not initialized",
+                    )
                 resp, keyword_rows = await asyncio.gather(
-                    loop.run_in_executor(None, vector_search_call),
-                    loop.run_in_executor(None, keyword_search_call),
+                    loop.run_in_executor(
+                        None,
+                        _vector_search_response,
+                        project_root,
+                        query,
+                        limit,
+                        offset,
+                        languages,
+                        paths,
+                    ),
+                    loop.run_in_executor(None, _keyword_search_rows, *keyword_search_args),
                 )
                 vector_rows: list[VectorResultDict] = [
                     {
@@ -253,20 +312,19 @@ def create_mcp_server(project_root: str) -> FastMCP:
                     offset=0,
                     message=resp.message,
                 )
-            resp = await loop.run_in_executor(None, vector_search_call)
+            resp = await loop.run_in_executor(
+                None,
+                _vector_search_response,
+                project_root,
+                query,
+                limit,
+                offset,
+                languages,
+                paths,
+            )
             return SearchResultModel(
                 success=resp.success,
-                results=[
-                    CodeChunkResult(
-                        file_path=r.file_path,
-                        language=r.language,
-                        content=r.content,
-                        start_line=r.start_line,
-                        end_line=r.end_line,
-                        score=r.score,
-                    )
-                    for r in resp.results
-                ],
+                results=_rows_to_code_chunks(resp.results),
                 total_returned=resp.total_returned,
                 offset=resp.offset,
                 message=resp.message,
@@ -653,7 +711,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     watch_index_runs = 0
     watch_started_at: float | None = None
     watch_snapshot: dict[str, int] = {}
-    from ._matchers import SKIP_DIRS as watch_excluded_dirs
+    from ._matchers import SKIP_DIRS
 
     def _watch_file_snapshot(root: Path) -> dict[str, int]:
         snapshot: dict[str, int] = {}
@@ -661,7 +719,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
             dirnames[:] = [
                 dirname
                 for dirname in dirnames
-                if dirname not in watch_excluded_dirs and not dirname.startswith(".tmp")
+                if dirname not in SKIP_DIRS and not dirname.startswith(".tmp")
             ]
             for filename in filenames:
                 path = Path(current_root) / filename
