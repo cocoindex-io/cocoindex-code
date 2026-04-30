@@ -36,7 +36,7 @@ import sqlite3
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict, cast
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,9 @@ class HybridResultDict(TypedDict):
     sources: list[str]
 
 
+SourceKey = tuple[str, int]
+
+
 @dataclass(frozen=True)
 class KeywordHit:
     file_path: str
@@ -94,7 +97,7 @@ class _ContentSignature:
 def _ensure_connection(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
-    conn.create_aggregate("coco_content_signature", 6, _ContentSignature)
+    conn.create_aggregate("coco_content_signature", 6, cast(Any, _ContentSignature))
     try:
         import sqlite_vec
 
@@ -145,20 +148,76 @@ def _source_rows(cur: sqlite3.Cursor) -> list[sqlite3.Row]:
     return cur.execute(_ordered_source_sql(cur)).fetchall()
 
 
-def _source_stats(cur: sqlite3.Cursor) -> tuple[int, str]:
+def _vec_row_count(cur: sqlite3.Cursor) -> int:
+    row = cur.execute(f"SELECT COUNT(*) AS row_count FROM ({_source_select_sql(cur)})").fetchone()
+    return int(row["row_count"])
+
+
+def _cheap_source_signature(cur: sqlite3.Cursor) -> str:
     row = cur.execute(
         f"""
         SELECT COUNT(*) AS row_count,
-               COALESCE(
-                   coco_content_signature(
-                       file_path, content, language, start_line, end_line, vec_rowid
-                   ),
-                   '1'
-               ) AS signature
-        FROM ({_ordered_source_sql(cur)})
+               COALESCE(SUM(LENGTH(file_path)), 0) AS file_path_bytes,
+               COALESCE(SUM(LENGTH(content)), 0) AS content_bytes,
+               COALESCE(SUM(start_line), 0) AS start_sum,
+               COALESCE(SUM(end_line), 0) AS end_sum
+        FROM ({_source_select_sql(cur)})
         """
     ).fetchone()
-    return int(row["row_count"]), str(row["signature"])
+    return ":".join(
+        str(row[key])
+        for key in ("row_count", "file_path_bytes", "content_bytes", "start_sum", "end_sum")
+    )
+
+
+def _install_dirty_triggers(cur: sqlite3.Cursor) -> bool:
+    statements = [
+        """
+        CREATE TRIGGER IF NOT EXISTS code_chunks_fts_dirty_insert
+        AFTER INSERT ON code_chunks_vec
+        BEGIN
+            INSERT INTO code_chunks_fts_meta (key, value)
+            VALUES ('source_dirty', '1')
+            ON CONFLICT(key) DO UPDATE SET value = '1';
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS code_chunks_fts_dirty_update
+        AFTER UPDATE ON code_chunks_vec
+        BEGIN
+            INSERT INTO code_chunks_fts_meta (key, value)
+            VALUES ('source_dirty', '1')
+            ON CONFLICT(key) DO UPDATE SET value = '1';
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS code_chunks_fts_dirty_delete
+        AFTER DELETE ON code_chunks_vec
+        BEGIN
+            INSERT INTO code_chunks_fts_meta (key, value)
+            VALUES ('source_dirty', '1')
+            ON CONFLICT(key) DO UPDATE SET value = '1';
+        END
+        """,
+    ]
+    try:
+        for statement in statements:
+            cur.execute(statement)
+        return True
+    except sqlite3.OperationalError:
+        return False
+
+
+def _normalize_path_prefixes(
+    path_prefix: str | None = None,
+    path_prefixes: list[str] | None = None,
+) -> list[str]:
+    prefixes = list(path_prefixes or [])
+    if path_prefix:
+        prefixes.append(path_prefix)
+    normalized = [prefix.rstrip("/") for prefix in prefixes if prefix and prefix.strip()]
+    # Deduplicate while preserving order.
+    return list(dict.fromkeys(normalized))
 
 
 def ensure_fts_index(db_path: Path, *, force_rebuild: bool = False) -> dict[str, int | str | bool]:
@@ -207,16 +266,29 @@ def ensure_fts_index(db_path: Path, *, force_rebuild: bool = False) -> dict[str,
             """
         )
 
-        vec_rows, signature = _source_stats(cur)
+        trigger_supported = _install_dirty_triggers(cur)
+        cur.execute(
+            """
+            INSERT INTO code_chunks_fts_meta (key, value)
+            VALUES ('source_dirty', '1')
+            ON CONFLICT(key) DO NOTHING
+            """
+        )
+        vec_rows = _vec_row_count(cur)
         fts_rows = cur.execute("SELECT COUNT(*) FROM code_chunks_fts").fetchone()[0]
+        stored_dirty = cur.execute(
+            "SELECT value FROM code_chunks_fts_meta WHERE key = 'source_dirty'"
+        ).fetchone()
         stored_signature = cur.execute(
             "SELECT value FROM code_chunks_fts_meta WHERE key = 'source_signature'"
         ).fetchone()
+        signature = _cheap_source_signature(cur)
         if (
             not force_rebuild
             and vec_rows == fts_rows
-            and stored_signature is not None
-            and stored_signature["value"] == signature
+            and stored_dirty is not None
+            and stored_dirty["value"] == "0"
+            and (trigger_supported or (stored_signature is not None and stored_signature["value"] == signature))
         ):
             logger.debug(f"FTS index up-to-date: {vec_rows} rows")
             return {
@@ -226,7 +298,7 @@ def ensure_fts_index(db_path: Path, *, force_rebuild: bool = False) -> dict[str,
                 "signature": signature,
             }
 
-        logger.info("Rebuilding FTS index: rows/signature changed")
+        logger.info("Rebuilding FTS index: source database changed")
         source_rows = _source_rows(cur)
         cur.execute("DELETE FROM code_chunks_fts")
         cur.executemany(
@@ -254,6 +326,13 @@ def ensure_fts_index(db_path: Path, *, force_rebuild: bool = False) -> dict[str,
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             """,
             (signature,),
+        )
+        cur.execute(
+            """
+            INSERT INTO code_chunks_fts_meta (key, value)
+            VALUES ('source_dirty', '0')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
         )
         conn.commit()
         fts_rows = cur.execute("SELECT COUNT(*) FROM code_chunks_fts").fetchone()[0]
@@ -284,6 +363,7 @@ def keyword_search(
     *,
     limit: int = 10,
     path_prefix: str | None = None,
+    path_prefixes: list[str] | None = None,
     language: str | None = None,
 ) -> list[KeywordHit]:
     """Run a BM25 query against the FTS5 sidecar table."""
@@ -300,9 +380,11 @@ def keyword_search(
             "WHERE code_chunks_fts MATCH ?"
         )
         params: list[object] = [fts_query]
-        if path_prefix:
-            sql += " AND file_path LIKE ?"
-            params.append(f"{path_prefix}%")
+        prefixes = _normalize_path_prefixes(path_prefix=path_prefix, path_prefixes=path_prefixes)
+        if prefixes:
+            sql += " AND (" + " OR ".join("(file_path = ? OR file_path LIKE ?)" for _ in prefixes) + ")"
+            for prefix in prefixes:
+                params.extend([prefix, f"{prefix}/%"])
         if language:
             sql += " AND language = ?"
             params.append(language)
@@ -342,18 +424,25 @@ def reciprocal_rank_fusion(
     an added ``hybrid_score`` + ``sources`` field so callers can reason about
     which retriever contributed.
     """
-    scored: dict[tuple[str, int], dict] = {}
+    scored: dict[SourceKey, HybridResultDict] = {}
 
-    def _key(doc: dict | KeywordHit) -> tuple[str, int]:
+    def _key(doc: VectorResultDict | KeywordHit) -> SourceKey:
         if isinstance(doc, KeywordHit):
             return (doc.file_path, doc.start_line)
         return (doc["file_path"], doc["start_line"])
 
     for rank, doc in enumerate(vector_results, start=1):
         key = _key(doc)
-        entry = dict(doc)
-        entry["hybrid_score"] = 1 / (k + rank)
-        entry["sources"] = ["vector"]
+        entry: HybridResultDict = {
+            "file_path": doc["file_path"],
+            "language": doc.get("language"),
+            "content": doc["content"],
+            "start_line": doc["start_line"],
+            "end_line": doc["end_line"],
+            "score": doc["score"],
+            "hybrid_score": 1 / (k + rank),
+            "sources": ["vector"],
+        }
         scored[key] = entry
 
     for rank, kw in enumerate(keyword_results, start=1):
@@ -364,16 +453,16 @@ def reciprocal_rank_fusion(
             existing["hybrid_score"] += boost
             existing["sources"].append("keyword")
             continue
-        scored[key] = {
-            "file_path": kw.file_path,
-            "language": None,
-            "content": kw.content,
-            "start_line": kw.start_line,
-            "end_line": kw.end_line,
-            "score": kw.score,
-            "hybrid_score": boost,
-            "sources": ["keyword"],
-        }
+        scored[key] = HybridResultDict(
+            file_path=kw.file_path,
+            language=None,
+            content=kw.content,
+            start_line=kw.start_line,
+            end_line=kw.end_line,
+            score=kw.score,
+            hybrid_score=boost,
+            sources=["keyword"],
+        )
 
     fused = sorted(scored.values(), key=lambda d: d["hybrid_score"], reverse=True)
     return fused[:limit]

@@ -33,27 +33,39 @@ def reset_rg_binary_cache_for_tests() -> None:
     _RG_EXE = False
 
 
-def resolve_rg_paths(root: Path, path_prefix: str | None) -> tuple[Path, list[str]]:
+def resolve_rg_paths(
+    root: Path,
+    path_prefix: str | None = None,
+    path_prefixes: list[str] | None = None,
+) -> tuple[Path, list[str]]:
     """Return cwd (unified root) and path arguments for ``rg`` (never escapes ``root``)."""
     root = root.resolve()
-    if not path_prefix or not path_prefix.strip():
+    raw_prefixes = list(path_prefixes or [])
+    if path_prefix:
+        raw_prefixes.append(path_prefix)
+    normalized = [prefix for prefix in raw_prefixes if prefix and prefix.strip()]
+    if not normalized:
         return root, ["."]
 
-    rel = path_prefix.strip().replace("\\", "/").lstrip("/")
-    segments = [s for s in rel.split("/") if s != ""]
-    if any(s == ".." for s in segments):
-        raise ValueError("path_prefix must not contain '..'")
+    path_args: list[str] = []
+    for prefix in normalized:
+        rel = prefix.strip().replace("\\", "/").lstrip("/")
+        segments = [s for s in rel.split("/") if s != ""]
+        if any(s == ".." for s in segments):
+            raise ValueError("path_prefix must not contain '..'")
 
-    target = (root / rel).resolve()
-    try:
-        target.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("path_prefix escapes unified root") from exc
-    if not target.exists():
-        raise ValueError(f"path_prefix does not exist: {path_prefix}")
+        target = (root / rel).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("path_prefix escapes unified root") from exc
+        if not target.exists():
+            raise ValueError(f"path_prefix does not exist: {prefix}")
 
-    rel_arg = target.relative_to(root).as_posix()
-    return root, [rel_arg]
+        rel_arg = target.relative_to(root).as_posix()
+        if rel_arg not in path_args:
+            path_args.append(rel_arg)
+    return root, path_args or ["."]
 
 
 def _path_text(data: dict[str, Any]) -> str:
@@ -108,6 +120,7 @@ def run_bounded_rg(
     pattern: str,
     *,
     path_prefix: str | None = None,
+    path_prefixes: list[str] | None = None,
     glob: str | None = None,
     fixed_strings: bool = True,
     max_matches: int = 200,
@@ -119,7 +132,7 @@ def run_bounded_rg(
         "Running bounded ripgrep: pattern=%s..., root=%s, path_prefix=%s",
         pattern[:50],
         root,
-        path_prefix,
+        path_prefixes if path_prefixes else path_prefix,
     )
 
     if len(pattern) > MAX_PATTERN_LEN:
@@ -142,7 +155,7 @@ def run_bounded_rg(
             return {"success": False, "error": "glob must not contain '..'", "matches": []}
 
     try:
-        cwd, path_args = resolve_rg_paths(root, path_prefix)
+        cwd, path_args = resolve_rg_paths(root, path_prefix=path_prefix, path_prefixes=path_prefixes)
     except ValueError as exc:
         logger.error(f"Invalid rg paths: {exc}")
         return {"success": False, "error": str(exc), "matches": []}
@@ -227,10 +240,11 @@ def run_bounded_rg(
             timer.cancel()
         if proc.poll() is None:
             _terminate_process(proc)
-        try:
-            proc.stdout.close()
-        except Exception:
-            pass
+        if proc.stdout is not None:
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
     code = proc.returncode if proc.returncode is not None else -1
     if code not in (0, 1) and not matches:
         return {

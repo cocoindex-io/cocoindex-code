@@ -12,6 +12,7 @@ import click
 from click.core import ParameterSource
 
 from . import client as _client
+from ._matchers import SKIP_DIRS
 from ._version import __version__
 from .cli import add_to_gitignore
 from .client import print_warning
@@ -51,18 +52,6 @@ class ResultRow:
 
 
 _KNOWN_COMMANDS = {"search", "watch"}
-_WATCH_EXCLUDED_PARTS = {
-    ".git",
-    ".cocoindex_code",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-    "node_modules",
-}
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
@@ -349,7 +338,7 @@ def _grep_rows(
     payload = ripgrep_bounded_tool(
         str(project_root),
         query,
-        path_prefix=path_prefix,
+        path_prefixes=[path_prefix] if path_prefix else None,
         max_matches=limit,
     )
     if not payload.get("success", False):
@@ -430,7 +419,7 @@ def _render_results(rows: list[ResultRow], *, show_content: bool) -> None:
 def _watch_filter(change: Any, path: str) -> bool:
     del change
     parts = Path(path).parts
-    return not any(part in _WATCH_EXCLUDED_PARTS for part in parts)
+    return not any(part in SKIP_DIRS for part in parts)
 
 
 @click.group(help="cgrep: local semantic grep powered by CocoIndex Code.")

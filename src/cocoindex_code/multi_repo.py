@@ -42,7 +42,7 @@ def _dedupe(values: list[str]) -> list[str]:
 
 def _dedupe_mappings(values: list[dict[str, str]]) -> list[dict[str, str]]:
     """Remove duplicate dictionaries based on sorted key-value tuples."""
-    unique: dict[tuple[str, ...], dict[str, str]] = {}
+    unique: dict[tuple[tuple[str, str], ...], dict[str, str]] = {}
     for item in values:
         if not isinstance(item, dict):
             continue
@@ -435,8 +435,7 @@ class MultiRepoOrchestrator:
     def _environment(self) -> dict[str, str]:
         """Build environment with custom chunker paths from config."""
         env = os.environ.copy()
-
-        chunker_paths = []
+        chunker_paths: list[str] = []
 
         # Add config-specified chunker paths
         for chunker_path_str in self.config.chunker.paths:
@@ -446,11 +445,6 @@ class MultiRepoOrchestrator:
             path = path.resolve()
             if path.exists():
                 chunker_paths.append(str(path))
-
-        # Add default repo-root hint as fallback if not disabled
-        default_chunker = self.repo_root_hint / "scripts" / "cocoindex" / "chunkers"
-        if default_chunker.exists() and str(default_chunker) not in chunker_paths:
-            chunker_paths.append(str(default_chunker))
 
         if chunker_paths:
             existing = env.get("PYTHONPATH", "")
@@ -661,7 +655,7 @@ class MultiRepoOrchestrator:
                 )
 
         try:
-            from cocoindex_code import client
+            from . import client
 
             project_status = client.project_status(str(self.unified_root))
             ccc_status = {

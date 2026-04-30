@@ -42,6 +42,20 @@ from .shared import (
 )
 
 
+def _ensure_cocoindex_db_dir(cocoindex_db: Path) -> None:
+    """Repair broken LMDB dir symlinks before creating the environment.
+
+    Some repo-local wrappers keep ``.cocoindex_code/cocoindex.db`` symlinked
+    into a shared cache. If that shared target is pruned, Rust-side
+    ``core.Environment`` creation can fail with ``EEXIST`` while trying to
+    create the LMDB directory through the stale symlink. Normalize that state
+    here so project creation is tolerant of stale local cache wiring.
+    """
+    if cocoindex_db.is_symlink() and not cocoindex_db.exists():
+        cocoindex_db.unlink()
+    cocoindex_db.mkdir(parents=True, exist_ok=True)
+
+
 class Project:
     _env: coco.Environment
     _app: coco.App[[], None]
@@ -290,6 +304,7 @@ class Project:
 
         cocoindex_db = _cocoindex_db_path(project_root)
         target_sqlite_db = _target_sqlite_db_path(project_root)
+        _ensure_cocoindex_db_dir(cocoindex_db)
 
         settings = coco.Settings.from_env(cocoindex_db)
 
