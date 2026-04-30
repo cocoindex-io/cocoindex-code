@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import logging
 import os
 import signal
@@ -11,6 +10,8 @@ import sys
 import threading
 import time
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from contextlib import suppress
 from multiprocessing.connection import Connection, Listener
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ from ._daemon_paths import (
     daemon_socket_path,
 )
 from ._version import __version__
-from .chunking import ChunkerFn as _ChunkerFn
+from .chunking import resolve_chunker_registry
 from .embedder_params import resolve_embedder_params
 from .project import Project
 from .protocol import (
@@ -48,27 +49,51 @@ from .protocol import (
     Request,
     Response,
     SearchRequest,
+    SearchResult,
     SearchResponse,
     SearchStreamResponse,
+    SearchWaitingNotice,
     StopRequest,
     StopResponse,
     decode_request,
     encode_response,
 )
 from .settings import (
-    ChunkerMapping,
     UserSettings,
     format_path_for_display,
     get_host_path_mappings,
     global_settings_mtime_us,
     load_project_settings,
     load_user_settings,
+    resolve_db_dir,
     target_sqlite_db_path,
     user_settings_path,
 )
 from .shared import Embedder, check_embedding, create_embedder
+from . import hybrid_search
 
 logger = logging.getLogger(__name__)
+_DEGRADED_SEARCH_TIMEOUT_S = float(os.environ.get("COCOINDEX_CODE_DEGRADED_SEARCH_TIMEOUT_S", "15"))
+
+
+def _candidate_shared_chunker_roots(project_root: Path) -> list[Path]:
+    candidates: list[Path] = []
+
+    direct = project_root / "scripts" / "cocoindex"
+    if (direct / "chunkers").is_dir():
+        candidates.append(direct)
+
+    try:
+        children = list(project_root.iterdir()) if project_root.is_dir() else []
+    except OSError:
+        children = []
+
+    for child in children:
+        linked = child / "scripts" / "cocoindex"
+        if (linked / "chunkers").is_dir():
+            candidates.append(linked)
+
+    return candidates
 
 
 def _build_backward_compat_warning(
@@ -92,25 +117,6 @@ def _build_backward_compat_warning(
     )
 
 
-def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> dict[str, _ChunkerFn]:
-    """Resolve ``ChunkerMapping`` settings entries to a ``{suffix: fn}`` dict.
-
-    Each ``mapping.module`` must be a ``"module.path:callable"`` string importable
-    from the current environment.
-    """
-    registry: dict[str, _ChunkerFn] = {}
-    for cm in mappings:
-        module_path, _, attr = cm.module.partition(":")
-        if not attr:
-            raise ValueError(f"chunker module {cm.module!r} must use 'module.path:callable' format")
-        mod = importlib.import_module(module_path)
-        fn = getattr(mod, attr)
-        if not callable(fn):
-            raise ValueError(f"chunker {cm.module!r}: {attr!r} is not callable")
-        registry[f".{cm.ext}"] = fn
-    return registry
-
-
 # ---------------------------------------------------------------------------
 # Project Registry
 # ---------------------------------------------------------------------------
@@ -130,6 +136,11 @@ class ProjectRegistry:
     _embedder: Embedder | None
     indexing_params: dict[str, Any]
     query_params: dict[str, Any]
+    _chunker_roots_by_project: dict[str, tuple[Path, ...]]
+    _registry_lock: asyncio.Lock
+    _registry_changed: asyncio.Condition
+    _pending_projects: dict[Path, asyncio.Task[tuple[str, Project]]]
+    _project_refcounts: dict[str, int]
 
     def __init__(
         self,
@@ -141,32 +152,69 @@ class ProjectRegistry:
         self._embedder = embedder
         self.indexing_params = dict(indexing_params) if indexing_params else {}
         self.query_params = dict(query_params) if query_params else {}
+        self._chunker_roots_by_project = {}
+        self._registry_lock = asyncio.Lock()
+        self._registry_changed = asyncio.Condition(self._registry_lock)
+        self._pending_projects: dict[Path, asyncio.Task[tuple[str, Project]]] = {}
+        self._project_refcounts: dict[str, int] = {}
 
-    async def get_project(self, project_root: str) -> Project:
-        """Get or create a Project for the given root. Lazy initialization."""
-        if self._embedder is None:
-            raise RuntimeError(
-                "Daemon has no global settings loaded. Run `ccc init` to set up cocoindex-code."
-            )
-        if project_root not in self._projects:
-            root = Path(project_root)
-            project_settings = load_project_settings(root)
-            chunker_registry = _resolve_chunker_registry(project_settings.chunkers)
-            project = await Project.create(
-                root,
-                self._embedder,
-                indexing_params=self.indexing_params,
-                query_params=self.query_params,
-                chunker_registry=chunker_registry,
-            )
-            self._projects[project_root] = project
-        return self._projects[project_root]
+    def _shared_chunker_roots_for_project(self, project_root: str) -> tuple[Path, ...]:
+        cached = self._chunker_roots_by_project.get(project_root)
+        if cached is not None:
+            return cached
+        roots = tuple(_candidate_shared_chunker_roots(Path(project_root)))
+        self._chunker_roots_by_project[project_root] = roots
+        return roots
 
-    def remove_project(self, project_root: str) -> bool:
-        """Remove a project from the registry. Returns True if it was loaded."""
+    def _resolve_project_chunkers(self, project_root: str) -> dict[str, Any]:
+        root = Path(project_root)
+        project_settings = load_project_settings(root)
+        return resolve_chunker_registry(
+            project_settings.chunkers,
+            project_root=root,
+            shared_roots=self._shared_chunker_roots_for_project(project_root),
+        )
+
+    def _ensure_project_chunkers(self, project_root: str, project: Project) -> None:
+        if project.chunkers_ready:
+            return
+        started_at = time.monotonic()
+        chunker_registry = self._resolve_project_chunkers(project_root)
+        project.set_chunker_registry(chunker_registry)
+        logger.info(
+            "Prepared chunkers for %s in %.3fs",
+            project_root,
+            time.monotonic() - started_at,
+        )
+
+    @staticmethod
+    def _resolved_db_dir(project_root: str | Path) -> Path:
+        return resolve_db_dir(Path(project_root)).resolve()
+
+    async def _create_project(self, project_root: str) -> tuple[str, Project]:
+        started_at = time.monotonic()
+        root = Path(project_root)
+        assert self._embedder is not None
+        project = await Project.create(
+            root,
+            self._embedder,
+            indexing_params=self.indexing_params,
+            query_params=self.query_params,
+            chunker_registry=None,
+        )
+        logger.info(
+            "Loaded project %s in %.3fs (chunkers=%s)",
+            project_root,
+            time.monotonic() - started_at,
+            False,
+        )
+        return project_root, project
+
+    def _remove_project_locked(self, project_root: str) -> bool:
         import gc
 
         project = self._projects.pop(project_root, None)
+        self._chunker_roots_by_project.pop(project_root, None)
         if project is not None:
             project.close()
             del project
@@ -174,13 +222,130 @@ class ProjectRegistry:
             return True
         return False
 
-    def close_all(self) -> None:
+    def _loaded_root_for_db_dir_locked(self, requested_db_dir: Path) -> str | None:
+        for loaded_root in self._projects:
+            if self._resolved_db_dir(loaded_root) == requested_db_dir:
+                return loaded_root
+        return None
+
+    async def _wait_for_project_slot(self, project_root: str, requested_db_dir: Path) -> None:
+        async with self._registry_changed:
+            while True:
+                existing = self._projects.get(project_root)
+                if existing is not None:
+                    self._project_refcounts[project_root] = (
+                        self._project_refcounts.get(project_root, 0) + 1
+                    )
+                    return
+
+                loaded_root = self._loaded_root_for_db_dir_locked(requested_db_dir)
+                if loaded_root is None:
+                    return
+                if self._project_refcounts.get(loaded_root, 0) == 0:
+                    self._remove_project_locked(loaded_root)
+                    self._registry_changed.notify_all()
+                    return
+                await self._registry_changed.wait()
+
+    async def get_project(self, project_root: str, *, require_chunkers: bool = False) -> Project:
+        """Get or create a Project for the given root. Lazy initialization."""
+        if self._embedder is None:
+            raise RuntimeError(
+                "Daemon has no global settings loaded. Run `ccc init` to set up cocoindex-code."
+            )
+
+        requested_db_dir = self._resolved_db_dir(project_root)
+
+        while True:
+            await self._wait_for_project_slot(project_root, requested_db_dir)
+
+            async with self._registry_changed:
+                existing = self._projects.get(project_root)
+                if existing is not None:
+                    if require_chunkers:
+                        self._ensure_project_chunkers(project_root, existing)
+                    return existing
+
+                pending = self._pending_projects.get(requested_db_dir)
+                if pending is None:
+                    pending = asyncio.create_task(self._create_project(project_root))
+                    self._pending_projects[requested_db_dir] = pending
+                    self._registry_changed.notify_all()
+
+            try:
+                created_root, created_project = await asyncio.shield(pending)
+            except Exception:
+                async with self._registry_changed:
+                    if self._pending_projects.get(requested_db_dir) is pending:
+                        self._pending_projects.pop(requested_db_dir, None)
+                        self._registry_changed.notify_all()
+                raise
+
+            async with self._registry_changed:
+                if self._pending_projects.get(requested_db_dir) is pending:
+                    self._pending_projects.pop(requested_db_dir, None)
+                    self._projects.setdefault(created_root, created_project)
+                    self._project_refcounts.setdefault(created_root, 0)
+                    self._registry_changed.notify_all()
+
+                existing = self._projects.get(project_root)
+                if existing is not None:
+                    if require_chunkers:
+                        self._ensure_project_chunkers(project_root, existing)
+                    continue
+
+    async def release_project(self, project_root: str) -> None:
+        async with self._registry_changed:
+            count = self._project_refcounts.get(project_root, 0)
+            if count <= 1:
+                self._project_refcounts[project_root] = 0
+            else:
+                self._project_refcounts[project_root] = count - 1
+            self._registry_changed.notify_all()
+
+    @asynccontextmanager
+    async def lease_project(
+        self,
+        project_root: str,
+        *,
+        require_chunkers: bool = False,
+    ) -> AsyncIterator[Project]:
+        project = await self.get_project(project_root, require_chunkers=require_chunkers)
+        try:
+            yield project
+        finally:
+            await self.release_project(project_root)
+
+    async def remove_project(self, project_root: str) -> bool:
+        """Remove a project from the registry. Returns True if it was loaded."""
+        requested_db_dir = self._resolved_db_dir(project_root)
+        async with self._registry_changed:
+            while True:
+                pending = self._pending_projects.get(requested_db_dir)
+                if pending is None and self._project_refcounts.get(project_root, 0) == 0:
+                    break
+                await self._registry_changed.wait()
+            removed = self._remove_project_locked(project_root)
+            self._project_refcounts.pop(project_root, None)
+            self._registry_changed.notify_all()
+            return removed
+
+    async def close_all(self) -> None:
         """Close all loaded projects and release resources."""
         import gc
+
+        pending = list(self._pending_projects.values())
+        self._pending_projects.clear()
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
         for project in self._projects.values():
             project.close()
         self._projects.clear()
+        self._chunker_roots_by_project.clear()
+        self._project_refcounts.clear()
         gc.collect()
 
     def list_projects(self) -> list[DaemonProjectInfo]:
@@ -214,6 +379,7 @@ async def handle_connection(
     ``Request``.  Sends the response(s) and closes the connection.
     """
     loop = asyncio.get_event_loop()
+    req_name = "handshake"
     try:
         # 1. Handshake
         data: bytes = await loop.run_in_executor(None, conn.recv_bytes)
@@ -242,21 +408,39 @@ async def handle_connection(
         # 2. Single request
         data = await loop.run_in_executor(None, conn.recv_bytes)
         req = decode_request(data)
+        req_name = type(req).__name__
+        logger.info("Handling request: %s", req_name)
 
         result = await _dispatch(req, registry, start_time, on_shutdown, settings_env_names)
         if isinstance(result, AsyncIterator):
+            stream_error: Exception | None = None
             try:
                 async for resp in result:
                     conn.send_bytes(encode_response(resp))
+            except BrokenPipeError:
+                logger.warning("Client disconnected during streaming response for %s", req_name)
             except Exception as exc:
-                logger.exception("Error during streaming response")
-                conn.send_bytes(encode_response(ErrorResponse(message=str(exc))))
+                stream_error = exc
+
+            if stream_error is not None:
+                logger.error(
+                    "Error during streaming response for %s",
+                    req_name,
+                    exc_info=stream_error,
+                )
+                try:
+                    conn.send_bytes(encode_response(ErrorResponse(message=str(stream_error))))
+                except OSError:
+                    logger.warning(
+                        "Could not send error response for %s; client disconnected",
+                        req_name,
+                    )
         else:
             conn.send_bytes(encode_response(result))
     except (EOFError, OSError, asyncio.CancelledError):
-        pass
+        logger.warning("Connection ended while handling %s", req_name)
     except Exception:
-        logger.exception("Error handling connection")
+        logger.exception("Error handling connection for %s", req_name)
     finally:
         try:
             conn.close()
@@ -270,19 +454,84 @@ async def _search_with_wait(
     """Stream search response, waiting for ongoing indexing first."""
     yield IndexWaitingNotice()
     await project.wait_for_indexing_done()
+
+    async for resp in _stream_search_results(project, req):
+        yield resp
+
+
+async def _stream_search_results(
+    project: Project,
+    req: SearchRequest,
+) -> AsyncIterator[SearchStreamResponse]:
+    """Stream search results with periodic heartbeat notices."""
+    started_at = time.monotonic()
     try:
-        results = await project.search(
-            query=req.query,
-            languages=req.languages,
-            paths=req.paths,
-            limit=req.limit,
-            offset=req.offset,
+        search_task = asyncio.create_task(
+            project.search(
+                query=req.query,
+                languages=req.languages,
+                paths=req.paths,
+                limit=req.limit,
+                offset=req.offset,
+            )
+        )
+        while not search_task.done():
+            done, _ = await asyncio.wait({search_task}, timeout=1.0)
+            if done:
+                break
+            elapsed = time.monotonic() - started_at
+            if elapsed >= _DEGRADED_SEARCH_TIMEOUT_S and not search_task.done():
+                search_task.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await search_task
+                keyword_rows = hybrid_search.keyword_search(
+                    db_path=target_sqlite_db_path(project._project_root),
+                    query=req.query,
+                    limit=req.limit,
+                    path_prefixes=req.paths,
+                    language=req.languages[0] if req.languages and len(req.languages) == 1 else None,
+                )
+                yield SearchResponse(
+                    success=True,
+                    request_id=req.request_id,
+                    results=[
+                        SearchResult(
+                            file_path=row.file_path,
+                            language=row.language or "text",
+                            content=row.content,
+                            start_line=row.start_line,
+                            end_line=row.end_line,
+                            score=row.score,
+                        )
+                        for row in keyword_rows
+                    ],
+                    total_returned=len(keyword_rows),
+                    offset=req.offset,
+                    freshness="current" if project.has_queryable_index() else "warming",
+                    degraded_mode="keyword_timeout_fallback",
+                )
+                return
+            yield SearchWaitingNotice(
+                request_id=req.request_id,
+                phase="search",
+                elapsed_seconds=elapsed,
+                message="Search still running",
+            )
+        results = await search_task
+        logger.info(
+            "Search completed for %s in %.3fs with %d results",
+            project._project_root,
+            time.monotonic() - started_at,
+            len(results),
         )
         yield SearchResponse(
             success=True,
+            request_id=req.request_id,
             results=results,
             total_returned=len(results),
             offset=req.offset,
+            freshness="current" if project.has_queryable_index() else "warming",
+            degraded_mode=None if project.chunkers_ready else "query_only",
         )
     except Exception as e:
         yield ErrorResponse(message=str(e))
@@ -368,7 +617,7 @@ async def _check_file_walk(project_root_str: str) -> DoctorCheckResult:
 
     from cocoindex.resources.file import PatternFilePathMatcher
 
-    from .indexer import GitignoreAwareMatcher
+    from ._matchers import GitignoreAwareMatcher
     from .settings import load_gitignore_spec, load_project_settings
 
     project_root = Path(project_root_str)
@@ -474,34 +723,37 @@ async def _dispatch(
     """
     try:
         if isinstance(req, IndexRequest):
-            project = await registry.get_project(req.project_root)
-            return project.stream_index()
+            async def _stream_index() -> AsyncIterator[IndexStreamResponse]:
+                async with registry.lease_project(
+                    req.project_root,
+                    require_chunkers=True,
+                ) as project:
+                    async for resp in project.stream_index():
+                        yield resp
+
+            return _stream_index()
 
         if isinstance(req, SearchRequest):
-            project = await registry.get_project(req.project_root)
-            await project.ensure_indexing_started()
 
-            if project.should_wait_for_indexing:
-                return _search_with_wait(project, req)
+            async def _run_search() -> AsyncIterator[SearchStreamResponse]:
+                async with registry.lease_project(req.project_root) as project:
+                    if not project.has_queryable_index():
+                        registry._ensure_project_chunkers(req.project_root, project)
+                        await project.ensure_indexing_started()
 
-            results = await project.search(
-                query=req.query,
-                languages=req.languages,
-                paths=req.paths,
-                limit=req.limit,
-                offset=req.offset,
-            )
-            return SearchResponse(
-                success=True,
-                results=results,
-                total_returned=len(results),
-                offset=req.offset,
-            )
+                    if project.should_wait_for_indexing and not project.has_queryable_index():
+                        async for resp in _search_with_wait(project, req):
+                            yield resp
+                        return
+
+                    async for resp in _stream_search_results(project, req):
+                        yield resp
+
+            return _run_search()
 
         if isinstance(req, ProjectStatusRequest):
-            project = await registry.get_project(req.project_root)
-            await project.ensure_indexing_started()
-            return project.get_status()
+            async with registry.lease_project(req.project_root) as project:
+                return project.get_status()
 
         if isinstance(req, DaemonStatusRequest):
             return DaemonStatusResponse(
@@ -511,7 +763,7 @@ async def _dispatch(
             )
 
         if isinstance(req, RemoveProjectRequest):
-            registry.remove_project(req.project_root)
+            await registry.remove_project(req.project_root)
             return RemoveProjectResponse(ok=True)
 
         if isinstance(req, StopRequest):
@@ -680,7 +932,7 @@ def run_daemon() -> None:
             loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
 
         # 3. Release project resources.
-        registry.close_all()
+        loop.run_until_complete(registry.close_all())
         loop.close()
 
         # 4. Remove socket and PID file.

@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import zlib
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict, cast
@@ -42,6 +43,10 @@ logger = logging.getLogger(__name__)
 
 
 _RRF_K = 60  # Cormack et al. standard constant.
+_ENSURE_FTS_CACHE_MAX = 128
+_ENSURE_FTS_CACHE: OrderedDict[
+    Path, tuple[tuple[tuple[int, int], ...], dict[str, int | str | bool]]
+] = OrderedDict()
 
 
 class VectorResultDict(TypedDict, total=False):
@@ -75,6 +80,7 @@ SourceKey = tuple[str, int]
 class KeywordHit:
     file_path: str
     content: str
+    language: str | None
     start_line: int
     end_line: int
     score: float  # BM25 score — higher is better
@@ -142,10 +148,6 @@ def _ordered_source_sql(cur: sqlite3.Cursor) -> str:
         FROM ({_source_select_sql(cur)})
         ORDER BY file_path, start_line, end_line, vec_rowid
     """
-
-
-def _source_rows(cur: sqlite3.Cursor) -> list[sqlite3.Row]:
-    return cur.execute(_ordered_source_sql(cur)).fetchall()
 
 
 def _vec_row_count(cur: sqlite3.Cursor) -> int:
@@ -220,6 +222,36 @@ def _normalize_path_prefixes(
     return list(dict.fromkeys(normalized))
 
 
+def _record_cache_result(
+    db_path: Path,
+    db_sig: tuple[tuple[int, int], ...] | None,
+    result: dict[str, int | str | bool],
+) -> None:
+    if db_sig is None:
+        return
+    _ENSURE_FTS_CACHE[db_path] = (db_sig, dict(result))
+    _ENSURE_FTS_CACHE.move_to_end(db_path)
+    while len(_ENSURE_FTS_CACHE) > _ENSURE_FTS_CACHE_MAX:
+        _ENSURE_FTS_CACHE.popitem(last=False)
+
+
+def _db_signature(db_path: Path) -> tuple[tuple[int, int], ...] | None:
+    candidates = [db_path, db_path.with_name(f"{db_path.name}-wal"), db_path.with_name(f"{db_path.name}-shm")]
+    signature: list[tuple[int, int]] = []
+    found_any = False
+    for path in candidates:
+        try:
+            stat = path.stat()
+        except OSError:
+            signature.append((0, 0))
+            continue
+        found_any = True
+        signature.append((stat.st_mtime_ns, stat.st_size))
+    if not found_any:
+        return None
+    return tuple(signature)
+
+
 def ensure_fts_index(db_path: Path, *, force_rebuild: bool = False) -> dict[str, int | str | bool]:
     """Create or refresh an FTS5 mirror of ``code_chunks_vec``.
 
@@ -228,6 +260,16 @@ def ensure_fts_index(db_path: Path, *, force_rebuild: bool = False) -> dict[str,
     signature changes, so same-row-count edits still refresh keyword search.
     """
     logger.debug(f"Ensuring FTS5 index in {db_path}")
+    resolved_db_path = db_path.resolve()
+    if not force_rebuild:
+        db_sig = _db_signature(resolved_db_path)
+        cached = _ENSURE_FTS_CACHE.get(resolved_db_path)
+        if db_sig is not None and cached is not None and cached[0] == db_sig:
+            _ENSURE_FTS_CACHE.move_to_end(resolved_db_path)
+            result = dict(cached[1])
+            result["rebuilt"] = False
+            return result
+
     conn = _ensure_connection(db_path)
     try:
         cur = conn.cursor()
@@ -282,43 +324,40 @@ def ensure_fts_index(db_path: Path, *, force_rebuild: bool = False) -> dict[str,
         stored_signature = cur.execute(
             "SELECT value FROM code_chunks_fts_meta WHERE key = 'source_signature'"
         ).fetchone()
-        signature = _cheap_source_signature(cur)
+        signature: str | None = None
+        if not trigger_supported or force_rebuild or stored_dirty is None or stored_dirty["value"] != "0":
+            signature = _cheap_source_signature(cur)
         if (
             not force_rebuild
             and vec_rows == fts_rows
             and stored_dirty is not None
             and stored_dirty["value"] == "0"
-            and (trigger_supported or (stored_signature is not None and stored_signature["value"] == signature))
+            and (
+                trigger_supported
+                or (stored_signature is not None and stored_signature["value"] == signature)
+            )
         ):
             logger.debug(f"FTS index up-to-date: {vec_rows} rows")
-            return {
+            result = {
                 "vec_rows": vec_rows,
                 "fts_rows": fts_rows,
                 "rebuilt": False,
-                "signature": signature,
+                "signature": signature or stored_signature["value"],
             }
+            _record_cache_result(resolved_db_path, _db_signature(resolved_db_path), result)
+            return result
 
         logger.info("Rebuilding FTS index: source database changed")
-        source_rows = _source_rows(cur)
         cur.execute("DELETE FROM code_chunks_fts")
-        cur.executemany(
+        cur.execute(
             """
             INSERT INTO code_chunks_fts
                 (file_path, content, language, start_line, end_line, vec_rowid)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    row["file_path"],
-                    row["content"],
-                    row["language"],
-                    row["start_line"],
-                    row["end_line"],
-                    row["vec_rowid"],
-                )
-                for row in source_rows
-            ],
+            """
+            + _ordered_source_sql(cur)
         )
+        if signature is None:
+            signature = _cheap_source_signature(cur)
         cur.execute(
             """
             INSERT INTO code_chunks_fts_meta (key, value)
@@ -336,12 +375,14 @@ def ensure_fts_index(db_path: Path, *, force_rebuild: bool = False) -> dict[str,
         )
         conn.commit()
         fts_rows = cur.execute("SELECT COUNT(*) FROM code_chunks_fts").fetchone()[0]
-        return {
+        result = {
             "vec_rows": vec_rows,
             "fts_rows": fts_rows,
             "rebuilt": True,
             "signature": signature,
         }
+        _record_cache_result(resolved_db_path, _db_signature(resolved_db_path), result)
+        return result
     finally:
         conn.close()
 
@@ -397,6 +438,7 @@ def keyword_search(
             KeywordHit(
                 file_path=row["file_path"],
                 content=row["content"],
+                language=row["language"],
                 start_line=row["start_line"],
                 end_line=row["end_line"],
                 score=-float(row["score"]),
