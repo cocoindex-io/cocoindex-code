@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import functools
+import json as _json
 import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import Protocol, TextIO, TypeVar
 
 import typer as _typer
 
@@ -96,6 +97,20 @@ def require_project_root() -> Path:
 _F = TypeVar("_F", bound=Callable[..., object])
 
 
+class _SearchCallable(Protocol):
+    def __call__(
+        self,
+        project_root: str,
+        query: str,
+        languages: list[str] | None = None,
+        paths: list[str] | None = None,
+        repo_keys: list[str] | None = None,
+        limit: int = 5,
+        offset: int = 0,
+        on_waiting: Callable[[], None] | None = None,
+    ) -> SearchResponse: ...
+
+
 def _catch_daemon_start_error(func: _F) -> _F:
     """Decorator that catches ``DaemonStartError`` and exits with a clean message.
 
@@ -173,6 +188,176 @@ def print_search_results(response: SearchResponse) -> None:
         _typer.echo(r.content)
 
 
+def search_response_json_payload(response: SearchResponse) -> dict[str, object]:
+    """Build the machine-readable search response payload."""
+    return {
+        "success": response.success,
+        "results": [
+            {
+                "file_path": r.file_path,
+                "repo_key": r.repo_key,
+                "language": r.language,
+                "content": r.content,
+                "start_line": r.start_line,
+                "end_line": r.end_line,
+                "score": r.score,
+            }
+            for r in response.results
+        ],
+        "total_returned": response.total_returned,
+        "offset": response.offset,
+        "message": response.message,
+    }
+
+
+def print_search_results_json(response: SearchResponse) -> None:
+    """Print search results as machine-readable JSON."""
+    payload = search_response_json_payload(response)
+    _typer.echo(_json.dumps(payload, indent=2))
+
+
+def _jsonrpc_id(value: object) -> str | int | None:
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    raise ValueError("JSON-RPC id must be a string, integer, or null")
+
+
+def _jsonrpc_success(request_id: str | int | None, result: object) -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": result,
+    }
+
+
+def _jsonrpc_error(
+    request_id: str | int | None,
+    code: int,
+    message: str,
+) -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": code,
+            "message": message,
+        },
+    }
+
+
+def _required_str(params: dict[str, object], name: str) -> str:
+    value = params.get(name)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"params.{name} must be a non-empty string")
+    return value
+
+
+def _optional_str_list(params: dict[str, object], name: str) -> list[str] | None:
+    value = params.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError(f"params.{name} must be a list of strings")
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"params.{name} must be a list of strings")
+        result.append(item)
+    return result
+
+
+def _positive_int_param(params: dict[str, object], name: str, default: int) -> int:
+    value = params.get(name)
+    if value is None:
+        return default
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"params.{name} must be a positive integer")
+    return value
+
+
+def _non_negative_int_param(params: dict[str, object], name: str, default: int) -> int:
+    value = params.get(name)
+    if value is None:
+        return default
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"params.{name} must be a non-negative integer")
+    return value
+
+
+def handle_bridge_jsonrpc_request(
+    request: object,
+    search_func: _SearchCallable,
+) -> tuple[dict[str, object], bool]:
+    """Handle one JSON-RPC bridge request."""
+    request_id: str | int | None = None
+    try:
+        if not isinstance(request, dict):
+            return _jsonrpc_error(None, -32600, "Invalid Request"), False
+        raw_id = request.get("id")
+        request_id = _jsonrpc_id(raw_id)
+        if request.get("jsonrpc") != "2.0":
+            return _jsonrpc_error(request_id, -32600, "Invalid Request"), False
+        method = request.get("method")
+        if not isinstance(method, str):
+            return _jsonrpc_error(request_id, -32600, "Invalid Request"), False
+        params_obj = request.get("params", {})
+        if not isinstance(params_obj, dict):
+            return _jsonrpc_error(request_id, -32602, "Invalid params"), False
+        params = {str(k): v for k, v in params_obj.items()}
+
+        if method == "ping":
+            return _jsonrpc_success(request_id, {"ok": True}), False
+        if method == "shutdown":
+            return _jsonrpc_success(request_id, {"ok": True}), True
+        if method != "search":
+            return _jsonrpc_error(request_id, -32601, f"Method not found: {method}"), False
+
+        response = search_func(
+            project_root=_required_str(params, "project_root"),
+            query=_required_str(params, "query"),
+            languages=_optional_str_list(params, "languages"),
+            paths=_optional_str_list(params, "paths"),
+            repo_keys=_optional_str_list(params, "repo_keys"),
+            limit=_positive_int_param(params, "limit", 10),
+            offset=_non_negative_int_param(params, "offset", 0),
+        )
+        return _jsonrpc_success(request_id, search_response_json_payload(response)), False
+    except ValueError as e:
+        return _jsonrpc_error(request_id, -32602, str(e)), False
+    except RuntimeError as e:
+        return _jsonrpc_error(request_id, -32000, str(e)), False
+
+
+def run_jsonrpc_bridge(
+    input_stream: TextIO = sys.stdin,
+    output_stream: TextIO = sys.stdout,
+    search_func: _SearchCallable | None = None,
+) -> None:
+    """Run the JSON-RPC bridge over newline-delimited stdin/stdout."""
+    if search_func is None:
+        from . import client as _client
+
+        search_func = _client.search
+
+    for line in input_stream:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            request = _json.loads(stripped)
+        except _json.JSONDecodeError:
+            response = _jsonrpc_error(None, -32700, "Parse error")
+            should_exit = False
+        else:
+            response, should_exit = handle_bridge_jsonrpc_request(request, search_func)
+        output_stream.write(_json.dumps(response, separators=(",", ":")) + "\n")
+        output_stream.flush()
+        if should_exit:
+            break
+
+
 def _run_index_with_progress(project_root: str) -> None:
     """Run indexing with streaming progress display. Exits on failure."""
     from rich.console import Console as _Console
@@ -223,6 +408,7 @@ def _search_with_wait_spinner(
     query: str,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
+    repo_keys: list[str] | None = None,
     limit: int = 10,
     offset: int = 0,
 ) -> SearchResponse:
@@ -248,6 +434,7 @@ def _search_with_wait_spinner(
             query=query,
             languages=languages,
             paths=paths,
+            repo_keys=repo_keys,
             limit=limit,
             offset=offset,
             on_waiting=_on_waiting,
@@ -540,9 +727,11 @@ def search(
     query: list[str] = _typer.Argument(..., help="Search query"),
     lang: list[str] = _typer.Option([], "--lang", help="Filter by language"),
     path: str | None = _typer.Option(None, "--path", help="Filter by file path glob"),
+    repo_key: list[str] = _typer.Option([], "--repo-key", help="Filter by indexed repo key"),
     offset: int = _typer.Option(0, "--offset", help="Number of results to skip"),
     limit: int = _typer.Option(10, "--limit", help="Maximum results to return"),
     refresh: bool = _typer.Option(False, "--refresh", help="Refresh index before searching"),
+    json_output: bool = _typer.Option(False, "--json", help="Print results as JSON"),
 ) -> None:
     """Semantic search across the codebase."""
     project_root = str(require_project_root())
@@ -565,10 +754,29 @@ def search(
         query=query_str,
         languages=lang or None,
         paths=paths,
+        repo_keys=repo_key or None,
         limit=limit,
         offset=offset,
     )
-    print_search_results(resp)
+    if json_output:
+        print_search_results_json(resp)
+    else:
+        print_search_results(resp)
+
+
+@app.command()
+def bridge(
+    jsonrpc: bool = _typer.Option(
+        False,
+        "--jsonrpc",
+        help="Run a JSON-RPC bridge over stdin/stdout",
+    ),
+) -> None:
+    """Run a long-lived bridge for external tools."""
+    if not jsonrpc:
+        _typer.echo("Error: pass --jsonrpc to select the bridge protocol.", err=True)
+        raise _typer.Exit(code=1)
+    run_jsonrpc_bridge()
 
 
 @app.command()

@@ -179,6 +179,7 @@ class Project:
         query: str,
         languages: list[str] | None = None,
         paths: list[str] | None = None,
+        repo_keys: list[str] | None = None,
         limit: int = 5,
         offset: int = 0,
     ) -> list[SearchResult]:
@@ -192,10 +193,12 @@ class Project:
             offset=offset,
             languages=languages,
             paths=paths,
+            repo_keys=repo_keys,
         )
         return [
             SearchResult(
                 file_path=r.file_path,
+                repo_key=r.repo_key,
                 language=r.language,
                 content=r.content,
                 start_line=r.start_line,

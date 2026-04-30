@@ -50,6 +50,7 @@ def test_encode_decode_search_request_with_defaults() -> None:
     decoded = decode_request(data)
     assert isinstance(decoded, SearchRequest)
     assert decoded.languages is None
+    assert decoded.repo_keys is None
     assert decoded.limit == 5
     assert decoded.offset == 0
 
@@ -60,6 +61,7 @@ def test_encode_decode_search_request_with_all_fields() -> None:
         query="hello world",
         languages=["python", "rust"],
         paths=["src/*"],
+        repo_keys=["repo-a"],
         limit=20,
         offset=5,
     )
@@ -70,6 +72,7 @@ def test_encode_decode_search_request_with_all_fields() -> None:
     assert decoded.query == "hello world"
     assert decoded.languages == ["python", "rust"]
     assert decoded.paths == ["src/*"]
+    assert decoded.repo_keys == ["repo-a"]
     assert decoded.limit == 20
     assert decoded.offset == 5
 
