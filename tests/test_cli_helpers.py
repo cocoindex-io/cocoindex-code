@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from io import StringIO
 from pathlib import Path
 
@@ -17,6 +18,12 @@ from cocoindex_code.cli import (
     resolve_default_path,
 )
 from cocoindex_code.protocol import SearchResponse, SearchResult
+
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 def test_require_project_root_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,8 +101,9 @@ def test_search_help_includes_json_option() -> None:
     result = runner.invoke(cli.app, ["search", "--help"], catch_exceptions=False)
 
     assert result.exit_code == 0
-    assert "--json" in result.output
-    assert "--repo-key" in result.output
+    output = _strip_ansi(result.output)
+    assert "--json" in output
+    assert "--repo-key" in output
 
 
 def test_bridge_help_includes_jsonrpc_option() -> None:
@@ -104,7 +112,7 @@ def test_bridge_help_includes_jsonrpc_option() -> None:
     result = runner.invoke(cli.app, ["bridge", "--help"], catch_exceptions=False)
 
     assert result.exit_code == 0
-    assert "--jsonrpc" in result.output
+    assert "--jsonrpc" in _strip_ansi(result.output)
 
 
 def test_print_search_results_json_outputs_machine_readable_payload(
