@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from multiprocessing.connection import Connection, Listener
 from pathlib import Path
 from typing import Any
@@ -62,6 +63,7 @@ from .settings import (
     global_settings_mtime_us,
     load_project_settings,
     load_user_settings,
+    resolve_db_dir,
     target_sqlite_db_path,
     user_settings_path,
 )
@@ -130,8 +132,11 @@ class ProjectRegistry:
     _embedder: Embedder | None
     indexing_params: dict[str, Any]
     query_params: dict[str, Any]
-    _project_locks: dict[str, asyncio.Lock]
     _chunker_roots_by_project: dict[str, tuple[Path, ...]]
+    _registry_lock: asyncio.Lock
+    _registry_changed: asyncio.Condition
+    _pending_projects: dict[Path, asyncio.Task[tuple[str, Project]]]
+    _project_refcounts: dict[str, int]
 
     def __init__(
         self,
@@ -143,8 +148,11 @@ class ProjectRegistry:
         self._embedder = embedder
         self.indexing_params = dict(indexing_params) if indexing_params else {}
         self.query_params = dict(query_params) if query_params else {}
-        self._project_locks = {}
         self._chunker_roots_by_project = {}
+        self._registry_lock = asyncio.Lock()
+        self._registry_changed = asyncio.Condition(self._registry_lock)
+        self._pending_projects: dict[Path, asyncio.Task[tuple[str, Project]]] = {}
+        self._project_refcounts: dict[str, int] = {}
 
     def _shared_chunker_roots_for_project(self, project_root: str) -> tuple[Path, ...]:
         cached = self._chunker_roots_by_project.get(project_root)
@@ -175,47 +183,30 @@ class ProjectRegistry:
             time.monotonic() - started_at,
         )
 
-    async def get_project(self, project_root: str, *, require_chunkers: bool = False) -> Project:
-        """Get or create a Project for the given root. Lazy initialization."""
-        if self._embedder is None:
-            raise RuntimeError(
-                "Daemon has no global settings loaded. Run `ccc init` to set up cocoindex-code."
-            )
-        if project_root in self._projects:
-            project = self._projects[project_root]
-            if require_chunkers:
-                self._ensure_project_chunkers(project_root, project)
-            return project
+    @staticmethod
+    def _resolved_db_dir(project_root: str | Path) -> Path:
+        return resolve_db_dir(Path(project_root)).resolve()
 
-        lock = self._project_locks.setdefault(project_root, asyncio.Lock())
-        async with lock:
-            if project_root in self._projects:
-                project = self._projects[project_root]
-                if require_chunkers:
-                    self._ensure_project_chunkers(project_root, project)
-                return project
-            root = Path(project_root)
-            started_at = time.monotonic()
-            project = await Project.create(
-                root,
-                self._embedder,
-                indexing_params=self.indexing_params,
-                query_params=self.query_params,
-                chunker_registry=None,
-            )
-            if require_chunkers:
-                self._ensure_project_chunkers(project_root, project)
-            self._projects[project_root] = project
-            logger.info(
-                "Loaded project %s in %.3fs (chunkers=%s)",
-                project_root,
-                time.monotonic() - started_at,
-                require_chunkers,
-            )
-        return self._projects[project_root]
+    async def _create_project(self, project_root: str) -> tuple[str, Project]:
+        started_at = time.monotonic()
+        root = Path(project_root)
+        assert self._embedder is not None
+        project = await Project.create(
+            root,
+            self._embedder,
+            indexing_params=self.indexing_params,
+            query_params=self.query_params,
+            chunker_registry=None,
+        )
+        logger.info(
+            "Loaded project %s in %.3fs (chunkers=%s)",
+            project_root,
+            time.monotonic() - started_at,
+            False,
+        )
+        return project_root, project
 
-    def remove_project(self, project_root: str) -> bool:
-        """Remove a project from the registry. Returns True if it was loaded."""
+    def _remove_project_locked(self, project_root: str) -> bool:
         import gc
 
         project = self._projects.pop(project_root, None)
@@ -227,14 +218,130 @@ class ProjectRegistry:
             return True
         return False
 
-    def close_all(self) -> None:
+    def _loaded_root_for_db_dir_locked(self, requested_db_dir: Path) -> str | None:
+        for loaded_root in self._projects:
+            if self._resolved_db_dir(loaded_root) == requested_db_dir:
+                return loaded_root
+        return None
+
+    async def _wait_for_project_slot(self, project_root: str, requested_db_dir: Path) -> None:
+        async with self._registry_changed:
+            while True:
+                existing = self._projects.get(project_root)
+                if existing is not None:
+                    self._project_refcounts[project_root] = (
+                        self._project_refcounts.get(project_root, 0) + 1
+                    )
+                    return
+
+                loaded_root = self._loaded_root_for_db_dir_locked(requested_db_dir)
+                if loaded_root is None:
+                    return
+                if self._project_refcounts.get(loaded_root, 0) == 0:
+                    self._remove_project_locked(loaded_root)
+                    self._registry_changed.notify_all()
+                    return
+                await self._registry_changed.wait()
+
+    async def get_project(self, project_root: str, *, require_chunkers: bool = False) -> Project:
+        """Get or create a Project for the given root. Lazy initialization."""
+        if self._embedder is None:
+            raise RuntimeError(
+                "Daemon has no global settings loaded. Run `ccc init` to set up cocoindex-code."
+            )
+
+        requested_db_dir = self._resolved_db_dir(project_root)
+
+        while True:
+            await self._wait_for_project_slot(project_root, requested_db_dir)
+
+            async with self._registry_changed:
+                existing = self._projects.get(project_root)
+                if existing is not None:
+                    if require_chunkers:
+                        self._ensure_project_chunkers(project_root, existing)
+                    return existing
+
+                pending = self._pending_projects.get(requested_db_dir)
+                if pending is None:
+                    pending = asyncio.create_task(self._create_project(project_root))
+                    self._pending_projects[requested_db_dir] = pending
+                    self._registry_changed.notify_all()
+
+            try:
+                created_root, created_project = await asyncio.shield(pending)
+            except Exception:
+                async with self._registry_changed:
+                    if self._pending_projects.get(requested_db_dir) is pending:
+                        self._pending_projects.pop(requested_db_dir, None)
+                        self._registry_changed.notify_all()
+                raise
+
+            async with self._registry_changed:
+                if self._pending_projects.get(requested_db_dir) is pending:
+                    self._pending_projects.pop(requested_db_dir, None)
+                    self._projects.setdefault(created_root, created_project)
+                    self._project_refcounts.setdefault(created_root, 0)
+                    self._registry_changed.notify_all()
+
+                existing = self._projects.get(project_root)
+                if existing is not None:
+                    if require_chunkers:
+                        self._ensure_project_chunkers(project_root, existing)
+                    continue
+
+    async def release_project(self, project_root: str) -> None:
+        async with self._registry_changed:
+            count = self._project_refcounts.get(project_root, 0)
+            if count <= 1:
+                self._project_refcounts[project_root] = 0
+            else:
+                self._project_refcounts[project_root] = count - 1
+            self._registry_changed.notify_all()
+
+    @asynccontextmanager
+    async def lease_project(
+        self,
+        project_root: str,
+        *,
+        require_chunkers: bool = False,
+    ) -> AsyncIterator[Project]:
+        project = await self.get_project(project_root, require_chunkers=require_chunkers)
+        try:
+            yield project
+        finally:
+            await self.release_project(project_root)
+
+    async def remove_project(self, project_root: str) -> bool:
+        """Remove a project from the registry. Returns True if it was loaded."""
+        requested_db_dir = self._resolved_db_dir(project_root)
+        async with self._registry_changed:
+            while True:
+                pending = self._pending_projects.get(requested_db_dir)
+                if pending is None and self._project_refcounts.get(project_root, 0) == 0:
+                    break
+                await self._registry_changed.wait()
+            removed = self._remove_project_locked(project_root)
+            self._project_refcounts.pop(project_root, None)
+            self._registry_changed.notify_all()
+            return removed
+
+    async def close_all(self) -> None:
         """Close all loaded projects and release resources."""
         import gc
+
+        pending = list(self._pending_projects.values())
+        self._pending_projects.clear()
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
         for project in self._projects.values():
             project.close()
         self._projects.clear()
         self._chunker_roots_by_project.clear()
+        self._project_refcounts.clear()
         gc.collect()
 
     def list_projects(self) -> list[DaemonProjectInfo]:
@@ -370,6 +477,7 @@ async def _stream_search_results(
                 break
             elapsed = time.monotonic() - started_at
             yield SearchWaitingNotice(
+                request_id=req.request_id,
                 phase="search",
                 elapsed_seconds=elapsed,
                 message="Search still running",
@@ -383,9 +491,12 @@ async def _stream_search_results(
         )
         yield SearchResponse(
             success=True,
+            request_id=req.request_id,
             results=results,
             total_returned=len(results),
             offset=req.offset,
+            freshness="current" if project.has_queryable_index() else "warming",
+            degraded_mode=None if project.chunkers_ready else "query_only",
         )
     except Exception as e:
         yield ErrorResponse(message=str(e))
@@ -577,23 +688,37 @@ async def _dispatch(
     """
     try:
         if isinstance(req, IndexRequest):
-            project = await registry.get_project(req.project_root, require_chunkers=True)
-            return project.stream_index()
+            async def _stream_index() -> AsyncIterator[IndexStreamResponse]:
+                async with registry.lease_project(
+                    req.project_root,
+                    require_chunkers=True,
+                ) as project:
+                    async for resp in project.stream_index():
+                        yield resp
+
+            return _stream_index()
 
         if isinstance(req, SearchRequest):
-            project = await registry.get_project(req.project_root)
-            if not project.has_queryable_index():
-                project = await registry.get_project(req.project_root, require_chunkers=True)
-                await project.ensure_indexing_started()
 
-            if project.should_wait_for_indexing and not project.has_queryable_index():
-                return _search_with_wait(project, req)
+            async def _run_search() -> AsyncIterator[SearchStreamResponse]:
+                async with registry.lease_project(req.project_root) as project:
+                    if not project.has_queryable_index():
+                        registry._ensure_project_chunkers(req.project_root, project)
+                        await project.ensure_indexing_started()
 
-            return _stream_search_results(project, req)
+                    if project.should_wait_for_indexing and not project.has_queryable_index():
+                        async for resp in _search_with_wait(project, req):
+                            yield resp
+                        return
+
+                    async for resp in _stream_search_results(project, req):
+                        yield resp
+
+            return _run_search()
 
         if isinstance(req, ProjectStatusRequest):
-            project = await registry.get_project(req.project_root)
-            return project.get_status()
+            async with registry.lease_project(req.project_root) as project:
+                return project.get_status()
 
         if isinstance(req, DaemonStatusRequest):
             return DaemonStatusResponse(
@@ -603,7 +728,7 @@ async def _dispatch(
             )
 
         if isinstance(req, RemoveProjectRequest):
-            registry.remove_project(req.project_root)
+            await registry.remove_project(req.project_root)
             return RemoveProjectResponse(ok=True)
 
         if isinstance(req, StopRequest):
@@ -772,7 +897,7 @@ def run_daemon() -> None:
             loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
 
         # 3. Release project resources.
-        registry.close_all()
+        loop.run_until_complete(registry.close_all())
         loop.close()
 
         # 4. Remove socket and PID file.

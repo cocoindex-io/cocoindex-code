@@ -34,13 +34,14 @@ def test_project_registry_caches_chunker_dir_discovery(monkeypatch: pytest.Monke
     assert calls == [root]
 
 
-def test_project_registry_remove_project_clears_chunker_dir_cache() -> None:
+@pytest.mark.asyncio
+async def test_project_registry_remove_project_clears_chunker_dir_cache() -> None:
     registry = ProjectRegistry(cast(Embedder, _DummyEmbedder()))
     registry._chunker_roots_by_project["/tmp/workspace"] = (
         Path("/tmp/workspace/scripts/cocoindex"),
     )
 
-    removed = registry.remove_project("/tmp/workspace")
+    removed = await registry.remove_project("/tmp/workspace")
 
     assert removed is False
     assert "/tmp/workspace" not in registry._chunker_roots_by_project

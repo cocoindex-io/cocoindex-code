@@ -80,7 +80,7 @@ def _ensure_plugin_package(package_name: str, package_path: _pathlib.Path) -> No
     if spec is None:
         raise ImportError(f"Could not create plugin package {package_name}")
     module = _importlib_util.module_from_spec(spec)
-    module.__path__ = [str(package_path)]  # type: ignore[attr-defined]
+    module.__path__ = [str(package_path)]
     module.__package__ = package_name
     _sys.modules[package_name] = module
 
@@ -166,7 +166,20 @@ def resolve_chunker_registry(
         if project_root is not None:
             search_roots.append(project_root)
         search_roots.extend(shared_roots)
-        fn = _resolve_chunker_callable(module_path, attr, search_roots=search_roots)
+        try:
+            fn = _resolve_chunker_callable(module_path, attr, search_roots=search_roots)
+        except ModuleNotFoundError as exc:
+            if (
+                project_root is not None
+                or shared_roots
+                or "." in module_path
+                or exc.name != module_path
+            ):
+                raise
+            mod = _importlib.import_module(f"cocoindex_code.builtin_chunkers.{module_path}")
+            fn = getattr(mod, attr)
+        if not callable(fn):
+            raise ValueError(f"chunker {cm.module!r}: {attr!r} is not callable")
         registry[f".{cm.ext}"] = fn
     return registry
 

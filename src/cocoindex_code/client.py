@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from collections.abc import Callable
 from multiprocessing.connection import Client, Connection
 from pathlib import Path
@@ -304,6 +305,7 @@ def search(
                 SearchRequest(
                     project_root=project_root,
                     query=query,
+                    request_id=uuid.uuid4().hex,
                     languages=languages,
                     paths=paths,
                     limit=limit,

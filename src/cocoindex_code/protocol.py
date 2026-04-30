@@ -126,8 +126,8 @@ class SearchResponse(_msgspec.Struct, tag="search"):
 
 
 class SearchWaitingNotice(_msgspec.Struct, tag="search_waiting"):
-    request_id: str = ""
     phase: str
+    request_id: str = ""
     elapsed_seconds: float = 0.0
     message: str | None = None
 

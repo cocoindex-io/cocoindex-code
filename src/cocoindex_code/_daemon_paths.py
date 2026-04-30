@@ -6,9 +6,9 @@ can import these without pulling in the full daemon stack.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
-import hashlib
 from pathlib import Path
 
 from .settings import find_project_root, user_settings_dir
@@ -31,9 +31,7 @@ def _workspace_runtime_dir(base_dir: Path) -> Path:
     if not identity:
         return base_dir
     digest = hashlib.md5(identity.encode("utf-8")).hexdigest()[:12]
-    leaf = Path(identity).name or "workspace"
-    safe_leaf = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in leaf)[:40]
-    return base_dir / "workspaces" / f"{safe_leaf}-{digest}"
+    return base_dir / "ws" / digest
 
 
 def daemon_runtime_dir() -> Path:
@@ -68,7 +66,12 @@ def daemon_socket_path() -> str:
         # users, etc.)
         dir_hash = hashlib.md5(str(daemon_runtime_dir()).encode()).hexdigest()[:12]
         return rf"\\.\pipe\cocoindex_code_{dir_hash}"
-    return str(daemon_runtime_dir() / "daemon.sock")
+    candidate = daemon_runtime_dir() / "daemon.sock"
+    candidate_str = str(candidate)
+    if len(candidate_str.encode()) <= 96:
+        return candidate_str
+    dir_hash = hashlib.md5(candidate_str.encode()).hexdigest()[:12]
+    return str(Path("/tmp") / f"ccc_{dir_hash}.sock")
 
 
 def daemon_pid_path() -> Path:

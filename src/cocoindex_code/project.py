@@ -315,6 +315,9 @@ class Project:
 
         is_indexing = self._index_lock.locked()
         progress = self._indexing_stats if is_indexing else None
+        degraded_modes: list[str] = []
+        if not self._chunkers_ready:
+            degraded_modes.append("query_only")
         return ProjectStatusResponse(
             indexing=is_indexing,
             total_chunks=total_chunks,
@@ -322,6 +325,8 @@ class Project:
             languages={lang: cnt for lang, cnt in lang_rows},
             progress=progress,
             index_exists=index_exists,
+            freshness="current" if index_exists else "missing",
+            degraded_modes=degraded_modes,
         )
 
     # ------------------------------------------------------------------
