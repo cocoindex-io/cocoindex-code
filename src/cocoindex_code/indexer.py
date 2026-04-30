@@ -33,6 +33,22 @@ CHUNK_OVERLAP = 150
 splitter = RecursiveSplitter()
 
 
+def repo_key_for_path(file_path: PurePath, project_root: Path) -> str:
+    """Return the relative Git repo root for fast scoped search."""
+    directory = file_path.parent
+    while True:
+        if (project_root / directory / ".git").exists():
+            repo_key = directory.as_posix()
+            return repo_key if repo_key != "." else "."
+
+        if directory in (PurePath("."), PurePath("")):
+            break
+        directory = directory.parent
+
+    parts = file_path.parts
+    return parts[0] if len(parts) > 1 else "."
+
+
 def _normalize_gitignore_lines(lines: Iterable[str], directory: PurePath) -> list[str]:
     """Normalize .gitignore lines to root-relative gitignore patterns."""
     if directory in (PurePath("."), PurePath("")):
@@ -151,8 +167,9 @@ async def process_file(
     if not content.strip():
         return
 
-    suffix = file.file_path.path.suffix
     project_root = coco.use_context(CODEBASE_DIR)
+    suffix = file.file_path.path.suffix
+    repo_key = repo_key_for_path(file.file_path.path, project_root)
     ps = load_project_settings(project_root)
     ext_lang_map = {f".{lo.ext}": lo.lang for lo in ps.language_overrides}
     language = (
@@ -183,6 +200,7 @@ async def process_file(
             row=CodeChunk(
                 id=await id_gen.next_id(chunk.text),
                 file_path=file.file_path.path.as_posix(),
+                repo_key=repo_key,
                 language=language,
                 content=chunk.text,
                 start_line=chunk.start.line,
@@ -209,7 +227,7 @@ async def indexer_main() -> None:
             primary_key=["id"],
         ),
         virtual_table_def=Vec0TableDef(
-            partition_key_columns=["language"],
+            partition_key_columns=["repo_key", "language"],
             auxiliary_columns=["file_path", "content", "start_line", "end_line"],
         ),
     )

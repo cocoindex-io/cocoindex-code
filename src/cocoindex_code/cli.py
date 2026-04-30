@@ -104,6 +104,7 @@ class _SearchCallable(Protocol):
         query: str,
         languages: list[str] | None = None,
         paths: list[str] | None = None,
+        repo_keys: list[str] | None = None,
         limit: int = 5,
         offset: int = 0,
         on_waiting: Callable[[], None] | None = None,
@@ -194,6 +195,7 @@ def search_response_json_payload(response: SearchResponse) -> dict[str, object]:
         "results": [
             {
                 "file_path": r.file_path,
+                "repo_key": r.repo_key,
                 "language": r.language,
                 "content": r.content,
                 "start_line": r.start_line,
@@ -317,6 +319,7 @@ def handle_bridge_jsonrpc_request(
             query=_required_str(params, "query"),
             languages=_optional_str_list(params, "languages"),
             paths=_optional_str_list(params, "paths"),
+            repo_keys=_optional_str_list(params, "repo_keys"),
             limit=_positive_int_param(params, "limit", 10),
             offset=_non_negative_int_param(params, "offset", 0),
         )
@@ -405,6 +408,7 @@ def _search_with_wait_spinner(
     query: str,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
+    repo_keys: list[str] | None = None,
     limit: int = 10,
     offset: int = 0,
 ) -> SearchResponse:
@@ -430,6 +434,7 @@ def _search_with_wait_spinner(
             query=query,
             languages=languages,
             paths=paths,
+            repo_keys=repo_keys,
             limit=limit,
             offset=offset,
             on_waiting=_on_waiting,
@@ -722,6 +727,7 @@ def search(
     query: list[str] = _typer.Argument(..., help="Search query"),
     lang: list[str] = _typer.Option([], "--lang", help="Filter by language"),
     path: str | None = _typer.Option(None, "--path", help="Filter by file path glob"),
+    repo_key: list[str] = _typer.Option([], "--repo-key", help="Filter by indexed repo key"),
     offset: int = _typer.Option(0, "--offset", help="Number of results to skip"),
     limit: int = _typer.Option(10, "--limit", help="Maximum results to return"),
     refresh: bool = _typer.Option(False, "--refresh", help="Refresh index before searching"),
@@ -748,6 +754,7 @@ def search(
         query=query_str,
         languages=lang or None,
         paths=paths,
+        repo_keys=repo_key or None,
         limit=limit,
         offset=offset,
     )

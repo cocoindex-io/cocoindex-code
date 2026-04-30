@@ -10,6 +10,7 @@ class CodeChunk:
 
     id: int
     file_path: str
+    repo_key: str
     language: str
     content: str
     start_line: int
@@ -22,6 +23,7 @@ class QueryResult:
     """Result from a vector similarity query."""
 
     file_path: str
+    repo_key: str | None
     language: str
     content: str
     start_line: int

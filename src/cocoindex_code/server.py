@@ -36,6 +36,7 @@ class CodeChunkResult(BaseModel):
     """A single code chunk result."""
 
     file_path: str = Field(description="Relative path to the file")
+    repo_key: str | None = Field(default=None, description="Top-level indexed repo/workspace key")
     language: str = Field(description="Programming language")
     content: str = Field(description="The code content")
     start_line: int = Field(description="Starting line number (1-indexed)")
@@ -117,6 +118,13 @@ def create_mcp_server(project_root: str) -> FastMCP:
                 " Example: ['src/utils/*', '*.py']"
             ),
         ),
+        repo_keys: list[str] | None = Field(
+            default=None,
+            description=(
+                "Filter by indexed top-level repo/workspace key(s). "
+                "This uses a vector index partition when available."
+            ),
+        ),
     ) -> SearchResultModel:
         """Query the codebase index via the daemon."""
         from . import client as _client
@@ -132,6 +140,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
                     query=query,
                     languages=languages,
                     paths=paths,
+                    repo_keys=repo_keys,
                     limit=limit,
                     offset=offset,
                 ),
@@ -141,6 +150,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
                 results=[
                     CodeChunkResult(
                         file_path=r.file_path,
+                        repo_key=r.repo_key,
                         language=r.language,
                         content=r.content,
                         start_line=r.start_line,

@@ -95,6 +95,7 @@ def test_search_help_includes_json_option() -> None:
 
     assert result.exit_code == 0
     assert "--json" in result.output
+    assert "--repo-key" in result.output
 
 
 def test_bridge_help_includes_jsonrpc_option() -> None:
@@ -133,6 +134,7 @@ def test_print_search_results_json_outputs_machine_readable_payload(
         "results": [
             {
                 "file_path": "src/main.py",
+                "repo_key": None,
                 "language": "python",
                 "content": "def main():\n    return 1",
                 "start_line": 10,
@@ -159,6 +161,7 @@ def test_jsonrpc_bridge_ping_and_shutdown() -> None:
         query: str,
         languages: list[str] | None = None,
         paths: list[str] | None = None,
+        repo_keys: list[str] | None = None,
         limit: int = 5,
         offset: int = 0,
         on_waiting: object | None = None,
@@ -186,6 +189,7 @@ def test_jsonrpc_bridge_search_uses_client_payload() -> None:
                     "query": "stream writer",
                     "languages": ["python"],
                     "paths": ["src/*"],
+                    "repo_keys": ["repo-a"],
                     "limit": 3,
                     "offset": 2,
                 },
@@ -201,6 +205,7 @@ def test_jsonrpc_bridge_search_uses_client_payload() -> None:
         query: str,
         languages: list[str] | None = None,
         paths: list[str] | None = None,
+        repo_keys: list[str] | None = None,
         limit: int = 5,
         offset: int = 0,
         on_waiting: object | None = None,
@@ -211,6 +216,7 @@ def test_jsonrpc_bridge_search_uses_client_payload() -> None:
                 "query": query,
                 "languages": languages,
                 "paths": paths,
+                "repo_keys": repo_keys,
                 "limit": limit,
                 "offset": offset,
             }
@@ -220,6 +226,7 @@ def test_jsonrpc_bridge_search_uses_client_payload() -> None:
             results=[
                 SearchResult(
                     file_path="src/main.py",
+                    repo_key="repo-a",
                     language="python",
                     content="def stream_writer(): pass",
                     start_line=4,
@@ -240,6 +247,7 @@ def test_jsonrpc_bridge_search_uses_client_payload() -> None:
             "query": "stream writer",
             "languages": ["python"],
             "paths": ["src/*"],
+            "repo_keys": ["repo-a"],
             "limit": 3,
             "offset": 2,
         }
@@ -253,6 +261,7 @@ def test_jsonrpc_bridge_search_uses_client_payload() -> None:
             "results": [
                 {
                     "file_path": "src/main.py",
+                    "repo_key": "repo-a",
                     "language": "python",
                     "content": "def stream_writer(): pass",
                     "start_line": 4,
@@ -276,6 +285,7 @@ def test_jsonrpc_bridge_returns_parse_error() -> None:
         query: str,
         languages: list[str] | None = None,
         paths: list[str] | None = None,
+        repo_keys: list[str] | None = None,
         limit: int = 5,
         offset: int = 0,
         on_waiting: object | None = None,
