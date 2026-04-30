@@ -132,6 +132,14 @@ class SearchWaitingNotice(_msgspec.Struct, tag="search_waiting"):
     message: str | None = None
 
 
+class IndexingPhaseTimings(_msgspec.Struct):
+    files_timed: int = 0
+    avg_chunk_ms: float | None = None
+    avg_embed_ms: float | None = None
+    avg_write_ms: float | None = None
+    max_embed_ms: float | None = None
+
+
 class ProjectStatusResponse(_msgspec.Struct, tag="project_status"):
     indexing: bool
     total_chunks: int
@@ -141,6 +149,10 @@ class ProjectStatusResponse(_msgspec.Struct, tag="project_status"):
     index_exists: bool = True
     freshness: str = "current"
     degraded_modes: list[str] = []
+    last_progress_at: float | None = None
+    stale: bool = False
+    phase_timings: IndexingPhaseTimings | None = None
+    last_error: str | None = None
 
 
 class DaemonProjectInfo(_msgspec.Struct):

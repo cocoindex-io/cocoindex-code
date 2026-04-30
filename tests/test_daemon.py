@@ -359,6 +359,59 @@ def test_daemon_search_waits_for_load_time_indexing(daemon_sock: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_search_results_falls_back_to_keyword_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cocoindex_code.daemon as dm
+
+    monkeypatch.setattr(dm, "_DEGRADED_SEARCH_TIMEOUT_S", 0.01)
+
+    class _FakeProject:
+        _project_root = Path("/tmp/project")
+        chunkers_ready = True
+
+        async def search(
+            self,
+            query: str,
+            languages: list[str] | None = None,
+            paths: list[str] | None = None,
+            limit: int = 5,
+            offset: int = 0,
+        ) -> list[object]:
+            await asyncio.sleep(1.0)
+            return []
+
+        def has_queryable_index(self) -> bool:
+            return True
+
+    monkeypatch.setattr(dm, "target_sqlite_db_path", lambda _project_root: Path("/tmp/test.db"))
+    monkeypatch.setattr(
+        dm.hybrid_search,
+        "keyword_search",
+        lambda db_path, query, limit, path_prefixes=None, language=None: [
+            dm.hybrid_search.KeywordHit(
+                file_path="main.py",
+                content="needle",
+                language="python",
+                start_line=1,
+                end_line=1,
+                score=0.9,
+            )
+        ],
+    )
+
+    req = SearchRequest(project_root="/tmp/project", query="needle", request_id="r1", limit=1)
+    responses = [resp async for resp in dm._stream_search_results(_FakeProject(), req)]
+
+    final = responses[-1]
+    assert isinstance(final, SearchResponse)
+    assert final.degraded_mode == "keyword_timeout_fallback"
+    assert final.total_returned == 1
+    assert final.results[0].file_path == "main.py"
+    assert final.results[0].language == "python"
+
+
+@pytest.mark.asyncio
 async def test_project_registry_single_flights_same_root(monkeypatch: pytest.MonkeyPatch) -> None:
     import cocoindex_code.daemon as dm
 

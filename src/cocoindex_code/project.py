@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sqlite3
 import time
 from collections import OrderedDict
@@ -14,9 +15,10 @@ import cocoindex as coco
 from cocoindex.connectors import sqlite as coco_sqlite
 
 from .chunking import CHUNKER_REGISTRY, ChunkerFn
-from .indexer import indexer_main
+from .indexer import PHASE_TIMING, PhaseTimingAccumulator, indexer_main
 from .protocol import (
     IndexingProgress,
+    IndexingPhaseTimings,
     IndexProgressUpdate,
     IndexResponse,
     IndexStreamResponse,
@@ -73,9 +75,13 @@ class Project:
         tuple[str, tuple[tuple[str, str], ...]],
         asyncio.Task[Any],
     ]
+    _phase_timing: PhaseTimingAccumulator
+    _last_progress_at: float | None
+    _last_index_error: str | None
 
     _QUERY_CACHE_MAX = 64
     _QUERY_CACHE_TTL_S = 60.0
+    _STALE_THRESHOLD_S = float(os.environ.get("COCOINDEX_CODE_STALE_THRESHOLD_S", "120"))
 
     def close(self) -> None:
         """Close project resources to release file handles (LMDB, SQLite)."""
@@ -117,6 +123,9 @@ class Project:
                 num_reprocesses=0,
                 num_errors=0,
             )
+            self._phase_timing.reset()
+            self._last_progress_at = time.monotonic()
+            self._last_index_error = None
             if on_started is not None:
                 on_started.set()
             await self._run_index_inner(on_progress=on_progress)
@@ -140,9 +149,13 @@ class Project:
                         num_errors=file_stats.num_errors,
                     )
                     self._indexing_stats = progress
+                    self._last_progress_at = time.monotonic()
                     if on_progress is not None:
                         on_progress(progress)
                     await asyncio.sleep(0.1)
+        except Exception as exc:
+            self._last_index_error = " ".join(f"{type(exc).__name__}: {exc}".splitlines())
+            raise
         finally:
             self._initial_index_done.set()
             self._indexing_stats = None
@@ -315,9 +328,29 @@ class Project:
 
         is_indexing = self._index_lock.locked()
         progress = self._indexing_stats if is_indexing else None
+        now = time.monotonic()
+        stale = (
+            is_indexing
+            and self._last_progress_at is not None
+            and (now - self._last_progress_at) > self._STALE_THRESHOLD_S
+        )
+        files_timed, total_chunk_ms, total_embed_ms, total_write_ms, max_embed_ms = (
+            self._phase_timing.snapshot()
+        )
+        phase_timings = None
+        if files_timed > 0:
+            phase_timings = IndexingPhaseTimings(
+                files_timed=files_timed,
+                avg_chunk_ms=total_chunk_ms / files_timed,
+                avg_embed_ms=total_embed_ms / files_timed,
+                avg_write_ms=total_write_ms / files_timed,
+                max_embed_ms=max_embed_ms,
+            )
         degraded_modes: list[str] = []
         if not self._chunkers_ready:
             degraded_modes.append("query_only")
+        if self._last_index_error is not None:
+            degraded_modes.append("index_error")
         return ProjectStatusResponse(
             indexing=is_indexing,
             total_chunks=total_chunks,
@@ -327,6 +360,10 @@ class Project:
             index_exists=index_exists,
             freshness="current" if index_exists else "missing",
             degraded_modes=degraded_modes,
+            last_progress_at=self._last_progress_at,
+            stale=stale,
+            phase_timings=phase_timings,
+            last_error=self._last_index_error,
         )
 
     # ------------------------------------------------------------------
@@ -389,6 +426,8 @@ class Project:
         context.provide(EMBEDDER, embedder)
         context.provide(INDEXING_EMBED_PARAMS, dict(indexing_params))
         context.provide(QUERY_EMBED_PARAMS, dict(query_params))
+        phase_timing = PhaseTimingAccumulator()
+        context.provide(PHASE_TIMING, phase_timing)
         chunker_registry_ref = dict(chunker_registry) if chunker_registry else {}
         context.provide(CHUNKER_REGISTRY, chunker_registry_ref)
 
@@ -409,6 +448,9 @@ class Project:
         result._initial_index_done = asyncio.Event()
         result._chunker_registry_ref = chunker_registry_ref
         result._chunkers_ready = chunker_registry is not None
+        result._phase_timing = phase_timing
+        result._last_progress_at = None
+        result._last_index_error = None
         result._normalized_query_params = tuple(
             sorted((str(k), repr(v)) for k, v in query_params.items())
         )

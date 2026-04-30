@@ -80,6 +80,7 @@ SourceKey = tuple[str, int]
 class KeywordHit:
     file_path: str
     content: str
+    language: str | None
     start_line: int
     end_line: int
     score: float  # BM25 score — higher is better
@@ -437,6 +438,7 @@ def keyword_search(
             KeywordHit(
                 file_path=row["file_path"],
                 content=row["content"],
+                language=row["language"],
                 start_line=row["start_line"],
                 end_line=row["end_line"],
                 score=-float(row["score"]),

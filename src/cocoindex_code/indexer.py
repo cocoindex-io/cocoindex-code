@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+from typing import Any
 from pathlib import Path
 
 import cocoindex as coco
@@ -21,6 +24,7 @@ from .shared import (
     INDEXING_EMBED_PARAMS,
     SQLITE_DB,
     CodeChunk,
+    Embedder,
 )
 
 # Chunking configuration
@@ -30,6 +34,69 @@ CHUNK_OVERLAP = 150
 
 # Chunking splitter (stateless, can be module-level)
 splitter = RecursiveSplitter()
+
+
+class PhaseTimingAccumulator:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.files_timed = 0
+        self.total_chunk_ms = 0.0
+        self.total_embed_ms = 0.0
+        self.total_write_ms = 0.0
+        self.max_embed_ms = 0.0
+
+    def reset(self) -> None:
+        with self._lock:
+            self.files_timed = 0
+            self.total_chunk_ms = 0.0
+            self.total_embed_ms = 0.0
+            self.total_write_ms = 0.0
+            self.max_embed_ms = 0.0
+
+    def record(self, chunk_ms: float, embed_ms: float, write_ms: float) -> None:
+        with self._lock:
+            self.files_timed += 1
+            self.total_chunk_ms += chunk_ms
+            self.total_embed_ms += embed_ms
+            self.total_write_ms += write_ms
+            if embed_ms > self.max_embed_ms:
+                self.max_embed_ms = embed_ms
+
+    def snapshot(self) -> tuple[int, float, float, float, float]:
+        with self._lock:
+            return (
+                self.files_timed,
+                self.total_chunk_ms,
+                self.total_embed_ms,
+                self.total_write_ms,
+                self.max_embed_ms,
+            )
+
+
+PHASE_TIMING = coco.ContextKey[PhaseTimingAccumulator]("phase_timing")
+
+
+@coco.fn
+async def process_chunk(
+    chunk: Chunk,
+    file_path: Path,
+    language: str,
+    id_gen: IdGenerator,
+    embedder: Embedder,
+    indexing_params: dict[str, Any],
+    table: sqlite.TableTarget[CodeChunk],
+) -> None:
+    table.declare_row(
+        row=CodeChunk(
+            id=await id_gen.next_id(chunk.text),
+            file_path=file_path.as_posix(),
+            language=language,
+            content=chunk.text,
+            start_line=chunk.start.line,
+            end_line=chunk.end.line,
+            embedding=await embedder.embed(chunk.text, **indexing_params),
+        )
+    )
 
 
 @coco.fn(memo=True)
@@ -61,6 +128,7 @@ async def process_file(
 
     chunker_registry = coco.use_context(CHUNKER_REGISTRY)
     chunker = chunker_registry.get(suffix)
+    chunk_started_at = time.monotonic()
     if chunker is not None:
         language_override, chunks = chunker(Path(file.file_path.path), content)
         if language_override is not None:
@@ -73,23 +141,29 @@ async def process_file(
             chunk_overlap=CHUNK_OVERLAP,
             language=language,
         )
+    chunk_ms = (time.monotonic() - chunk_started_at) * 1000.0
 
     id_gen = IdGenerator()
 
-    async def process(chunk: Chunk) -> None:
-        table.declare_row(
-            row=CodeChunk(
-                id=await id_gen.next_id(chunk.text),
-                file_path=file.file_path.path.as_posix(),
-                language=language,
-                content=chunk.text,
-                start_line=chunk.start.line,
-                end_line=chunk.end.line,
-                embedding=await embedder.embed(chunk.text, **indexing_params),
-            )
-        )
+    embed_started_at = time.monotonic()
+    await coco.map(
+        process_chunk,
+        chunks,
+        file.file_path.path,
+        language,
+        id_gen,
+        embedder,
+        indexing_params,
+        table,
+    )
+    embed_ms = (time.monotonic() - embed_started_at) * 1000.0
 
-    await coco.map(process, chunks)
+    write_ms = 0.0
+
+    try:
+        coco.get_context(PHASE_TIMING).record(chunk_ms, embed_ms, write_ms)
+    except Exception:
+        pass
 
 
 @coco.fn

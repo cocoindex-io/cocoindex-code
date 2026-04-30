@@ -13,6 +13,7 @@ from cocoindex_code.protocol import (
     DoctorResponse,
     ErrorResponse,
     HandshakeRequest,
+    IndexingPhaseTimings,
     IndexingProgress,
     IndexProgressUpdate,
     IndexRequest,
@@ -266,6 +267,15 @@ def test_encode_decode_project_status_with_progress() -> None:
         total_files=10,
         languages={"python": 50},
         progress=progress,
+        last_progress_at=123.4,
+        stale=True,
+        phase_timings=IndexingPhaseTimings(
+            files_timed=3,
+            avg_chunk_ms=1.0,
+            avg_embed_ms=2.0,
+            avg_write_ms=3.0,
+            max_embed_ms=4.0,
+        ),
     )
     data = encode_response(resp)
     decoded = decode_response(data)
@@ -273,6 +283,11 @@ def test_encode_decode_project_status_with_progress() -> None:
     assert decoded.progress is not None
     assert decoded.progress.num_execution_starts == 7
     assert decoded.progress.num_adds == 4
+    assert decoded.last_progress_at == 123.4
+    assert decoded.stale is True
+    assert decoded.phase_timings is not None
+    assert decoded.phase_timings.max_embed_ms == 4.0
+    assert decoded.last_error is None
 
 
 def test_encode_decode_project_status_without_progress() -> None:

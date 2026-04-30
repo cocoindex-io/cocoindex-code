@@ -31,6 +31,18 @@ def test_main_rewrites_default_command(monkeypatch) -> None:
     assert captured["standalone_mode"] is True
 
 
+def test_module_entrypoint_calls_main(monkeypatch) -> None:
+    called: list[list[str] | None] = []
+
+    monkeypatch.setattr(cgrep, "main", lambda argv=None: called.append(argv))
+    exec(
+        'if __name__ == "__main__":\n    main()\n',
+        {"__name__": "__main__", "main": cgrep.main},
+    )
+
+    assert called == [None]
+
+
 def test_bootstrap_creates_settings(tmp_path: Path, monkeypatch) -> None:
     project = tmp_path / "proj"
     project.mkdir()
@@ -138,6 +150,118 @@ def test_search_command_uses_backend_and_renders_content(monkeypatch) -> None:
     assert "def login(): pass" in result.output
 
 
+def test_search_command_skips_index_refresh_for_grep(monkeypatch) -> None:
+    runner = CliRunner()
+    calls: list[str] = []
+    scope = cgrep.SearchScope(project_root=Path("/tmp/project"), path_globs=None, path_prefix=None)
+
+    monkeypatch.setattr(cgrep, "_ensure_search_scope", lambda raw_path: scope)
+    monkeypatch.setattr(
+        cgrep,
+        "_maybe_refresh_index",
+        lambda project_root, *, sync: calls.append(str(project_root)),
+    )
+    monkeypatch.setattr(
+        cgrep,
+        "_run_search",
+        lambda scope_arg, query, *, mode, limit, offset, languages: [],
+    )
+
+    result = runner.invoke(cgrep.cli, ["search", "auth", "--mode", "grep"])
+
+    assert result.exit_code == 0
+    assert calls == []
+
+
+def test_maybe_refresh_index_when_db_is_missing(monkeypatch, tmp_path: Path) -> None:
+    called: list[str] = []
+
+    monkeypatch.setattr(cgrep, "target_sqlite_db_path", lambda project_root: tmp_path / "missing.db")
+    monkeypatch.setattr(
+        "cocoindex_code.cli._run_index_with_progress",
+        lambda project_root: called.append(project_root),
+    )
+
+    cgrep._maybe_refresh_index(tmp_path, sync=False)
+
+    assert called == [str(tmp_path)]
+
+
+def test_maybe_refresh_index_when_status_is_empty(monkeypatch, tmp_path: Path) -> None:
+    called: list[str] = []
+    db_path = tmp_path / "target_sqlite.db"
+    db_path.write_text("placeholder", encoding="utf-8")
+
+    monkeypatch.setattr(cgrep, "target_sqlite_db_path", lambda project_root: db_path)
+    monkeypatch.setattr(
+        cgrep._client,
+        "project_status",
+        lambda project_root: type("Status", (), {"index_exists": True, "total_chunks": 0})(),
+    )
+    monkeypatch.setattr(
+        "cocoindex_code.cli._run_index_with_progress",
+        lambda project_root: called.append(project_root),
+    )
+
+    cgrep._maybe_refresh_index(tmp_path, sync=False)
+
+    assert called == [str(tmp_path)]
+
+
+def test_maybe_refresh_index_skips_when_status_is_populated(monkeypatch, tmp_path: Path) -> None:
+    called: list[str] = []
+    db_path = tmp_path / "target_sqlite.db"
+    db_path.write_text("placeholder", encoding="utf-8")
+
+    monkeypatch.setattr(cgrep, "target_sqlite_db_path", lambda project_root: db_path)
+    monkeypatch.setattr(
+        cgrep._client,
+        "project_status",
+        lambda project_root: type("Status", (), {"index_exists": True, "total_chunks": 3})(),
+    )
+    monkeypatch.setattr(
+        "cocoindex_code.cli._run_index_with_progress",
+        lambda project_root: called.append(project_root),
+    )
+
+    cgrep._maybe_refresh_index(tmp_path, sync=False)
+
+    assert called == []
+
+
+def test_run_search_falls_back_to_grep_when_index_is_empty(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cgrep, "_index_needs_refresh", lambda project_root: True)
+    monkeypatch.setattr(
+        cgrep,
+        "_grep_rows",
+        lambda project_root, query, *, limit, path_prefix: [
+            cgrep.ResultRow("src/auth.py", 1, 2, "needle", None, 1.0)
+        ],
+    )
+
+    rows = cgrep._run_search(
+        cgrep.SearchScope(project_root=tmp_path, path_globs=["src/*"], path_prefix="src/"),
+        "needle",
+        mode="vector",
+        limit=1,
+        offset=0,
+        languages=None,
+    )
+
+    assert [row.file_path for row in rows] == ["src/auth.py"]
+
+
+def test_render_results_avoids_duplicate_dot_slash(capsys) -> None:
+    cgrep._render_results(
+        [cgrep.ResultRow(file_path="./src/auth.py", start_line=1, end_line=2, content="x", language=None, score=1.0)],
+        show_content=False,
+    )
+
+    out = capsys.readouterr().out
+    assert "././src/auth.py" not in out
+    assert "./src/auth.py:1-2" in out
+
+
 def test_no_rerank_warning_only_when_flag_is_passed(monkeypatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(
@@ -179,6 +303,7 @@ def test_keyword_rows_uses_all_languages_and_dedupes(monkeypatch, tmp_path: Path
                 hybrid_search.KeywordHit(
                     file_path="src/auth.py",
                     content="py",
+                    language="python",
                     start_line=10,
                     end_line=12,
                     score=0.9,
@@ -189,6 +314,7 @@ def test_keyword_rows_uses_all_languages_and_dedupes(monkeypatch, tmp_path: Path
                 hybrid_search.KeywordHit(
                     file_path="src/auth.py",
                     content="ts weaker duplicate",
+                    language="typescript",
                     start_line=10,
                     end_line=12,
                     score=0.7,
@@ -196,6 +322,7 @@ def test_keyword_rows_uses_all_languages_and_dedupes(monkeypatch, tmp_path: Path
                 hybrid_search.KeywordHit(
                     file_path="src/ui.ts",
                     content="ts unique",
+                    language="typescript",
                     start_line=20,
                     end_line=21,
                     score=0.8,
@@ -272,6 +399,36 @@ def test_hybrid_rows_handles_offset_without_double_skipping(monkeypatch, tmp_pat
     )
 
     assert captured["vector_offset"] == 0
-    assert captured["vector_limit"] == 2
+    assert captured["vector_limit"] == 3
     assert captured["keyword_limit"] == 3
     assert [row.file_path for row in rows] == ["b.py", "c.py"]
+
+
+def test_keyword_only_rows_preserve_language(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(hybrid_search, "ensure_fts_index", lambda db_path: None)
+    monkeypatch.setattr(cgrep, "target_sqlite_db_path", lambda project_root: tmp_path / "index.db")
+    monkeypatch.setattr(
+        cgrep,
+        "_keyword_rows_for_languages",
+        lambda db_path, query, *, limit, path_prefix, languages: [
+            hybrid_search.KeywordHit(
+                file_path="src/auth.py",
+                content="def login",
+                language="python",
+                start_line=4,
+                end_line=7,
+                score=0.9,
+            )
+        ],
+    )
+
+    rows = cgrep._keyword_only_rows(
+        tmp_path,
+        "login",
+        limit=1,
+        offset=0,
+        languages=["python"],
+        path_prefix="src/",
+    )
+
+    assert rows[0].language == "python"

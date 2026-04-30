@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from contextlib import suppress
 from multiprocessing.connection import Connection, Listener
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,7 @@ from .protocol import (
     Request,
     Response,
     SearchRequest,
+    SearchResult,
     SearchResponse,
     SearchStreamResponse,
     SearchWaitingNotice,
@@ -68,8 +70,10 @@ from .settings import (
     user_settings_path,
 )
 from .shared import Embedder, check_embedding, create_embedder
+from . import hybrid_search
 
 logger = logging.getLogger(__name__)
+_DEGRADED_SEARCH_TIMEOUT_S = float(os.environ.get("COCOINDEX_CODE_DEGRADED_SEARCH_TIMEOUT_S", "15"))
 
 
 def _candidate_shared_chunker_roots(project_root: Path) -> list[Path]:
@@ -476,6 +480,37 @@ async def _stream_search_results(
             if done:
                 break
             elapsed = time.monotonic() - started_at
+            if elapsed >= _DEGRADED_SEARCH_TIMEOUT_S and not search_task.done():
+                search_task.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await search_task
+                keyword_rows = hybrid_search.keyword_search(
+                    db_path=target_sqlite_db_path(project._project_root),
+                    query=req.query,
+                    limit=req.limit,
+                    path_prefixes=req.paths,
+                    language=req.languages[0] if req.languages and len(req.languages) == 1 else None,
+                )
+                yield SearchResponse(
+                    success=True,
+                    request_id=req.request_id,
+                    results=[
+                        SearchResult(
+                            file_path=row.file_path,
+                            language=row.language or "text",
+                            content=row.content,
+                            start_line=row.start_line,
+                            end_line=row.end_line,
+                            score=row.score,
+                        )
+                        for row in keyword_rows
+                    ],
+                    total_returned=len(keyword_rows),
+                    offset=req.offset,
+                    freshness="current" if project.has_queryable_index() else "warming",
+                    degraded_mode="keyword_timeout_fallback",
+                )
+                return
             yield SearchWaitingNotice(
                 request_id=req.request_id,
                 phase="search",

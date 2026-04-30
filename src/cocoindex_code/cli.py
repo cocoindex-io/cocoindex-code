@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
@@ -166,12 +167,40 @@ def print_index_stats(status: ProjectStatusResponse) -> None:
     """Print formatted index statistics."""
     if status.progress is not None:
         _typer.echo(f"Indexing in progress: {_format_progress(status.progress)}")
+    if status.stale:
+        _typer.echo(
+            "  [WARNING] Indexing appears stale - no progress update in >120s",
+            err=True,
+        )
+    if status.last_progress_at is not None:
+        ago = time.monotonic() - status.last_progress_at
+        _typer.echo(f"  Last progress: {ago:.0f}s ago")
+    if status.last_error:
+        _typer.echo(f"  Last error: {status.last_error}", err=True)
+    if status.freshness or status.degraded_modes:
+        _typer.echo(
+            "Index state: "
+            f"{status.freshness}"
+            + (
+                f" | degraded: {', '.join(status.degraded_modes)}"
+                if status.degraded_modes
+                else ""
+            )
+        )
     if not status.index_exists:
         _typer.echo("\nIndex not created yet.")
         return
     _typer.echo("\nIndex stats:")
     _typer.echo(f"  Chunks: {status.total_chunks}")
     _typer.echo(f"  Files:  {status.total_files}")
+    if status.phase_timings is not None and status.phase_timings.files_timed > 0:
+        pt = status.phase_timings
+        _typer.echo(
+            "  Phase timings "
+            f"({pt.files_timed} files): chunk={pt.avg_chunk_ms:.0f}ms  "
+            f"embed={pt.avg_embed_ms:.0f}ms (max {pt.max_embed_ms:.0f}ms)  "
+            f"write={pt.avg_write_ms:.0f}ms"
+        )
     if status.languages:
         _typer.echo("  Languages:")
         for lang, count in sorted(status.languages.items(), key=lambda x: -x[1]):
@@ -183,6 +212,17 @@ def print_search_results(response: SearchResponse) -> None:
     if not response.success:
         _typer.echo(f"Search failed: {response.message}", err=True)
         return
+
+    if response.degraded_mode or response.freshness != "current":
+        _typer.echo(
+            "Search state: "
+            f"{response.freshness}"
+            + (
+                f" | degraded: {response.degraded_mode}"
+                if response.degraded_mode
+                else ""
+            )
+        )
 
     if not response.results:
         _typer.echo("No results found.")

@@ -9,10 +9,12 @@ import pytest
 from cocoindex_code import cli
 from cocoindex_code.cli import (
     add_to_gitignore,
+    print_index_stats,
     remove_from_gitignore,
     require_project_root,
     resolve_default_path,
 )
+from cocoindex_code.protocol import IndexingPhaseTimings, IndexingProgress, ProjectStatusResponse
 
 
 def test_require_project_root_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -204,6 +206,48 @@ def test_apply_host_cwd_noop_when_unset(
 
     assert Path.cwd() == original_cwd
     assert capsys.readouterr().err == ""
+
+
+def test_print_index_stats_includes_stale_and_phase_timings(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("cocoindex_code.cli.time.monotonic", lambda: 200.0)
+    status = ProjectStatusResponse(
+        indexing=True,
+        total_chunks=42,
+        total_files=7,
+        languages={"python": 42},
+        progress=IndexingProgress(
+            num_execution_starts=7,
+            num_unchanged=2,
+            num_adds=4,
+            num_deletes=0,
+            num_reprocesses=1,
+            num_errors=0,
+        ),
+        index_exists=True,
+        freshness="current",
+        last_progress_at=150.0,
+        stale=True,
+        phase_timings=IndexingPhaseTimings(
+            files_timed=3,
+            avg_chunk_ms=10.0,
+            avg_embed_ms=20.0,
+            avg_write_ms=5.0,
+            max_embed_ms=40.0,
+        ),
+        last_error="TimeoutError: embed stalled",
+    )
+
+    print_index_stats(status)
+
+    captured = capsys.readouterr()
+    assert "Indexing in progress" in captured.out
+    assert "Last progress: 50s ago" in captured.out
+    assert "Phase timings (3 files): chunk=10ms  embed=20ms (max 40ms)  write=5ms" in captured.out
+    assert "Last error: TimeoutError: embed stalled" in captured.err
+    assert "Indexing appears stale" in captured.err
 
 
 # ---------------------------------------------------------------------------
