@@ -25,11 +25,11 @@ async def test_run_embedding_request_retries_rate_limit_errors(
         attempts += 1
         assert model == "text-embedding-3-small"
         assert input == ["hello"]
-            assert kwargs == {
-                "encoding_format": "float",
-                "drop_params": True,
-                "timeout": 30.0,
-            }
+        assert kwargs == {
+            "encoding_format": "float",
+            "drop_params": True,
+            "timeout": 30.0,
+        }
         if attempts == 1:
             raise Exception("Rate limit exceeded. Please try again in 250ms")
         return SimpleNamespace(data=[{"embedding": [1.0, 2.0]}])
