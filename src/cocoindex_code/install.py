@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import os
 from dataclasses import dataclass
 
 _AUTO_HOST_ORDER = ("codex", "claude", "opencode", "generic")
@@ -151,18 +152,37 @@ def apply_install_plan(plan: InstallPlan) -> dict[str, object]:
             "snippet": plan.snippet,
         }
 
+    # Attempt to remove an existing MCP registration to make re-registration idempotent
+    timeout_sec = int(os.environ.get("COCOINDEX_CLAUDE_MCP_TIMEOUT_SEC", "12"))
     try:
+        # If the host supports a remove command, try removing first (ignore errors).
+        if plan.host in ("claude", "codex"):
+            remove_cmd = [plan.host, "mcp", "remove", plan.server_name]
+            try:
+                subprocess.run(remove_cmd, check=False, capture_output=True, text=True, timeout=timeout_sec)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                # best-effort; continue to add
+                pass
+
         completed = subprocess.run(
             plan.apply_command,
             check=True,
             capture_output=True,
             text=True,
+            timeout=timeout_sec,
         )
     except FileNotFoundError as exc:
         return {
             "success": False,
             "host": plan.host,
             "error": str(exc),
+            "command": plan.apply_command,
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "success": False,
+            "host": plan.host,
+            "error": f"timeout after {timeout_sec}s: {exc}",
             "command": plan.apply_command,
         }
     except subprocess.CalledProcessError as exc:
