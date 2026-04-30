@@ -6,6 +6,7 @@ Uses a session-scoped fixture to avoid re-creating the daemon for each test.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 import threading
@@ -355,3 +356,155 @@ def test_daemon_search_waits_for_load_time_indexing(daemon_sock: str) -> None:
     assert isinstance(resp2, SearchResponse)
     assert resp2.success is True
     conn2.close()
+
+
+@pytest.mark.asyncio
+async def test_stream_search_results_falls_back_to_keyword_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cocoindex_code.daemon as dm
+
+    monkeypatch.setattr(dm, "_DEGRADED_SEARCH_TIMEOUT_S", 0.01)
+
+    class _FakeProject:
+        _project_root = Path("/tmp/project")
+        chunkers_ready = True
+
+        async def search(
+            self,
+            query: str,
+            languages: list[str] | None = None,
+            paths: list[str] | None = None,
+            limit: int = 5,
+            offset: int = 0,
+        ) -> list[object]:
+            await asyncio.sleep(1.0)
+            return []
+
+        def has_queryable_index(self) -> bool:
+            return True
+
+    monkeypatch.setattr(dm, "target_sqlite_db_path", lambda _project_root: Path("/tmp/test.db"))
+    monkeypatch.setattr(
+        dm.hybrid_search,
+        "keyword_search",
+        lambda db_path, query, limit, path_prefixes=None, language=None: [
+            dm.hybrid_search.KeywordHit(
+                file_path="main.py",
+                content="needle",
+                language="python",
+                start_line=1,
+                end_line=1,
+                score=0.9,
+            )
+        ],
+    )
+
+    req = SearchRequest(project_root="/tmp/project", query="needle", request_id="r1", limit=1)
+    responses = [resp async for resp in dm._stream_search_results(_FakeProject(), req)]
+
+    final = responses[-1]
+    assert isinstance(final, SearchResponse)
+    assert final.degraded_mode == "keyword_timeout_fallback"
+    assert final.total_returned == 1
+    assert final.results[0].file_path == "main.py"
+    assert final.results[0].language == "python"
+
+
+@pytest.mark.asyncio
+async def test_project_registry_single_flights_same_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    import cocoindex_code.daemon as dm
+
+    class DummyProject:
+        def __init__(self, root: str) -> None:
+            self.root = root
+            self.closed = False
+            self._index_lock = asyncio.Lock()
+
+        def close(self) -> None:
+            self.closed = True
+
+    registry = dm.ProjectRegistry(embedder=object())
+    create_calls = 0
+
+    async def fake_create(*args: object, **kwargs: object) -> DummyProject:
+        nonlocal create_calls
+        create_calls += 1
+        await asyncio.sleep(0)
+        return DummyProject(str(args[0]))
+
+    monkeypatch.setattr(dm, "load_project_settings", lambda root: type("S", (), {"chunkers": {}})())
+    monkeypatch.setattr(dm, "resolve_chunker_registry", lambda chunkers: {})
+    monkeypatch.setattr(dm.Project, "create", fake_create)
+
+    async def lease_same_root() -> DummyProject:
+        async with registry.lease_project("/tmp/same-root") as project:
+            await asyncio.sleep(0)
+            return project
+
+    project_a, project_b = await asyncio.gather(
+        lease_same_root(),
+        lease_same_root(),
+    )
+
+    assert create_calls == 1
+    assert project_a is project_b
+
+
+@pytest.mark.asyncio
+async def test_project_registry_serializes_shared_db_dir_loads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cocoindex_code.daemon as dm
+
+    class DummyProject:
+        def __init__(self, root: str) -> None:
+            self.root = root
+            self.closed = False
+            self._index_lock = asyncio.Lock()
+
+        def close(self) -> None:
+            self.closed = True
+
+    registry = dm.ProjectRegistry(embedder=object())
+    active_creates = 0
+    max_active_creates = 0
+    created_roots: list[str] = []
+
+    async def fake_create(*args: object, **kwargs: object) -> DummyProject:
+        nonlocal active_creates, max_active_creates
+        active_creates += 1
+        max_active_creates = max(max_active_creates, active_creates)
+        root = str(args[0])
+        created_roots.append(root)
+        await asyncio.sleep(0.05)
+        active_creates -= 1
+        return DummyProject(root)
+
+    monkeypatch.setattr(dm, "load_project_settings", lambda root: type("S", (), {"chunkers": {}})())
+    monkeypatch.setattr(dm, "resolve_chunker_registry", lambda chunkers: {})
+    monkeypatch.setattr(
+        dm,
+        "resolve_db_dir",
+        lambda root: (
+            Path("/tmp/shared-db-dir")
+            if str(root) in {"/tmp/root-a", "/tmp/root-b"}
+            else Path(root)
+        ),
+    )
+    monkeypatch.setattr(dm.Project, "create", fake_create)
+
+    async def lease_root(root: str) -> DummyProject:
+        async with registry.lease_project(root) as project:
+            await asyncio.sleep(0)
+            return project
+
+    first_project, second_project = await asyncio.gather(
+        lease_root("/tmp/root-a"),
+        lease_root("/tmp/root-b"),
+    )
+
+    assert max_active_creates == 1
+    assert set(created_roots) == {"/tmp/root-a", "/tmp/root-b"}
+    assert first_project.root != second_project.root
+    assert len(registry.list_projects()) == 1

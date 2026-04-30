@@ -41,3 +41,38 @@ def make_test_user_settings() -> UserSettings:
 def test_codebase_root() -> Path:
     """Session-scoped test codebase directory."""
     return _TEST_DIR
+
+
+# ---------------------------------------------------------------------------
+# Keep the test suite fast by skipping integration / e2e tests by default.
+# Set RUN_SLOW_TESTS=1 in the environment to run the full suite (including e2e).
+# ---------------------------------------------------------------------------
+RUN_SLOW = os.getenv("RUN_SLOW_TESTS", "0").lower() in ("1", "true", "yes")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip end-to-end and integration tests by default to keep the suite fast.
+
+    Heuristic: tests under directories named 'e2e' or 'e2e_docker', tests whose
+    filename starts with 'test_e2e', or filenames containing 'integration' are
+    considered slow/integration and are skipped unless RUN_SLOW_TESTS=1.
+    """
+    if RUN_SLOW:
+        return
+
+    skip = pytest.mark.skip(
+        reason="Skipping integration/e2e tests by default; set RUN_SLOW_TESTS=1 to run them"
+    )
+    for item in list(items):
+        p = Path(str(item.fspath))
+        parts = [pp.lower() for pp in p.parts]
+        name = p.name.lower()
+
+        if (
+            "e2e" in parts
+            or "e2e_docker" in parts
+            or name.startswith("test_e2e")
+            or "test_integration" in name
+            or "e2e_" in name
+        ):
+            item.add_marker(skip)

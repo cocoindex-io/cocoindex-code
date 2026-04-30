@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 from typing import Any
@@ -16,7 +17,8 @@ from numpy.typing import NDArray
 logger = logging.getLogger(__name__)
 
 _RATE_LIMIT_DELAY_RE = re.compile(r"Please try again in ([0-9.]+)(ms|s)", re.IGNORECASE)
-_MAX_RATE_LIMIT_RETRIES = 6
+_MAX_RATE_LIMIT_RETRIES = int(os.environ.get("COCOINDEX_CODE_EMBED_MAX_RETRIES", "6"))
+_EMBED_TIMEOUT_S = float(os.environ.get("COCOINDEX_CODE_EMBED_TIMEOUT_S", "30"))
 
 
 def _get_rate_limit_delay(exc: Exception, attempt: int) -> float | None:
@@ -56,7 +58,12 @@ class PacedLiteLLMEmbedder(LiteLLMEmbedder):
 
         for attempt in range(_MAX_RATE_LIMIT_RETRIES):
             try:
-                return await litellm.aembedding(model=model, input=input, **kwargs)
+                return await litellm.aembedding(
+                    model=model,
+                    input=input,
+                    timeout=_EMBED_TIMEOUT_S,
+                    **kwargs,
+                )
             except Exception as exc:  # noqa: BLE001
                 delay = _get_rate_limit_delay(exc, attempt)
                 last_exc = exc

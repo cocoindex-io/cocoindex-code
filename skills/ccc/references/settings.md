@@ -109,6 +109,10 @@ exclude_patterns:
 language_overrides:
   - ext: inc             # treat .inc files as PHP
     lang: php
+
+chunkers:
+  - ext: toml
+    module: example_toml_chunker:toml_chunker
 ```
 
 ### Fields
@@ -118,9 +122,42 @@ language_overrides:
 | `include_patterns` | Glob patterns for files to index. Defaults cover common languages (Python, JS/TS, Rust, Go, Java, C/C++, C#, SQL, Shell, Markdown, PHP, Lua, etc.). |
 | `exclude_patterns` | Glob patterns for files/directories to skip. Defaults exclude hidden dirs, `node_modules`, `dist`, `__pycache__`, `vendor`, etc. |
 | `language_overrides` | List of `{ext, lang}` pairs to override language detection for specific file extensions. |
+| `chunkers` | Optional list of `{ext, module}` entries for custom chunking logic. |
 
 ### Editing Tips
 
 - To index additional file types, append glob patterns to `include_patterns` (e.g. `"**/*.proto"`).
 - To exclude a directory, append to `exclude_patterns` (e.g. `"**/generated"`).
 - After editing, run `ccc index` to re-index with the new settings.
+
+### Umbrella Workspace Pattern
+
+For a parent directory that contains multiple sibling repos, keep a single root-level `.cocoindex_code/settings.yml` at the umbrella root and scope patterns explicitly:
+
+```yaml
+include_patterns:
+  - "repo-a/**/*.py"
+  - "repo-b/**/*.ts"
+  - "README.md"
+
+exclude_patterns:
+  - "**/.git/**"
+  - "**/.venv/**"
+  - "archive-mirrors/**"
+```
+
+If your host integration needs help holding that root steady, run commands with `COCOINDEX_CODE_ROOT_PATH=/path/to/workspace`.
+
+## Optional Context Artifacts (`coco-context.yml`)
+
+The `codebase context` commands also look for an optional `coco-context.yml` at the project root:
+
+```yaml
+artifacts:
+  - name: architecture
+    path: docs/architecture.md
+  - name: openapi
+    path: openapi.yaml
+```
+
+If this file is absent, CocoIndex auto-discovers common context files like `README.md`, `docs/`, `docs/adr/`, OpenAPI files, project manifests, and CI workflows.

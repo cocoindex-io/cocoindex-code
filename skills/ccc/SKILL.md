@@ -3,9 +3,11 @@ name: ccc
 description: "This skill should be used when code search is needed (whether explicitly requested or as part of completing a task), when indexing the codebase after changes, or when the user asks about ccc, cocoindex-code, or the codebase index. Trigger phrases include 'search the codebase', 'find code related to', 'update the index', 'ccc', 'cocoindex-code'."
 ---
 
-# ccc - Semantic Code Search & Indexing
+# ccc - Codebase Search & Intelligence
 
-`ccc` is the CLI for CocoIndex Code, providing semantic search over the current codebase and index management.
+`ccc` is the CLI for CocoIndex Code. It provides semantic search, hybrid retrieval, graph-aware inspection, context lookup, and index management for the current codebase.
+
+`cgrep` is the shell-native companion command. Use it first for quick local search, then escalate to `ccc codebase *` when the task needs MCP-native graph, symbol, workflow, or context tools.
 
 ## Ownership
 
@@ -15,9 +17,23 @@ The agent owns the `ccc` lifecycle for the current project — initialization, i
 - **Index freshness**: Keep the index up to date by running `ccc index` (or `ccc search --refresh`) when the index may be stale — e.g., at the start of a session, or after making significant code changes (new files, refactors, renamed modules). There is no need to re-index between consecutive searches if no code was changed in between.
 - **Installation**: If `ccc` itself is not found (command not found), refer to [management.md](references/management.md) for installation instructions and inform the user.
 
-## Searching the Codebase
+## Primary Commands
 
-To perform a semantic search:
+- **Fast local search**
+
+```bash
+cgrep <natural language query>
+cgrep watch
+```
+
+Examples:
+
+```bash
+cgrep where user sessions are managed
+cgrep request validation src/api -m 5 -c
+```
+
+- **Search by meaning**
 
 ```bash
 ccc search <query terms>
@@ -31,7 +47,32 @@ ccc search user authentication flow
 ccc search error handling retry logic
 ```
 
-### Filtering Results
+- **Search with richer retrieval modes**
+
+```bash
+ccc codebase search <query terms> --mode hybrid
+ccc codebase search <query terms> --mode keyword
+ccc codebase search <query terms> --mode grep
+```
+
+- **Review and debugging workflows**
+
+```bash
+ccc codebase workflow review --ref-spec HEAD~3..HEAD
+ccc codebase workflow debug --query "timeout when saving settings"
+ccc codebase workflow onboard
+```
+
+- **Graph and symbol inspection**
+
+```bash
+ccc codebase symbol SessionStore
+ccc codebase impact SessionStore
+ccc codebase flow handle_request
+ccc codebase graph visualize --format html --output graph.html
+```
+
+### Filtering Search Results
 
 - **By language** (`--lang`, repeatable): restrict results to specific languages.
 
@@ -61,6 +102,17 @@ Search results include file paths and line ranges. To explore a result in more d
 
 - Use the editor's built-in file reading capabilities (e.g., the `Read` tool) to load the matched file and read lines around the returned range for full context.
 - When working in a terminal without a file-reading tool, use `sed -n '<start>,<end>p' <file>` to extract a specific line range.
+
+## When to Use `codebase_*`
+
+Prefer `ccc search` for quick semantic lookup. Prefer `ccc codebase *` when you need:
+
+- hybrid vector + keyword retrieval
+- symbol relationships
+- file or symbol blast radius
+- forward flow tracing
+- review/debug/onboarding bundles
+- non-code context from docs and project metadata
 
 ## Settings
 

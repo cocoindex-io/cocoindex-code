@@ -16,6 +16,23 @@ def _l2_to_score(distance: float) -> float:
     return 1.0 - distance * distance / 2.0
 
 
+def _is_glob_pattern(path: str) -> bool:
+    return any(ch in path for ch in "*?[")
+
+
+def _path_matches(path: str, filters: list[str]) -> bool:
+    from fnmatch import fnmatch
+
+    for flt in filters:
+        if _is_glob_pattern(flt):
+            if fnmatch(path, flt):
+                return True
+            continue
+        if path == flt or path.startswith(f"{flt}/"):
+            return True
+    return False
+
+
 def _knn_query(
     conn: sqlite3.Connection,
     embedding_bytes: bytes,
@@ -62,9 +79,15 @@ def _full_scan_query(
         params.extend(languages)
 
     if paths:
-        path_clauses = " OR ".join("file_path GLOB ?" for _ in paths)
-        conditions.append(f"({path_clauses})")
-        params.extend(paths)
+        path_clauses: list[str] = []
+        for path in paths:
+            if _is_glob_pattern(path):
+                path_clauses.append("file_path GLOB ?")
+                params.append(path)
+            else:
+                path_clauses.append("(file_path = ? OR file_path LIKE ?)")
+                params.extend([path, f"{path}/%"])
+        conditions.append(f"({' OR '.join(path_clauses)})")
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     params.extend([limit, offset])
@@ -82,6 +105,65 @@ def _full_scan_query(
     ).fetchall()
 
 
+def _indexed_path_query(
+    conn: sqlite3.Connection,
+    embedding_bytes: bytes,
+    limit: int,
+    offset: int,
+    languages: list[str] | None = None,
+    paths: list[str] | None = None,
+) -> list[tuple[Any, ...]]:
+    """Use ANN retrieval first, then filter candidates by path in Python.
+
+    Prefix-style path filters are common in MCP calls. Running vec_distance_L2
+    over the whole table for these makes filtered search much slower than
+    unfiltered search. This helper preserves low latency by overfetching from
+    the vector index and only falling back to a full scan if the filtered
+    candidate pool stays undersized.
+    """
+    if not paths:
+        return []
+
+    normalized_paths = [path.rstrip("/") for path in paths if path.strip()]
+    if not normalized_paths:
+        return []
+    if any(_is_glob_pattern(path) for path in normalized_paths):
+        return _full_scan_query(conn, embedding_bytes, limit, offset, languages, normalized_paths)
+
+    target = limit + offset
+    candidate_k = max(64, target * 8)
+    max_candidate_k = max(256, target * 64)
+
+    while True:
+        if not languages or len(languages) == 1:
+            lang = languages[0] if languages else None
+            candidates = _knn_query(conn, embedding_bytes, candidate_k, lang)
+        else:
+            candidates = heapq.nsmallest(
+                candidate_k,
+                (
+                    row
+                    for lang in languages
+                    for row in _knn_query(conn, embedding_bytes, candidate_k, lang)
+                ),
+                key=lambda r: r[5],
+            )
+
+        filtered = [row for row in candidates if _path_matches(str(row[0]), normalized_paths)]
+        if len(filtered) >= target:
+            return filtered[offset : offset + limit]
+        if candidate_k >= max_candidate_k or len(candidates) < candidate_k:
+            return _full_scan_query(
+                conn,
+                embedding_bytes,
+                limit,
+                offset,
+                languages,
+                normalized_paths,
+            )
+        candidate_k = min(candidate_k * 2, max_candidate_k)
+
+
 async def query_codebase(
     query: str,
     target_sqlite_db_path: Path,
@@ -90,13 +172,16 @@ async def query_codebase(
     offset: int = 0,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
+    query_embedding: Any | None = None,
 ) -> list[QueryResult]:
     """
     Perform vector similarity search using vec0 KNN index.
 
     Uses sqlite-vec's vec0 virtual table for indexed nearest-neighbor search.
     Language filtering uses vec0 partition keys for exact index-level filtering.
-    Path filtering triggers a full scan with distance computation.
+    Path-prefix filtering uses ANN overfetch + in-memory filtering to avoid
+    full-table distance scans on common MCP usage patterns. True glob filters
+    still fall back to a full scan.
     """
     if not target_sqlite_db_path.exists():
         raise RuntimeError(
@@ -108,14 +193,15 @@ async def query_codebase(
     embedder = env.get_context(EMBEDDER)
     query_params = env.get_context(QUERY_EMBED_PARAMS)
 
-    # Generate query embedding.
-    query_embedding = await embedder.embed(query, **query_params)
+    # Generate query embedding unless already provided by the caller.
+    if query_embedding is None:
+        query_embedding = await embedder.embed(query, **query_params)
 
     embedding_bytes = query_embedding.astype("float32").tobytes()
 
     with db.readonly() as conn:
         if paths:
-            rows = _full_scan_query(conn, embedding_bytes, limit, offset, languages, paths)
+            rows = _indexed_path_query(conn, embedding_bytes, limit, offset, languages, paths)
         elif not languages or len(languages) == 1:
             lang = languages[0] if languages else None
             rows = _knn_query(conn, embedding_bytes, limit + offset, lang)

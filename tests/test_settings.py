@@ -7,9 +7,7 @@ from pathlib import Path
 
 import pytest
 
-# _resolve_chunker_registry is private to daemon.py (single call site), but its
-# error paths (bad format, non-callable) are not exercised by integration tests.
-from cocoindex_code.daemon import _resolve_chunker_registry
+from cocoindex_code.chunking import resolve_chunker_registry
 from cocoindex_code.settings import (
     DEFAULT_EXCLUDED_PATTERNS,
     DEFAULT_INCLUDED_PATTERNS,
@@ -331,15 +329,61 @@ def test_project_settings_with_chunkers(tmp_path: Path) -> None:
 
 def test_resolve_chunker_registry_missing_colon() -> None:
     with pytest.raises(ValueError, match="module.path:callable"):
-        _resolve_chunker_registry([ChunkerMapping(ext="toml", module="no_colon_here")])
+        resolve_chunker_registry([ChunkerMapping(ext="toml", module="no_colon_here")])
 
 
 def test_resolve_chunker_registry_not_callable() -> None:
     # os.path is a module attribute that is a string — not callable.
     with pytest.raises(ValueError, match="not callable"):
-        _resolve_chunker_registry([ChunkerMapping(ext="toml", module="os:sep")])
+        resolve_chunker_registry([ChunkerMapping(ext="toml", module="os:sep")])
+
+def test_resolve_chunker_registry_prefers_project_root_over_shared_root(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    shared_root = tmp_path / "shared"
+    project_root.mkdir()
+    shared_root.mkdir()
+    (project_root / "demo_chunker.py").write_text(
+        "def chunker(path, content):\n    return 'project', []\n",
+        encoding="utf-8",
+    )
+    (shared_root / "demo_chunker.py").write_text(
+        "def chunker(path, content):\n    return 'shared', []\n",
+        encoding="utf-8",
+    )
+
+    registry = resolve_chunker_registry(
+        [ChunkerMapping(ext="toml", module="demo_chunker:chunker")],
+        project_root=project_root,
+        shared_roots=[shared_root],
+    )
+    language, _chunks = registry[".toml"](project_root / "x.toml", "value = 1")
+    assert language == "project"
 
 
+def test_resolve_chunker_registry_builtin_fallback() -> None:
+    registry = resolve_chunker_registry(
+        [ChunkerMapping(ext="prisma", module="prisma_chunker:prisma_chunker")]
+    )
+
+    assert ".prisma" in registry
+    assert callable(registry[".prisma"])
+
+
+def test_resolve_chunker_registry_does_not_mask_transitive_import_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_dir = tmp_path / "chunkers"
+    module_dir.mkdir()
+    (module_dir / "custom_chunker.py").write_text(
+        "import missing_dependency\n\n"
+        "def chunker(path, content):\n"
+        "    return None, []\n"
+    )
+    monkeypatch.syspath_prepend(str(module_dir))
+
+    with pytest.raises(ModuleNotFoundError, match="missing_dependency"):
+        resolve_chunker_registry([ChunkerMapping(ext="txt", module="custom_chunker:chunker")])
 @pytest.mark.usefixtures("_patch_user_dir")
 def test_save_initial_user_settings_round_trip() -> None:
     from cocoindex_code.settings import (
@@ -512,13 +556,17 @@ def test_daemon_runtime_dir_uses_env_var(tmp_path: Path, monkeypatch: pytest.Mon
 def test_daemon_runtime_dir_falls_back_to_user_settings_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When COCOINDEX_CODE_RUNTIME_DIR is unset, falls back to user_settings_dir()."""
+    """When COCOINDEX_CODE_RUNTIME_DIR is unset, derives a workspace-scoped runtime dir."""
     from cocoindex_code._daemon_paths import daemon_runtime_dir
 
     settings_dir = tmp_path / "settings"
+    workspace_root = tmp_path / "workspace"
     monkeypatch.delenv("COCOINDEX_CODE_RUNTIME_DIR", raising=False)
     monkeypatch.setenv("COCOINDEX_CODE_DIR", str(settings_dir))
-    assert daemon_runtime_dir() == settings_dir
+    monkeypatch.setenv("COCOINDEX_CODE_ROOT_PATH", str(workspace_root))
+    runtime_dir = daemon_runtime_dir()
+    assert runtime_dir.parent == settings_dir / "ws"
+    assert len(runtime_dir.name) == 12
 
 
 # ---------------------------------------------------------------------------

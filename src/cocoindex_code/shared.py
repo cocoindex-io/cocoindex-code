@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import logging
+import os
 import pathlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Union
@@ -23,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 SBERT_PREFIX = "sbert/"
 DEFAULT_LITELLM_MIN_INTERVAL_MS = 5
+_HEALTHCHECK_TIMEOUT_S = float(os.environ.get("COCOINDEX_CODE_HEALTHCHECK_TIMEOUT_S", "12"))
 
 # Type alias
 Embedder = Union["SentenceTransformerEmbedder", "LiteLLMEmbedder"]
@@ -67,7 +70,10 @@ async def check_embedding(
     """
     kwargs = dict(params) if params else {}
     try:
-        vec = await embedder.embed("hello world", **kwargs)
+        vec = await asyncio.wait_for(
+            embedder.embed("hello world", **kwargs),
+            timeout=_HEALTHCHECK_TIMEOUT_S,
+        )
         return EmbeddingCheckResult(dim=len(vec), error=None)
     except Exception as e:
         msg = " ".join(f"{type(e).__name__}: {e}".splitlines())

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import numpy as np
@@ -118,3 +119,16 @@ async def test_check_embedding_no_params_forwards_empty() -> None:
     stub = _StubOkEmbedder()
     await check_embedding(stub)
     assert stub.last_kwargs == {}
+
+
+async def test_check_embedding_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _SlowEmbedder:
+        async def embed(self, text: str, **kwargs: Any) -> Any:
+            await asyncio.sleep(1.0)
+            return np.zeros(384, dtype=np.float32)
+
+    monkeypatch.setattr("cocoindex_code.shared._HEALTHCHECK_TIMEOUT_S", 0.01)
+    result = await check_embedding(_SlowEmbedder())
+    assert result.dim is None
+    assert result.error is not None
+    assert result.error.startswith("TimeoutError:")
