@@ -25,11 +25,11 @@ async def test_run_embedding_request_retries_rate_limit_errors(
         attempts += 1
         assert model == "text-embedding-3-small"
         assert input == ["hello"]
-        assert kwargs == {
-            "encoding_format": "float",
-            "drop_params": True,
-            "timeout": 10.0,
-        }
+            assert kwargs == {
+                "encoding_format": "float",
+                "drop_params": True,
+                "timeout": 30.0,
+            }
         if attempts == 1:
             raise Exception("Rate limit exceeded. Please try again in 250ms")
         return SimpleNamespace(data=[{"embedding": [1.0, 2.0]}])
@@ -61,7 +61,7 @@ async def test_run_embedding_request_applies_min_interval_between_requests(
         assert kwargs == {
             "encoding_format": "float",
             "drop_params": True,
-            "timeout": 10.0,
+            "timeout": 30.0,
         }
         inputs_seen.append(input)
         return SimpleNamespace(data=[{"embedding": [1.0, 2.0]}])
@@ -97,7 +97,7 @@ async def test_run_embedding_request_forwards_timeout(
     embedder = PacedLiteLLMEmbedder("text-embedding-3-small")
     await embedder.run_embedding_request(input=["hello"])
 
-    assert seen_kwargs["timeout"] == pytest.approx(10.0)
+    assert seen_kwargs["timeout"] == pytest.approx(30.0)
     assert seen_kwargs["encoding_format"] == "float"
     assert seen_kwargs["drop_params"] is True
 
@@ -122,6 +122,6 @@ async def test_run_embedding_request_omits_encoding_format_for_native_providers(
     embedder = PacedLiteLLMEmbedder(model_name)
     await embedder.run_embedding_request(input=["hello"])
 
-    assert seen_kwargs["timeout"] == pytest.approx(10.0)
+    assert seen_kwargs["timeout"] == pytest.approx(30.0)
     assert "encoding_format" not in seen_kwargs
     assert "drop_params" not in seen_kwargs
