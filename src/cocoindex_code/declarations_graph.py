@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, cast
 
 from .declarations_db import InheritEdge, _escape_like, _normalize_path
 
@@ -235,11 +235,17 @@ def job_finish(
 
 
 def query_latest_job(conn: sqlite3.Connection) -> sqlite3.Row | None:
-    return conn.execute("SELECT * FROM jobs ORDER BY updated_at DESC LIMIT 1").fetchone()
+    return cast(
+        sqlite3.Row | None,
+        conn.execute("SELECT * FROM jobs ORDER BY updated_at DESC LIMIT 1").fetchone(),
+    )
 
 
 def query_job_by_id(conn: sqlite3.Connection, job_id: str) -> sqlite3.Row | None:
-    return conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    return cast(
+        sqlite3.Row | None,
+        conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone(),
+    )
 
 
 def query_find_callers_transitive(
@@ -345,7 +351,10 @@ def query_callees_from_decl(
 
 
 def query_declaration_by_id(conn: sqlite3.Connection, decl_id: int) -> sqlite3.Row | None:
-    return conn.execute("SELECT * FROM declarations WHERE id = ?", (decl_id,)).fetchone()
+    return cast(
+        sqlite3.Row | None,
+        conn.execute("SELECT * FROM declarations WHERE id = ?", (decl_id,)).fetchone(),
+    )
 
 
 def query_declaration_ids(

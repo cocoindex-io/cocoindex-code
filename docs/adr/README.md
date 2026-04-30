@@ -83,9 +83,8 @@ Addresses cache staleness in multi-daemon scenarios. Explores TTL, event-driven,
 
 ## Related Documentation
 
-- **[FORK_STRATEGY.md](../../FORK_STRATEGY.md)** — Fork versioning and maintenance
-- **[README_FORK.md](../../README_FORK.md)** — Fork overview and quick start
-- **[MCP_TOOLS.md](../../MCP_TOOLS.md)** — MCP tool reference
+- **[FORK_STRATEGY.md](../FORK_STRATEGY.md)** — Fork versioning and maintenance
+- **[../../README.md](../../README.md)** — Project overview and quick start
 
 ## Contributing
 

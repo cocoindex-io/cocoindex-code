@@ -10,10 +10,11 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import typer as _typer
 
+from ._matchers import SKIP_DIRS
 from .client import DaemonStartError
 from .protocol import DoctorCheckResult, IndexingProgress, ProjectStatusResponse, SearchResponse
 from .settings import (
@@ -32,6 +33,11 @@ from .settings import (
     target_sqlite_db_path,
     user_settings_path,
 )
+
+if TYPE_CHECKING:
+    from pathspec import PathSpec
+
+    from .multi_repo import MultiRepoOrchestrator
 
 app = _typer.Typer(
     name="ccc",
@@ -608,7 +614,7 @@ def index() -> None:
 
 
 # ------------------------- Multi-repo & Config CLI -------------------------
-def _load_workspace(config_path: str | None):
+def _load_workspace(config_path: str | None) -> tuple[MultiRepoOrchestrator, Path]:
     from .config import load_codebase_config
     from .multi_repo import MultiRepoOrchestrator
 
@@ -798,41 +804,29 @@ def _workspace_watch_start(config_path: Path, interval: float) -> None:
     _typer.echo(f"Log: {log_file}")
 
 
-def _compile_pathspec(patterns: list[str]):
+def _compile_pathspec(patterns: list[str]) -> PathSpec:
     import pathspec
 
     return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
 
 
-def _workspace_file_snapshot(orchestrator: object) -> dict[str, tuple[int, int]]:
+def _workspace_file_snapshot(orchestrator: MultiRepoOrchestrator) -> dict[str, tuple[int, int]]:
     from .config import RepoType
 
     snapshot: dict[str, tuple[int, int]] = {}
-    common_prune_dirs = {
-        ".git",
-        ".cocoindex_code",
-        ".venv",
-        "node_modules",
-        "dist",
-        "build",
-        "out",
-        ".next",
-        ".turbo",
-        ".cache",
-        "__pycache__",
-    }
-    for repo in getattr(orchestrator, "config").repos:
-        if not getattr(repo, "enabled", True) or repo.type != RepoType.local:
+    common_prune_dirs = SKIP_DIRS | {"out", ".next", ".turbo", ".cache"}
+    for repo in orchestrator.config.repos:
+        if not repo.enabled or repo.type != RepoType.local:
             continue
         root = orchestrator._resolve_local_repo_path(repo)  # noqa: SLF001
         if not root.exists():
             continue
         settings = orchestrator._coalesced_repo_settings(repo)  # noqa: SLF001
         include_patterns = (
-            settings.get("include_patterns") or getattr(orchestrator, "config").include_patterns
+            settings.get("include_patterns") or orchestrator.config.include_patterns
         )
         exclude_patterns = (
-            settings.get("exclude_patterns") or getattr(orchestrator, "config").exclude_patterns
+            settings.get("exclude_patterns") or orchestrator.config.exclude_patterns
         )
         include_spec = _compile_pathspec(list(include_patterns or ["**/*"]))
         exclude_spec = _compile_pathspec(list(exclude_patterns or []))
@@ -890,12 +884,11 @@ def _workspace_watch_foreground(config_path: str | None, interval: float) -> Non
         _typer.echo("Stopped workspace watcher.")
 
 
-def _enabled_repo_ids(orchestrator: object) -> list[str]:
-    repos = getattr(orchestrator, "config").repos
-    return [repo.id for repo in repos if getattr(repo, "enabled", True)]
+def _enabled_repo_ids(orchestrator: MultiRepoOrchestrator) -> list[str]:
+    return [repo.id for repo in orchestrator.config.repos if repo.enabled]
 
 
-def _default_repo_id(orchestrator: object, repo_id: str | None) -> str:
+def _default_repo_id(orchestrator: MultiRepoOrchestrator, repo_id: str | None) -> str:
     if repo_id:
         return repo_id
     repo_ids = _enabled_repo_ids(orchestrator)
@@ -905,8 +898,8 @@ def _default_repo_id(orchestrator: object, repo_id: str | None) -> str:
     return repo_ids[0]
 
 
-def _workspace_declarations_db(orchestrator: object) -> Path:
-    unified_root = getattr(orchestrator, "unified_root")
+def _workspace_declarations_db(orchestrator: MultiRepoOrchestrator) -> Path:
+    unified_root = orchestrator.unified_root
     declarations_db = unified_root / ".cocoindex_code" / "declarations.db"
     if declarations_db.exists():
         return declarations_db
@@ -920,10 +913,10 @@ def _project_graph_db(project_root: Path) -> Path:
     return target_sqlite_db_path(project_root)
 
 
-def _configured_repo_root(orchestrator: object, repo_id: str) -> Path:
+def _configured_repo_root(orchestrator: MultiRepoOrchestrator, repo_id: str) -> Path:
     from .config import RepoType
 
-    repo = getattr(orchestrator, "config").repo_by_id(repo_id)
+    repo = orchestrator.config.repo_by_id(repo_id)
     if repo is None:
         _typer.echo(f"Unknown repo id: {repo_id}", err=True)
         raise _typer.Exit(code=1)
@@ -931,10 +924,10 @@ def _configured_repo_root(orchestrator: object, repo_id: str) -> Path:
     if repo.type == RepoType.local:
         root = Path(repo.path or ".")
         if not root.is_absolute():
-            root = getattr(orchestrator, "repo_root_hint") / root
+            root = orchestrator.repo_root_hint / root
         return root.resolve()
 
-    return (getattr(orchestrator, "unified_root") / repo.id).resolve()
+    return (orchestrator.unified_root / repo.id).resolve()
 
 
 def _print_json(data: object) -> None:
@@ -1263,6 +1256,7 @@ def codebase_search(
 
     from . import client as _client
     from . import hybrid_search as _hybrid_search
+    from .hybrid_search import VectorResultDict
 
     db_path = target_sqlite_db_path(project_root)
     _hybrid_search.ensure_fts_index(db_path, force_rebuild=refresh)
@@ -1270,7 +1264,7 @@ def codebase_search(
         db_path,
         query_str,
         limit=limit,
-        path_prefix=path,
+        path_prefixes=[path] if path else None,
         language=lang[0] if lang else None,
     )
     if mode_value == "keyword":
@@ -1284,7 +1278,7 @@ def codebase_search(
         paths=[path] if path else None,
         limit=limit,
     )
-    vector_results = [
+    vector_results: list[VectorResultDict] = [
         {
             "file_path": result.file_path,
             "language": result.language,
@@ -1357,33 +1351,34 @@ def codebase_graph_circular(
 def codebase_graph_visualize(
     repo: str | None = _typer.Option(None, "--repo", help="Optional repository id"),
     limit: int = _typer.Option(120, "--limit", min=1, max=500),
+    format: str = _typer.Option("mermaid", "--format", help="mermaid or html"),
+    output: str | None = _typer.Option(
+        None,
+        "--output",
+        help="Optional file path to write the rendered graph to.",
+    ),
 ) -> None:
-    """Return a Mermaid dependency graph."""
-    from .declarations_db import db_connection
+    """Return a dependency graph as Mermaid or self-contained HTML."""
+    from .mcp_handlers import codebase_graph_visualize_tool
 
-    db_path = _project_graph_db(require_project_root())
-    try:
-        with db_connection(db_path) as conn:
-            rows = conn.execute(
-                """
-                SELECT DISTINCT c.file_path AS from_file, d.file_path AS to_file
-                FROM calls c
-                JOIN declarations d ON d.id = c.callee_decl_id
-                WHERE c.callee_decl_id IS NOT NULL
-                  AND c.file_path != d.file_path
-                  AND (? IS NULL OR c.repo_id = ?)
-                LIMIT ?
-                """,
-                (repo, repo, limit),
-            ).fetchall()
-        lines = ["graph TD"]
-        for row in rows:
-            src = str(row["from_file"]).replace("-", "_").replace("/", "_").replace(".", "_")
-            dst = str(row["to_file"]).replace("-", "_").replace("/", "_").replace(".", "_")
-            lines.append(f'  {src}["{row["from_file"]}"] --> {dst}["{row["to_file"]}"]')
-        _print_json({"success": True, "mode": "mermaid", "mermaid": "\n".join(lines)})
-    except Exception as exc:
-        _print_json({"success": False, "error": str(exc)})
+    result = codebase_graph_visualize_tool(
+        _project_graph_db(require_project_root()),
+        repo_id=repo,
+        limit=limit,
+        format=format.lower(),
+    )
+    if result.get("success") and output:
+        body = result.get("html") if result.get("mode") == "html" else result.get("mermaid")
+        if isinstance(body, str):
+            output_path = Path(output).expanduser()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(body, encoding="utf-8")
+            result["output"] = str(output_path.resolve())
+            result["message"] = (
+                f"Wrote {result.get('mode', 'graph')} graph to {output_path.resolve()}"
+            )
+    _print_json(result)
+    if not result.get("success", False):
         raise _typer.Exit(code=1)
 
 
@@ -1546,6 +1541,40 @@ def codebase_context_remove() -> None:
         raise _typer.Exit(code=1)
 
 
+@codebase_app.command("workflow")
+def codebase_workflow(
+    workflow: str = _typer.Argument(..., help="review, debug, onboard, or architecture"),
+    query: str | None = _typer.Option(None, "--query", help="Search query for debug workflow"),
+    target: str | None = _typer.Option(None, "--target", help="Target symbol for debug workflow"),
+    ref_spec: str = _typer.Option("HEAD", "--ref-spec", help="Git ref/range for review workflow"),
+    path_prefix: str | None = _typer.Option(
+        None, "--path-prefix", help="Limit review workflow to a path prefix"
+    ),
+    top_n: int = _typer.Option(20, "--top-n", min=1, max=200),
+    limit: int = _typer.Option(10, "--limit", min=1, max=100),
+    format: str = _typer.Option("mermaid", "--format", help="Diagram format for architecture"),
+) -> None:
+    """Run a packaged review/debug/onboard/architecture workflow."""
+    from .workflows import codebase_workflow_tool
+
+    project_root = require_project_root()
+    result = codebase_workflow_tool(
+        project_root,
+        _project_graph_db(project_root),
+        workflow=workflow,
+        query=query,
+        target=target,
+        ref_spec=ref_spec,
+        path_prefix=path_prefix,
+        top_n=top_n,
+        limit=limit,
+        diagram_format=format.lower(),
+    )
+    _print_json(result)
+    if not result.get("success", False):
+        raise _typer.Exit(code=1)
+
+
 @codebase_app.command("health")
 @_catch_daemon_start_error
 def codebase_health() -> None:
@@ -1616,6 +1645,7 @@ def codebase_about() -> None:
                 "codebase search",
                 "codebase status",
                 "codebase graph *",
+                "codebase workflow",
                 "codebase impact",
                 "codebase flow",
                 "codebase symbol",

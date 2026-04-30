@@ -7,9 +7,7 @@ from pathlib import Path
 
 import pytest
 
-# _resolve_chunker_registry is private to daemon.py (single call site), but its
-# error paths (bad format, non-callable) are not exercised by integration tests.
-from cocoindex_code.daemon import _resolve_chunker_registry
+from cocoindex_code.chunking import resolve_chunker_registry
 from cocoindex_code.settings import (
     DEFAULT_EXCLUDED_PATTERNS,
     DEFAULT_INCLUDED_PATTERNS,
@@ -331,13 +329,13 @@ def test_project_settings_with_chunkers(tmp_path: Path) -> None:
 
 def test_resolve_chunker_registry_missing_colon() -> None:
     with pytest.raises(ValueError, match="module.path:callable"):
-        _resolve_chunker_registry([ChunkerMapping(ext="toml", module="no_colon_here")])
+        resolve_chunker_registry([ChunkerMapping(ext="toml", module="no_colon_here")])
 
 
 def test_resolve_chunker_registry_not_callable() -> None:
     # os.path is a module attribute that is a string — not callable.
     with pytest.raises(ValueError, match="not callable"):
-        _resolve_chunker_registry([ChunkerMapping(ext="toml", module="os:sep")])
+        resolve_chunker_registry([ChunkerMapping(ext="toml", module="os:sep")])
 
 
 @pytest.mark.usefixtures("_patch_user_dir")

@@ -45,6 +45,14 @@ Run from the root directory of the project to index:
 ccc init
 ```
 
+For an umbrella workspace that contains multiple sibling repos, treat the umbrella directory as the project root and keep one root-level `.cocoindex_code/settings.yml`. If a host wrapper or container shell needs the root pinned explicitly, set:
+
+```bash
+COCOINDEX_CODE_ROOT_PATH=/path/to/workspace
+```
+
+Then run `ccc` normally from that workspace context. A custom `setup.sh` or `watch.sh` layer is not required for this pattern.
+
 **First run (global settings don't exist yet)** — `ccc init` prompts interactively for the embedding provider (sentence-transformers / litellm) and model, then runs a one-off test embed via the daemon to confirm the model works. Accept the defaults for the sentence-transformers path, or pick litellm and enter a model identifier.
 
 **Subsequent runs** (global settings already exist) — prompts are skipped; only project settings and `.gitignore` are set up.

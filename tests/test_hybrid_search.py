@@ -79,3 +79,36 @@ def test_ensure_fts_refreshes_same_row_count_content(tmp_path):
 
     clean = ensure_fts_index(db_path)
     assert clean["rebuilt"] is False
+
+
+def test_keyword_search_accepts_multiple_path_prefixes(tmp_path):
+    from cocoindex_code.hybrid_search import ensure_fts_index, keyword_search
+
+    db_path = tmp_path / "target_sqlite.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE code_chunks_vec (
+                file_path TEXT,
+                content TEXT,
+                language TEXT,
+                start_line INTEGER,
+                end_line INTEGER
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO code_chunks_vec VALUES (?, ?, ?, ?, ?)",
+            [
+                ("src/app.py", "deploy spinner", "python", 1, 1),
+                ("scripts/build.py", "deploy table", "python", 1, 1),
+                ("docs/readme.md", "deploy logs", "markdown", 1, 1),
+            ],
+        )
+
+    ensure_fts_index(db_path)
+    hits = keyword_search(db_path, "deploy", path_prefixes=["src", "scripts"], limit=10)
+    assert [hit.file_path for hit in hits] == ["scripts/build.py", "src/app.py"] or [
+        hit.file_path for hit in hits
+    ] == ["src/app.py", "scripts/build.py"]
+    assert all(not hit.file_path.startswith("docs/") for hit in hits)

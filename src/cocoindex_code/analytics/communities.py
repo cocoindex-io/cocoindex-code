@@ -20,7 +20,7 @@ _SPLIT_THRESHOLD = 25
 def _build_igraph(conn: sqlite3.Connection, repo_id: str | None) -> tuple[Any, list[int]]:
     """Return (igraph.Graph, node_ids) where position i → declaration id."""
     try:
-        import igraph  # type: ignore[import-untyped]
+        import igraph
     except ImportError as exc:
         raise ImportError("igraph required: uv add igraph") from exc
 
@@ -57,7 +57,7 @@ def _build_igraph(conn: sqlite3.Connection, repo_id: str | None) -> tuple[Any, l
 
 def _detect_leiden(g: Any, node_list: list[int], level: int) -> list[list[int]]:
     try:
-        import leidenalg  # type: ignore[import-untyped]
+        import leidenalg
     except ImportError:
         return _detect_nx_fallback(g, node_list, level)
 
@@ -108,7 +108,7 @@ def _split_community(
         return [(cid, mid, level) for mid in member_ids]
 
     try:
-        import igraph  # type: ignore[import-untyped]
+        import igraph
     except ImportError:
         cid = community_id_counter[0]
         community_id_counter[0] += 1

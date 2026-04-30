@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import logging
 import os
 import signal
@@ -23,7 +22,7 @@ from ._daemon_paths import (
     daemon_socket_path,
 )
 from ._version import __version__
-from .chunking import ChunkerFn as _ChunkerFn
+from .chunking import resolve_chunker_registry
 from .embedder_params import resolve_embedder_params
 from .project import Project
 from .protocol import (
@@ -56,7 +55,6 @@ from .protocol import (
     encode_response,
 )
 from .settings import (
-    ChunkerMapping,
     UserSettings,
     format_path_for_display,
     get_host_path_mappings,
@@ -90,25 +88,6 @@ def _build_backward_compat_warning(
         f"    query_params:\n"
         f"      prompt_name: query\n"
     )
-
-
-def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> dict[str, _ChunkerFn]:
-    """Resolve ``ChunkerMapping`` settings entries to a ``{suffix: fn}`` dict.
-
-    Each ``mapping.module`` must be a ``"module.path:callable"`` string importable
-    from the current environment.
-    """
-    registry: dict[str, _ChunkerFn] = {}
-    for cm in mappings:
-        module_path, _, attr = cm.module.partition(":")
-        if not attr:
-            raise ValueError(f"chunker module {cm.module!r} must use 'module.path:callable' format")
-        mod = importlib.import_module(module_path)
-        fn = getattr(mod, attr)
-        if not callable(fn):
-            raise ValueError(f"chunker {cm.module!r}: {attr!r} is not callable")
-        registry[f".{cm.ext}"] = fn
-    return registry
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +130,7 @@ class ProjectRegistry:
         if project_root not in self._projects:
             root = Path(project_root)
             project_settings = load_project_settings(root)
-            chunker_registry = _resolve_chunker_registry(project_settings.chunkers)
+            chunker_registry = resolve_chunker_registry(project_settings.chunkers)
             project = await Project.create(
                 root,
                 self._embedder,
@@ -368,7 +347,7 @@ async def _check_file_walk(project_root_str: str) -> DoctorCheckResult:
 
     from cocoindex.resources.file import PatternFilePathMatcher
 
-    from .indexer import GitignoreAwareMatcher
+    from ._matchers import GitignoreAwareMatcher
     from .settings import load_gitignore_spec, load_project_settings
 
     project_root = Path(project_root_str)
@@ -479,9 +458,10 @@ async def _dispatch(
 
         if isinstance(req, SearchRequest):
             project = await registry.get_project(req.project_root)
-            await project.ensure_indexing_started()
+            if not project.has_queryable_index():
+                await project.ensure_indexing_started()
 
-            if project.should_wait_for_indexing:
+            if project.should_wait_for_indexing and not project.has_queryable_index():
                 return _search_with_wait(project, req)
 
             results = await project.search(
@@ -500,7 +480,6 @@ async def _dispatch(
 
         if isinstance(req, ProjectStatusRequest):
             project = await registry.get_project(req.project_root)
-            await project.ensure_indexing_started()
             return project.get_status()
 
         if isinstance(req, DaemonStatusRequest):

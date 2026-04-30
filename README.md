@@ -3,14 +3,15 @@
 </p>
 
 
-<h1 align="center">AST-based semantic code search that just works</h1>
+<h1 align="center">Codebase intelligence that actually helps agents</h1>
 
 ![effect](https://github.com/user-attachments/assets/cb3a4cae-0e1f-49c4-890b-7bb93317ab60)
 
 
-A lightweight, effective **(AST-based)** semantic code search tool for your codebase. Built on [CocoIndex](https://github.com/cocoindex-io/cocoindex) — a Rust-based ultra performant data transformation engine. Use it from the CLI, or integrate with Claude, Codex, Cursor — any coding agent — via [Skill](#skill-recommended) or [MCP](#mcp-server).
+A lightweight, effective **AST-aware codebase intelligence** tool for your repository. Built on [CocoIndex](https://github.com/cocoindex-io/cocoindex) — a Rust-based ultra performant data transformation engine. Use it from the CLI, or integrate with Claude, Codex, Cursor, and other coding agents via [Skill](#skill-recommended) or [MCP](#mcp-server).
 
 - Instant token saving by 70%.
+- Hybrid semantic + keyword retrieval, graph-aware workflows, and review context.
 - **1 min setup** — install and go, zero config needed!
 
 <div align="center">
@@ -41,6 +42,15 @@ A lightweight, effective **(AST-based)** semantic code search tool for your code
 
 
 ## Get Started — zero config, let's go!
+
+### What you get
+
+- Hybrid semantic, keyword, and grep-backed code search
+- Symbol, call-flow, and blast-radius analysis
+- Review-oriented workflows for changed code
+- Auto-discovered non-code context like docs, ADRs, and OpenAPI files
+- Mermaid or self-contained HTML graph output
+- Local CLI and MCP surfaces built for coding agents
 
 ### Install
 
@@ -86,6 +96,19 @@ ccc install --host generic  # prints a generic MCP JSON snippet
 ```
 
 `ccc install` now prints host-specific next steps as JSON, including the matching `cgrep` and MCP usage flow for Claude Code and Codex.
+
+### Multi-Repo Or Umbrella Workspace
+
+If you want one index to cover a parent directory that contains multiple sibling repos, initialize and run `ccc` from that parent root and keep a single root-level `.cocoindex_code/settings.yml`.
+
+When a host wrapper needs to force that root explicitly, set `COCOINDEX_CODE_ROOT_PATH`:
+
+```bash
+env COCOINDEX_CODE_ROOT_PATH=/path/to/workspace ccc status
+env COCOINDEX_CODE_ROOT_PATH=/path/to/workspace ccc mcp
+```
+
+Use this pattern when you need a stable umbrella root for MCP and shell usage. You do not need a separate custom bootstrap or watcher stack just to make a multi-repo workspace work.
 
 ## Coding Agent Integration
 
@@ -176,34 +199,31 @@ Or use opencode.json:
 ```
 </details>
 
-Once configured, the agent automatically decides when semantic code search is helpful — finding code by description, exploring unfamiliar codebases, fuzzy/conceptual matches, or locating implementations without knowing exact names.
+Once configured, the agent automatically decides when codebase intelligence is helpful — search, review, impact analysis, graph exploration, context lookup, and architecture workflows.
 
 > **Note:** The `cocoindex-code` command (without subcommand) still works as an MCP server for backward compatibility. It auto-creates settings from environment variables on first run.
 
 <details>
 <summary>MCP Tool Reference</summary>
 
-When running as an MCP server (`ccc mcp`), the following tool is exposed:
+When running as an MCP server (`ccc mcp`), the server exposes a codebase-native surface:
 
-**`search`** — Search the codebase using semantic similarity.
+**Core tools**
 
-```
-search(
-    query: str,                          # Natural language query or code snippet
-    limit: int = 5,                      # Maximum results (1-100)
-    offset: int = 0,                     # Pagination offset
-    refresh_index: bool = True,          # Refresh index before querying
-    languages: list[str] | None = None,  # Filter by language (e.g. ["python", "typescript"])
-    paths: list[str] | None = None,      # Filter by path glob (e.g. ["src/utils/*"])
-)
-```
+- `search` — semantic/vector search
+- `codebase_search` — hybrid/vector/keyword/grep search
+- `codebase_graph_*` — file/symbol graph stats, query, circular deps, visualization
+- `codebase_symbol` / `codebase_symbols` — symbol detail and lookup
+- `codebase_impact` / `codebase_flow` — blast radius and call-flow tracing
+- `codebase_context*` — configured or auto-discovered non-code context search
+- `codebase_workflow` — packaged `review`, `debug`, `onboard`, and `architecture` workflows
 
-Returns matching code chunks with file path, language, code content, line numbers, and similarity score.
+`search(...)` remains available as the lean semantic-search entrypoint. Use `codebase_*` tools when you want graph and workflow context.
 </details>
 
 ## Manual CLI Usage
 
-You can also use the CLI directly — useful for manual control, running indexing after changing settings, checking status, or searching outside an agent.
+You can also use the CLI directly — useful for manual control, running indexing after changes, checking status, reviewing diffs, or exploring architecture outside an agent.
 
 ```bash
 cgrep "authentication logic"            # local hybrid search, auto-bootstraps at repo root
@@ -211,11 +231,35 @@ cgrep watch                             # keep the local index warm as files cha
 ccc init                                # initialize project (creates settings)
 ccc index                               # build the index
 ccc search "authentication logic"       # search!
+ccc codebase workflow review            # review-oriented changed-symbol context
+ccc codebase graph visualize --format html --output graph.html
 ```
 
 The background daemon starts automatically on first use.
 
 > **Tip:** `ccc index` auto-initializes if you haven't run `ccc init` yet, so you can skip straight to indexing.
+
+### Typical flows
+
+```bash
+# Local shell workflow
+cgrep "where user sessions are persisted"
+
+# Search by meaning
+ccc search "where user sessions are persisted"
+
+# Review a branch or commit range
+ccc codebase workflow review --ref-spec HEAD~3..HEAD
+
+# Debug a concept or symptom
+ccc codebase workflow debug --query "hybrid search ranking"
+
+# Get oriented in a new repo
+ccc codebase workflow onboard
+
+# Export a shareable graph
+ccc codebase graph visualize --format html --output graph.html
+```
 
 ### CLI Reference
 
@@ -235,6 +279,20 @@ The background daemon starts automatically on first use.
 | `ccc daemon restart` | Restart the background daemon |
 | `ccc daemon stop` | Stop the daemon |
 
+### Codebase Namespace
+
+The `codebase` namespace is where the higher-signal repository intelligence lives:
+
+| Command | Description |
+|---------|-------------|
+| `ccc codebase search` | Hybrid/vector/keyword/grep search |
+| `ccc codebase symbol` / `symbols` | Look up definitions, callers, and callees |
+| `ccc codebase impact` | Blast radius for a file or symbol |
+| `ccc codebase flow` | Entry points and forward call flow |
+| `ccc codebase graph *` | Graph stats, per-file query, circular deps, and visualization |
+| `ccc codebase context *` | Search configured or auto-discovered context artifacts |
+| `ccc codebase workflow *` | `review`, `debug`, `onboard`, and `architecture` flows |
+
 ### Search Options
 
 ```bash
@@ -250,6 +308,60 @@ ccc search --refresh database schema                 # update index first, then 
 
 By default, `ccc search` scopes results to your current working directory (relative to the project root). Use `--path` to override.
 `cgrep` behaves similarly for path scoping, but defaults to hybrid retrieval and bootstraps from the nearest git root when no `.cocoindex_code/settings.yml` exists yet.
+
+### Codebase Workflows
+
+The `codebase` namespace packages the graph and review primitives into higher-level workflows:
+
+```bash
+ccc codebase workflow review --ref-spec HEAD~3..HEAD
+ccc codebase workflow debug --query "timeout when saving user settings"
+ccc codebase workflow onboard
+ccc codebase workflow architecture --format html
+```
+
+These workflows wrap the lower-level `impact`, `graph`, `symbol`, `flow`, and context commands into one response that is easier to hand to an agent or teammate.
+
+Use them when you want the tool to return a useful bundle of context instead of a single primitive:
+
+- `review` maps git changes to risk-ranked declarations
+- `debug` combines hybrid search, symbol lookup, and optional flow tracing
+- `onboard` gives a fast orientation pack for a new engineer or agent session
+- `architecture` combines graph analytics and graph rendering
+
+### Context Artifacts
+
+`ccc codebase context list` now works even without a `coco-context.yml`. If no config exists, CocoIndex auto-discovers common non-code artifacts such as:
+
+- `README.md`
+- `docs/`
+- `docs/adr/`
+- OpenAPI files
+- `.github/workflows/`
+- `pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`, `Dockerfile`
+
+Add `coco-context.yml` when you want to override or extend the auto-discovered set.
+
+Example:
+
+```yaml
+artifacts:
+  - name: architecture
+    path: docs/architecture.md
+  - name: openapi
+    path: openapi.yaml
+```
+
+### Graph Visualization
+
+`ccc codebase graph visualize` supports both Mermaid and a self-contained HTML explorer:
+
+```bash
+ccc codebase graph visualize --format mermaid
+ccc codebase graph visualize --format html --output graph.html
+```
+
+The HTML mode renders a shareable, client-side dependency explorer with search and drag-to-rearrange nodes.
 
 ## Docker
 
@@ -459,6 +571,7 @@ docker build -t cocoindex-code:local -f docker/Dockerfile .
 - **Multi-Language Support**: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++, C#, SQL, Shell, and more.
 - **Embedded**: Portable and just works, no database setup required!
 - **Flexible Embeddings**: Local SentenceTransformers via the `[full]` extra (free, no API key!) or 100+ cloud providers via LiteLLM.
+- **Codebase Intelligence**: Search, graph exploration, impact analysis, workflows, and non-code context lookup from the same index.
 
 ## Configuration
 
@@ -817,6 +930,94 @@ If you previously configured `cocoindex-code` via environment variables, the `co
 
 If you need help with remote setup, please email our maintainer linghua@cocoindex.io, happy to help!
 
+## LanceDB Indexer (`coco-lance`)
+
+`coco-lance` produces a portable **LanceDB** semantic index — one table per language, no daemon required. It complements `ccc` (which uses a SQLite/vec0 backend with a background daemon); both can coexist in the same project.
+
+### Install
+
+```bash
+uv tool install --upgrade 'cocoindex-code[lancedb]'
+# or, inside an existing venv:
+uv sync --extra lancedb
+```
+
+### Single-language target (Mode A)
+
+```bash
+coco-lance /path/to/my-ios-app --lang swift --output ~/indices/myapp/lance
+coco-lance /path/to/backend    --lang python --output ~/indices/backend/lance
+```
+
+Available `--lang` values: `swift`, `python`, `go`, `rust`, `javascript` (covers JS/TS/JSX/TSX).
+
+The index is written to `--output` (LanceDB directory). A state directory for incremental tracking is created automatically at `<output-parent>/.coco_state` — no `COCOINDEX_DB` env var needed.
+
+### Multi-language / multi-repo (Mode B)
+
+Create a `coco-config.yml` at the root of your project:
+
+```yaml
+repos:
+  - id: my-service
+    type: local
+    path: .
+    settings: scripts/cocoindex/my-settings.yml   # optional per-repo overrides
+
+  - id: cocoindex
+    type: github
+    repo: cocoindex-io/cocoindex
+    branch: main
+    include_patterns:
+      - "**/*.py"
+      - "**/*.rs"
+```
+
+Then index:
+
+```bash
+coco-lance --config coco-config.yml --output ~/indices/myproject/lance
+```
+
+This syncs GitHub repos into a local cache, creates symlinks in a `unified/` directory, merges include/exclude patterns from all repos, and produces one LanceDB table per detected language (`typescript_index`, `python_index`, `rust_index`, …).
+
+### Per-repo settings file (`my-settings.yml`)
+
+The optional `settings:` reference in each repo entry is a YAML file with include/exclude patterns and extension overrides:
+
+```yaml
+include_patterns:
+  - "**/*.ts"
+  - "**/*.py"
+  - "**/*.mq5"
+
+exclude_patterns:
+  - "**/generated/**"
+  - "**/*.snapshot.json"
+
+language_overrides:
+  - ext: mq5    # MQL5 treated as C for chunking
+    lang: c
+  - ext: mqh
+    lang: c
+```
+
+### Output structure
+
+```
+my-output/
+  ├── typescript_index.lance/   # LanceDB tables, one per language
+  ├── python_index.lance/
+  ├── rust_index.lance/
+  ├── unified/                  # symlinks to each repo root (Mode B)
+  │   ├── my-service -> /path/to/my-service
+  │   └── cocoindex  -> ~/.cache/coco-lance/gh_cache/cocoindex-io-cocoindex/
+  ├── gh_cache/                 # GitHub mirror snapshots (Mode B)
+  └── .coco_state/              # incremental tracking state (LMDB)
+```
+
+Re-running `coco-lance` with the same `--output` only re-indexes changed files.
+
 ## Contributing
 
 We welcome contributions! Before you start, please install the [pre-commit](https://pre-commit.com/) hooks so that linting, formatting, type checking, and tests run automatically before each commit:
@@ -829,6 +1030,13 @@ pre-commit install
 This catches common issues — trailing whitespace, lint errors (Ruff), type errors (mypy), and test failures — before they reach CI.
 
 For more details, see our [contributing guide](https://cocoindex.io/docs/contributing/guide).
+
+## Further Reading
+
+- [`skills/ccc/SKILL.md`](./skills/ccc/SKILL.md) — how the agent skill is expected to use `ccc`
+- [`skills/ccc/references/management.md`](./skills/ccc/references/management.md) — install, init, daemon, reset, and troubleshooting
+- [`skills/ccc/references/settings.md`](./skills/ccc/references/settings.md) — YAML configuration details
+- [`docs/MULTI_REPO_SUPPORT.md`](./docs/MULTI_REPO_SUPPORT.md) — workspace and multi-repo orchestration overview
 
 ## License
 

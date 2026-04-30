@@ -13,10 +13,12 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
+
+from .hybrid_search import VectorResultDict
 
 _MCP_INSTRUCTIONS = (
     "Code search and codebase understanding tools."
@@ -28,6 +30,8 @@ _MCP_INSTRUCTIONS = (
     " unlike grep or text matching,"
     " it finds relevant code even when exact keywords are unknown."
 )
+
+_FTS_READY_CACHE: dict[str, tuple[int, int]] = {}
 
 
 # === Pydantic Models for Tool Inputs/Outputs ===
@@ -65,6 +69,27 @@ def _graph_db_path(project_root: str) -> Path:
     from . import settings as _settings
 
     return _settings.target_sqlite_db_path(root)
+
+
+def _db_stat_key(db_path: Path) -> tuple[int, int] | None:
+    try:
+        stat = db_path.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _ensure_fts_index_cached(db_path: Path, *, force_rebuild: bool = False) -> None:
+    from . import hybrid_search as _hyb
+
+    cache_key = str(db_path.resolve())
+    current = _db_stat_key(db_path)
+    if not force_rebuild and current is not None and _FTS_READY_CACHE.get(cache_key) == current:
+        return
+    _hyb.ensure_fts_index(db_path, force_rebuild=force_rebuild)
+    refreshed = _db_stat_key(db_path)
+    if refreshed is not None:
+        _FTS_READY_CACHE[cache_key] = refreshed
 
 
 def create_mcp_server(project_root: str) -> FastMCP:
@@ -124,8 +149,9 @@ def create_mcp_server(project_root: str) -> FastMCP:
         paths: list[str] | None = Field(
             default=None,
             description=(
-                "Filter by file path pattern(s) using GLOB wildcards (* and ?)."
-                " Example: ['src/utils/*', '*.py']"
+                "Filter by file path prefix(es) or glob pattern(s)."
+                " Bare values like 'src' or 'scripts' are treated as fast prefixes;"
+                " values containing *, ?, or [ use glob matching."
             ),
         ),
         mode: str = Field(
@@ -136,7 +162,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
         """Query the codebase index via the daemon."""
         from . import client as _client
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             mode_value = mode.lower()
             if mode_value not in {"vector", "keyword", "hybrid"}:
@@ -146,25 +172,24 @@ def create_mcp_server(project_root: str) -> FastMCP:
                 )
             if refresh_index:
                 await loop.run_in_executor(None, lambda: _client.index(project_root))
+            keyword_search_call = None
             if mode_value in {"keyword", "hybrid"}:
                 from . import hybrid_search as _hyb
                 from . import settings as _settings
 
                 db_path = _settings.target_sqlite_db_path(Path(project_root))
                 await loop.run_in_executor(
-                    None, lambda: _hyb.ensure_fts_index(db_path, force_rebuild=refresh_index)
+                    None, lambda: _ensure_fts_index_cached(db_path, force_rebuild=refresh_index)
+                )
+                keyword_search_call = lambda: _hyb.keyword_search(
+                    db_path,
+                    query,
+                    limit=limit,
+                    path_prefixes=paths,
+                    language=languages[0] if languages else None,
                 )
                 if mode_value == "keyword":
-                    keyword_rows = await loop.run_in_executor(
-                        None,
-                        lambda: _hyb.keyword_search(
-                            db_path,
-                            query,
-                            limit=limit,
-                            path_prefix=paths[0] if paths else None,
-                            language=languages[0] if languages else None,
-                        ),
-                    )
+                    keyword_rows = await loop.run_in_executor(None, keyword_search_call)
                     return SearchResultModel(
                         success=True,
                         results=[
@@ -181,33 +206,23 @@ def create_mcp_server(project_root: str) -> FastMCP:
                         total_returned=len(keyword_rows),
                         offset=0,
                     )
-            resp = await loop.run_in_executor(
-                None,
-                lambda: _client.search(
-                    project_root=project_root,
-                    query=query,
-                    languages=languages,
-                    paths=paths,
-                    limit=limit,
-                    offset=offset,
-                ),
+            vector_search_call = lambda: _client.search(
+                project_root=project_root,
+                query=query,
+                languages=languages,
+                paths=paths,
+                limit=limit,
+                offset=offset,
             )
             if mode_value == "hybrid":
                 from . import hybrid_search as _hyb
-                from . import settings as _settings
-
-                db_path = _settings.target_sqlite_db_path(Path(project_root))
-                keyword_rows = await loop.run_in_executor(
-                    None,
-                    lambda: _hyb.keyword_search(
-                        db_path,
-                        query,
-                        limit=limit,
-                        path_prefix=paths[0] if paths else None,
-                        language=languages[0] if languages else None,
-                    ),
+                if keyword_search_call is None:
+                    return SearchResultModel(success=False, message="keyword search was not initialized")
+                resp, keyword_rows = await asyncio.gather(
+                    loop.run_in_executor(None, vector_search_call),
+                    loop.run_in_executor(None, keyword_search_call),
                 )
-                vector_rows = [
+                vector_rows: list[VectorResultDict] = [
                     {
                         "file_path": r.file_path,
                         "language": r.language,
@@ -238,6 +253,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
                     offset=0,
                     message=resp.message,
                 )
+            resp = await loop.run_in_executor(None, vector_search_call)
             return SearchResultModel(
                 success=resp.success,
                 results=[
@@ -284,7 +300,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
         """Get impact radius for a declaration (callers, callees, inheritance chain)."""
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         return await loop.run_in_executor(
             None,
@@ -327,7 +343,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
         """Detect changed declarations from git diff."""
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         return await loop.run_in_executor(
             None,
@@ -363,7 +379,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
         """Get architecture overview with hub nodes and communities."""
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         return await loop.run_in_executor(
             None,
@@ -396,7 +412,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
         """Get knowledge gaps (untested hubs, isolated nodes, thin communities)."""
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         return await loop.run_in_executor(
             None,
@@ -429,7 +445,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
         """Detect flow entry points."""
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         return await loop.run_in_executor(
             None,
@@ -453,7 +469,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     ) -> dict[str, Any]:
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             lambda: mcp_handlers.sync_configured_repos_tool(
@@ -470,7 +486,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     ) -> dict[str, Any]:
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             lambda: mcp_handlers.get_repo_sync_status_tool(config_path=config_path),
@@ -487,7 +503,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     ) -> SearchResultModel:
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         resp = await loop.run_in_executor(
             None,
             lambda: mcp_handlers.hybrid_search_tool(
@@ -529,7 +545,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     ) -> dict[str, Any]:
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             lambda: mcp_handlers.ripgrep_bounded_tool(
@@ -571,7 +587,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
         from . import settings as _settings
         from .code_graph_indexer import index_code_declarations
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             resp = await loop.run_in_executor(None, lambda: _client.index(project_root))
             db_path = _settings.target_sqlite_db_path(Path(project_root))
@@ -599,7 +615,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
         ),
     )
     async def codebase_update() -> dict[str, Any]:
-        return await codebase_index()
+        return cast(dict[str, Any], await codebase_index())
 
     @mcp.tool(
         name="codebase_stop",
@@ -611,7 +627,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     async def codebase_stop() -> dict[str, Any]:
         from . import client as _client
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             resp = await loop.run_in_executor(None, _client.stop)
             return {"success": bool(resp.ok)}
@@ -625,7 +641,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     async def codebase_remove() -> dict[str, Any]:
         from . import client as _client
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             resp = await loop.run_in_executor(None, lambda: _client.remove_project(project_root))
             return {"success": bool(resp.ok)}
@@ -637,18 +653,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     watch_index_runs = 0
     watch_started_at: float | None = None
     watch_snapshot: dict[str, int] = {}
-    watch_excluded_dirs = {
-        ".git",
-        ".cocoindex_code",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".venv",
-        "__pycache__",
-        "build",
-        "dist",
-        "node_modules",
-    }
+    from ._matchers import SKIP_DIRS as watch_excluded_dirs
 
     def _watch_file_snapshot(root: Path) -> dict[str, int]:
         snapshot: dict[str, int] = {}
@@ -673,7 +678,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
         nonlocal watch_index_runs, watch_last_error, watch_snapshot
         from . import client as _client
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         root = Path(project_root)
         watch_snapshot = await loop.run_in_executor(None, lambda: _watch_file_snapshot(root))
         while True:
@@ -711,7 +716,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
                     "index_runs": watch_index_runs,
                     "last_error": watch_last_error,
                 }
-            watch_started_at = asyncio.get_event_loop().time()
+            watch_started_at = asyncio.get_running_loop().time()
             watch_task = asyncio.create_task(_watch_loop(interval_seconds))
             return {
                 "success": True,
@@ -732,7 +737,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
 
         watching = bool(watch_task and not watch_task.done())
         uptime_seconds = (
-            asyncio.get_event_loop().time() - watch_started_at
+            asyncio.get_running_loop().time() - watch_started_at
             if watching and watch_started_at is not None
             else 0.0
         )
@@ -763,17 +768,19 @@ def create_mcp_server(project_root: str) -> FastMCP:
         if mode == "grep":
             from . import mcp_handlers
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
                 None,
                 lambda: mcp_handlers.ripgrep_bounded_tool(
                     project_root,
                     query,
-                    path_prefix=paths[0] if paths else None,
+                    path_prefixes=paths,
                     max_matches=limit,
                 ),
             )
-        return await search(
+        return cast(
+            SearchResultModel | dict[str, Any],
+            await search(
             query=query,
             limit=limit,
             offset=offset,
@@ -781,6 +788,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
             languages=languages,
             paths=paths,
             mode=mode,
+            ),
         )
 
     @mcp.tool(name="codebase_status", description="Show index, daemon, graph, and artifact status.")
@@ -788,7 +796,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
         from . import client as _client
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         status_payload: dict[str, Any] = {"project_root": project_root}
         try:
             st = await loop.run_in_executor(None, lambda: _client.project_status(project_root))
@@ -808,7 +816,9 @@ def create_mcp_server(project_root: str) -> FastMCP:
         status_payload["graph"] = await loop.run_in_executor(
             None, lambda: mcp_handlers.codebase_graph_stats_tool(db_path)
         )
-        status_payload["context"] = mcp_handlers.codebase_context_list_tool(Path(project_root))
+        status_payload["context"] = await loop.run_in_executor(
+            None, lambda: mcp_handlers.codebase_context_list_tool(Path(project_root))
+        )
         return status_payload
 
     @mcp.tool(name="codebase_graph_build", description="Build or refresh graph-derived metadata.")
@@ -821,7 +831,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
         from .analytics.communities import compute_communities
         from .code_graph_indexer import index_code_declarations
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         result: dict[str, Any] = {
             "success": True,
@@ -854,7 +864,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     ) -> dict[str, Any]:
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         return await loop.run_in_executor(
             None, lambda: mcp_handlers.codebase_graph_query_tool(db_path, file_path, repo_id)
@@ -866,7 +876,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     ) -> dict[str, Any]:
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         return await loop.run_in_executor(
             None, lambda: mcp_handlers.codebase_graph_stats_tool(db_path, repo_id=repo_id)
@@ -879,7 +889,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     ) -> dict[str, Any]:
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         return await loop.run_in_executor(
             None, lambda: mcp_handlers.codebase_graph_circular_tool(db_path, repo_id, limit)
@@ -889,36 +899,22 @@ def create_mcp_server(project_root: str) -> FastMCP:
     async def codebase_graph_visualize(
         repo_id: str | None = Field(default=None),
         limit: int = Field(default=120, ge=1, le=500),
+        format: str = Field(default="mermaid", description="mermaid or html"),
     ) -> dict[str, Any]:
-        from .declarations_db import db_connection
+        from . import mcp_handlers
 
         db_path = _graph_db_path(project_root)
-        try:
-            with db_connection(db_path) as conn:
-                rows = conn.execute(
-                    """
-                    SELECT DISTINCT c.file_path AS from_file, d.file_path AS to_file
-                    FROM calls c
-                    JOIN declarations d ON d.id = c.callee_decl_id
-                    WHERE c.callee_decl_id IS NOT NULL
-                      AND c.file_path != d.file_path
-                      AND (? IS NULL OR c.repo_id = ?)
-                    LIMIT ?
-                    """,
-                    (repo_id, repo_id, limit),
-                ).fetchall()
-            lines = ["graph TD"]
-            for row in rows:
-                src = str(row["from_file"]).replace("-", "_").replace("/", "_").replace(".", "_")
-                dst = str(row["to_file"]).replace("-", "_").replace("/", "_").replace(".", "_")
-                lines.append(f'  {src}["{row["from_file"]}"] --> {dst}["{row["to_file"]}"]')
-            return {"success": True, "mode": "mermaid", "mermaid": "\n".join(lines)}
-        except Exception as exc:
-            return {"success": False, "error": str(exc)}
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: mcp_handlers.codebase_graph_visualize_tool(
+                db_path, repo_id=repo_id, limit=limit, format=format.lower()
+            ),
+        )
 
     @mcp.tool(name="codebase_graph_status", description="Show graph status.")
     async def codebase_graph_status() -> dict[str, Any]:
-        return await codebase_graph_stats()
+        return cast(dict[str, Any], await codebase_graph_stats())
 
     @mcp.tool(
         name="codebase_graph_remove",
@@ -956,7 +952,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     ) -> dict[str, Any]:
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         return await loop.run_in_executor(
             None,
@@ -977,7 +973,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     ) -> dict[str, Any]:
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         return await loop.run_in_executor(
             None,
@@ -994,7 +990,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     ) -> dict[str, Any]:
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         return await loop.run_in_executor(
             None,
@@ -1018,7 +1014,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     ) -> dict[str, Any]:
         from . import mcp_handlers
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         db_path = _graph_db_path(project_root)
         return await loop.run_in_executor(
             None,
@@ -1027,11 +1023,48 @@ def create_mcp_server(project_root: str) -> FastMCP:
             ),
         )
 
+    @mcp.tool(
+        name="codebase_workflow",
+        description="Run a packaged review, debug, onboard, or architecture workflow.",
+    )
+    async def codebase_workflow(
+        workflow: str = Field(description="review, debug, onboard, or architecture"),
+        query: str | None = Field(default=None),
+        target: str | None = Field(default=None),
+        ref_spec: str = Field(default="HEAD"),
+        path_prefix: str | None = Field(default=None),
+        top_n: int = Field(default=20, ge=1, le=200),
+        limit: int = Field(default=10, ge=1, le=100),
+        format: str = Field(default="mermaid", description="Diagram format for architecture"),
+    ) -> dict[str, Any]:
+        from .workflows import codebase_workflow_tool
+
+        loop = asyncio.get_running_loop()
+        db_path = _graph_db_path(project_root)
+        return await loop.run_in_executor(
+            None,
+            lambda: codebase_workflow_tool(
+                Path(project_root),
+                db_path,
+                workflow=workflow,
+                query=query,
+                target=target,
+                ref_spec=ref_spec,
+                path_prefix=path_prefix,
+                top_n=top_n,
+                limit=limit,
+                diagram_format=format.lower(),
+            ),
+        )
+
     @mcp.tool(name="codebase_context", description="List configured context artifacts.")
     async def codebase_context() -> dict[str, Any]:
         from . import mcp_handlers
 
-        return mcp_handlers.codebase_context_list_tool(Path(project_root))
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: mcp_handlers.codebase_context_list_tool(Path(project_root))
+        )
 
     @mcp.tool(
         name="codebase_context_index",
@@ -1040,7 +1073,10 @@ def create_mcp_server(project_root: str) -> FastMCP:
     async def codebase_context_index() -> dict[str, Any]:
         from . import mcp_handlers
 
-        return mcp_handlers.codebase_context_index_tool(Path(project_root))
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: mcp_handlers.codebase_context_index_tool(Path(project_root))
+        )
 
     @mcp.tool(name="codebase_context_search", description="Search configured context artifacts.")
     async def codebase_context_search(
@@ -1067,7 +1103,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     async def codebase_health() -> dict[str, Any]:
         from . import client as _client
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             daemon = await loop.run_in_executor(None, _client.daemon_status)
             project = await loop.run_in_executor(None, lambda: _client.project_status(project_root))
@@ -1092,7 +1128,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
     async def codebase_list_projects() -> dict[str, Any]:
         from . import client as _client
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             daemon = await loop.run_in_executor(None, _client.daemon_status)
             return {
@@ -1120,6 +1156,7 @@ def create_mcp_server(project_root: str) -> FastMCP:
                 "codebase_search",
                 "codebase_status",
                 "codebase_graph_*",
+                "codebase_workflow",
                 "codebase_impact",
                 "codebase_flow",
                 "codebase_symbol",

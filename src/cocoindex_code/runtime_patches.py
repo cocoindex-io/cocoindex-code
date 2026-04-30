@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from typing import Any, cast
 
 
 def _patch_litellm_encoding_format() -> None:
@@ -11,8 +12,8 @@ def _patch_litellm_encoding_format() -> None:
     except ImportError:
         return
 
-    original_aembedding = litellm.aembedding
-    original_embedding = litellm.embedding
+    original_aembedding = cast(Any, litellm.aembedding)
+    original_embedding = cast(Any, litellm.embedding)
 
     async def patched_aembedding(*args: object, **kwargs: object) -> object:
         kwargs.setdefault("encoding_format", "float")
@@ -22,8 +23,8 @@ def _patch_litellm_encoding_format() -> None:
         kwargs.setdefault("encoding_format", "float")
         return original_embedding(*args, **kwargs)
 
-    litellm.aembedding = patched_aembedding
-    litellm.embedding = patched_embedding
+    setattr(litellm, "aembedding", patched_aembedding)
+    setattr(litellm, "embedding", patched_embedding)
 
 
 def _patch_cocoindex_vector_schema_serde() -> None:

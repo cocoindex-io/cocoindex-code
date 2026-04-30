@@ -42,6 +42,20 @@ from .shared import (
 )
 
 
+def _ensure_cocoindex_db_dir(cocoindex_db: Path) -> None:
+    """Repair broken LMDB dir symlinks before creating the environment.
+
+    Some repo-local wrappers keep ``.cocoindex_code/cocoindex.db`` symlinked
+    into a shared cache. If that shared target is pruned, Rust-side
+    ``core.Environment`` creation can fail with ``EEXIST`` while trying to
+    create the LMDB directory through the stale symlink. Normalize that state
+    here so project creation is tolerant of stale local cache wiring.
+    """
+    if cocoindex_db.is_symlink() and not cocoindex_db.exists():
+        cocoindex_db.unlink()
+    cocoindex_db.mkdir(parents=True, exist_ok=True)
+
+
 class Project:
     _env: coco.Environment
     _app: coco.App[[], None]
@@ -57,6 +71,14 @@ class Project:
             db.close()
         except Exception:
             pass
+
+    def has_queryable_index(self) -> bool:
+        """True when a non-empty target sqlite db already exists on disk."""
+        target_db = _target_sqlite_db_path(self._project_root)
+        try:
+            return target_db.exists() and target_db.stat().st_size > 0
+        except OSError:
+            return False
 
     # ------------------------------------------------------------------
     # Indexing
@@ -120,6 +142,9 @@ class Project:
         immediately.
         """
         if self._initial_index_done.is_set() or self._index_lock.locked():
+            return
+        if self.has_queryable_index():
+            self._initial_index_done.set()
             return
         started = asyncio.Event()
         asyncio.create_task(self.run_index(on_started=started))
@@ -290,6 +315,7 @@ class Project:
 
         cocoindex_db = _cocoindex_db_path(project_root)
         target_sqlite_db = _target_sqlite_db_path(project_root)
+        _ensure_cocoindex_db_dir(cocoindex_db)
 
         settings = coco.Settings.from_env(cocoindex_db)
 
@@ -316,4 +342,10 @@ class Project:
         result._project_root = project_root
         result._index_lock = asyncio.Lock()
         result._initial_index_done = asyncio.Event()
+        if target_sqlite_db.exists():
+            try:
+                if target_sqlite_db.stat().st_size > 0:
+                    result._initial_index_done.set()
+            except OSError:
+                pass
         return result

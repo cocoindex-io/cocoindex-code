@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ._matchers import SKIP_DIRS
 from .declarations_db import (
     Declaration,
     ImportRecord,
@@ -31,18 +32,6 @@ from .declarations_db import (
 )
 
 _CODE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
-_SKIP_DIRS = {
-    ".git",
-    ".cocoindex_code",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-    "node_modules",
-}
 _DECL_RE = re.compile(
     r"^\s*(?P<export>export\s+)?(?:(?:async\s+)?function|class|interface|type)\s+"
     r"(?P<name>[A-Za-z_$][\w$]*)",
@@ -83,7 +72,7 @@ class _ParsedFile:
 
 def _iter_code_files(root: Path, changed_paths: list[str] | None = None) -> list[Path]:
     if changed_paths:
-        files = []
+        changed_files: list[Path] = []
         for rel in changed_paths:
             path = (root / rel).resolve()
             try:
@@ -91,12 +80,12 @@ def _iter_code_files(root: Path, changed_paths: list[str] | None = None) -> list
             except ValueError:
                 continue
             if path.is_file() and path.suffix.lower() in _CODE_EXTENSIONS:
-                files.append(path)
-        return sorted(set(files))
+                changed_files.append(path)
+        return sorted(set(changed_files))
 
     files: list[Path] = []
     for current_root, dirnames, filenames in os.walk(root):
-        dirnames[:] = [dirname for dirname in dirnames if dirname not in _SKIP_DIRS]
+        dirnames[:] = [dirname for dirname in dirnames if dirname not in SKIP_DIRS]
         for filename in filenames:
             path = Path(current_root) / filename
             if path.suffix.lower() in _CODE_EXTENSIONS:

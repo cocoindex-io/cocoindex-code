@@ -12,8 +12,11 @@ Example usage::
 
 from __future__ import annotations
 
+import importlib as _importlib
 import pathlib as _pathlib
 from collections.abc import Callable as _Callable
+from collections.abc import Sequence as _Sequence
+from typing import Protocol as _Protocol
 
 import cocoindex as _coco
 from cocoindex.resources.chunk import Chunk, TextPosition
@@ -26,4 +29,37 @@ ChunkerFn = _Callable[[_pathlib.Path, str], tuple[str | None, list[Chunk]]]
 # tracked=False: callables are not fingerprint-able; daemon restart re-indexes anyway.
 CHUNKER_REGISTRY = _coco.ContextKey[dict[str, ChunkerFn]]("chunker_registry")
 
-__all__ = ["Chunk", "ChunkerFn", "CHUNKER_REGISTRY", "TextPosition"]
+
+class _ChunkerMappingLike(_Protocol):
+    ext: str
+    module: str
+
+
+def resolve_chunker_registry(
+    mappings: _Sequence[_ChunkerMappingLike],
+) -> dict[str, ChunkerFn]:
+    """Resolve chunker mapping entries to a ``{".ext": fn}`` dict.
+
+    Each ``mapping.module`` must be a ``"module.path:callable"`` string importable
+    from the current environment.
+    """
+    registry: dict[str, ChunkerFn] = {}
+    for cm in mappings:
+        module_path, _, attr = cm.module.partition(":")
+        if not attr:
+            raise ValueError(f"chunker module {cm.module!r} must use 'module.path:callable' format")
+        mod = _importlib.import_module(module_path)
+        fn = getattr(mod, attr)
+        if not callable(fn):
+            raise ValueError(f"chunker {cm.module!r}: {attr!r} is not callable")
+        registry[f".{cm.ext}"] = fn
+    return registry
+
+
+__all__ = [
+    "CHUNKER_REGISTRY",
+    "Chunk",
+    "ChunkerFn",
+    "TextPosition",
+    "resolve_chunker_registry",
+]

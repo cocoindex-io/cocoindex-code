@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 from fnmatch import translate as fnmatch_translate
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 _log = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ class GitHubMirror:
                 req = urllib.request.Request(url, headers=self._build_headers())
                 with urllib.request.urlopen(req, timeout=60) as response:
                     self._parse_rate_limit(dict(response.headers))
-                    return response.read()
+                    return cast(bytes, response.read())
             except urllib.error.HTTPError as exc:
                 if attempt < max_retries and exc.code in (429, 503, 504):
                     delay = retry_delays[attempt]
