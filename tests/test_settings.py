@@ -338,6 +338,32 @@ def test_resolve_chunker_registry_not_callable() -> None:
         resolve_chunker_registry([ChunkerMapping(ext="toml", module="os:sep")])
 
 
+def test_resolve_chunker_registry_builtin_fallback() -> None:
+    registry = resolve_chunker_registry(
+        [ChunkerMapping(ext="prisma", module="prisma_chunker:prisma_chunker")]
+    )
+
+    assert ".prisma" in registry
+    assert callable(registry[".prisma"])
+
+
+def test_resolve_chunker_registry_does_not_mask_transitive_import_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_dir = tmp_path / "chunkers"
+    module_dir.mkdir()
+    (module_dir / "custom_chunker.py").write_text(
+        "import missing_dependency\n\n"
+        "def chunker(path, content):\n"
+        "    return None, []\n"
+    )
+    monkeypatch.syspath_prepend(str(module_dir))
+
+    with pytest.raises(ModuleNotFoundError, match="missing_dependency"):
+        resolve_chunker_registry([ChunkerMapping(ext="txt", module="custom_chunker:chunker")])
+
+
 @pytest.mark.usefixtures("_patch_user_dir")
 def test_save_initial_user_settings_round_trip() -> None:
     from cocoindex_code.settings import (

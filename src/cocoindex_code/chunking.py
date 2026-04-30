@@ -48,7 +48,12 @@ def resolve_chunker_registry(
         module_path, _, attr = cm.module.partition(":")
         if not attr:
             raise ValueError(f"chunker module {cm.module!r} must use 'module.path:callable' format")
-        mod = _importlib.import_module(module_path)
+        try:
+            mod = _importlib.import_module(module_path)
+        except ModuleNotFoundError as exc:
+            if "." in module_path or exc.name != module_path:
+                raise
+            mod = _importlib.import_module(f"cocoindex_code.builtin_chunkers.{module_path}")
         fn = getattr(mod, attr)
         if not callable(fn):
             raise ValueError(f"chunker {cm.module!r}: {attr!r} is not callable")
