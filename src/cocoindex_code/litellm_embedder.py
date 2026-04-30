@@ -17,8 +17,8 @@ from numpy.typing import NDArray
 logger = logging.getLogger(__name__)
 
 _RATE_LIMIT_DELAY_RE = re.compile(r"Please try again in ([0-9.]+)(ms|s)", re.IGNORECASE)
-_MAX_RATE_LIMIT_RETRIES = int(os.environ.get("COCOINDEX_CODE_EMBED_MAX_RETRIES", "2"))
-_EMBED_TIMEOUT_S = float(os.environ.get("COCOINDEX_CODE_EMBED_TIMEOUT_S", "10"))
+_MAX_RATE_LIMIT_RETRIES = int(os.environ.get("COCOINDEX_CODE_EMBED_MAX_RETRIES", "6"))
+_EMBED_TIMEOUT_S = float(os.environ.get("COCOINDEX_CODE_EMBED_TIMEOUT_S", "30"))
 
 
 def _get_rate_limit_delay(exc: Exception, attempt: int) -> float | None:

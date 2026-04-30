@@ -153,9 +153,6 @@ class Project:
                     if on_progress is not None:
                         on_progress(progress)
                     await asyncio.sleep(0.1)
-        except Exception as exc:
-            self._last_index_error = " ".join(f"{type(exc).__name__}: {exc}".splitlines())
-            raise
         finally:
             self._initial_index_done.set()
             self._indexing_stats = None
