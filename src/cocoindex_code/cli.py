@@ -163,6 +163,12 @@ def print_project_header(project_root: str) -> None:
     _typer.echo(f"Project: {format_path_for_display(project_root)}")
 
 
+def _format_index_state(status: ProjectStatusResponse) -> str:
+    return "Index state: " + f"{status.freshness}" + (
+        f" | degraded: {', '.join(status.degraded_modes)}" if status.degraded_modes else ""
+    )
+
+
 def print_index_stats(status: ProjectStatusResponse) -> None:
     """Print formatted index statistics."""
     if status.progress is not None:
@@ -178,15 +184,7 @@ def print_index_stats(status: ProjectStatusResponse) -> None:
     if status.last_error:
         _typer.echo(f"  Last error: {status.last_error}", err=True)
     if status.freshness or status.degraded_modes:
-        _typer.echo(
-            "Index state: "
-            f"{status.freshness}"
-            + (
-                f" | degraded: {', '.join(status.degraded_modes)}"
-                if status.degraded_modes
-                else ""
-            )
-        )
+        _typer.echo(_format_index_state(status))
     if not status.index_exists:
         _typer.echo("\nIndex not created yet.")
         return

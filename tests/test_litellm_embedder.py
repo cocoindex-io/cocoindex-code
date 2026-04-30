@@ -28,7 +28,7 @@ async def test_run_embedding_request_retries_rate_limit_errors(
         assert kwargs == {
             "encoding_format": "float",
             "drop_params": True,
-            "timeout": 30.0,
+            "timeout": 10.0,
         }
         if attempts == 1:
             raise Exception("Rate limit exceeded. Please try again in 250ms")
@@ -36,6 +36,7 @@ async def test_run_embedding_request_retries_rate_limit_errors(
 
     monkeypatch.setattr("cocoindex_code.litellm_embedder.asyncio.sleep", fake_sleep)
     monkeypatch.setattr("cocoindex_code.litellm_embedder.litellm.aembedding", fake_aembedding)
+    monkeypatch.setattr("cocoindex_code.litellm_embedder._EMBED_TIMEOUT_S", 10.0)
 
     embedder = PacedLiteLLMEmbedder("text-embedding-3-small")
     response = await embedder.run_embedding_request(input=["hello"])
@@ -61,7 +62,7 @@ async def test_run_embedding_request_applies_min_interval_between_requests(
         assert kwargs == {
             "encoding_format": "float",
             "drop_params": True,
-            "timeout": 30.0,
+            "timeout": 10.0,
         }
         inputs_seen.append(input)
         return SimpleNamespace(data=[{"embedding": [1.0, 2.0]}])
@@ -69,6 +70,7 @@ async def test_run_embedding_request_applies_min_interval_between_requests(
     monkeypatch.setattr("cocoindex_code.litellm_embedder.asyncio.sleep", fake_sleep)
     monkeypatch.setattr("cocoindex_code.litellm_embedder.litellm.aembedding", fake_aembedding)
     monkeypatch.setattr("cocoindex_code.litellm_embedder.time.monotonic", lambda: 10.0)
+    monkeypatch.setattr("cocoindex_code.litellm_embedder._EMBED_TIMEOUT_S", 10.0)
 
     embedder = PacedLiteLLMEmbedder("text-embedding-3-small", min_interval_ms=300)
     embedder._next_request_at = 10.3
@@ -93,11 +95,12 @@ async def test_run_embedding_request_forwards_timeout(
         return SimpleNamespace(data=[{"embedding": [1.0, 2.0]}])
 
     monkeypatch.setattr("cocoindex_code.litellm_embedder.litellm.aembedding", fake_aembedding)
+    monkeypatch.setattr("cocoindex_code.litellm_embedder._EMBED_TIMEOUT_S", 10.0)
 
     embedder = PacedLiteLLMEmbedder("text-embedding-3-small")
     await embedder.run_embedding_request(input=["hello"])
 
-    assert seen_kwargs["timeout"] == pytest.approx(30.0)
+    assert seen_kwargs["timeout"] == pytest.approx(10.0)
     assert seen_kwargs["encoding_format"] == "float"
     assert seen_kwargs["drop_params"] is True
 
@@ -118,10 +121,11 @@ async def test_run_embedding_request_omits_encoding_format_for_native_providers(
         return SimpleNamespace(data=[{"embedding": [1.0, 2.0]}])
 
     monkeypatch.setattr("cocoindex_code.litellm_embedder.litellm.aembedding", fake_aembedding)
+    monkeypatch.setattr("cocoindex_code.litellm_embedder._EMBED_TIMEOUT_S", 10.0)
 
     embedder = PacedLiteLLMEmbedder(model_name)
     await embedder.run_embedding_request(input=["hello"])
 
-    assert seen_kwargs["timeout"] == pytest.approx(30.0)
+    assert seen_kwargs["timeout"] == pytest.approx(10.0)
     assert "encoding_format" not in seen_kwargs
     assert "drop_params" not in seen_kwargs

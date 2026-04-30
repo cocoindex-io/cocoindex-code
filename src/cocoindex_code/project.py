@@ -60,6 +60,10 @@ def _ensure_cocoindex_db_dir(cocoindex_db: Path) -> None:
     cocoindex_db.mkdir(parents=True, exist_ok=True)
 
 
+def _format_exception(exc: Exception) -> str:
+    return " ".join(f"{type(exc).__name__}: {exc}".splitlines())
+
+
 class Project:
     _env: coco.Environment
     _app: coco.App[[], None]
@@ -82,6 +86,20 @@ class Project:
     _QUERY_CACHE_MAX = 64
     _QUERY_CACHE_TTL_S = 60.0
     _STALE_THRESHOLD_S = float(os.environ.get("COCOINDEX_CODE_STALE_THRESHOLD_S", "120"))
+
+    def _build_phase_timings(self) -> IndexingPhaseTimings | None:
+        files_timed, total_chunk_ms, total_embed_ms, total_write_ms, max_embed_ms = (
+            self._phase_timing.snapshot()
+        )
+        if files_timed <= 0:
+            return None
+        return IndexingPhaseTimings(
+            files_timed=files_timed,
+            avg_chunk_ms=total_chunk_ms / files_timed,
+            avg_embed_ms=total_embed_ms / files_timed,
+            avg_write_ms=total_write_ms / files_timed,
+            max_embed_ms=max_embed_ms,
+        )
 
     def close(self) -> None:
         """Close project resources to release file handles (LMDB, SQLite)."""
@@ -154,7 +172,7 @@ class Project:
                         on_progress(progress)
                     await asyncio.sleep(0.1)
         except Exception as exc:
-            self._last_index_error = " ".join(f"{type(exc).__name__}: {exc}".splitlines())
+            self._last_index_error = _format_exception(exc)
             raise
         finally:
             self._initial_index_done.set()
@@ -334,18 +352,7 @@ class Project:
             and self._last_progress_at is not None
             and (now - self._last_progress_at) > self._STALE_THRESHOLD_S
         )
-        files_timed, total_chunk_ms, total_embed_ms, total_write_ms, max_embed_ms = (
-            self._phase_timing.snapshot()
-        )
-        phase_timings = None
-        if files_timed > 0:
-            phase_timings = IndexingPhaseTimings(
-                files_timed=files_timed,
-                avg_chunk_ms=total_chunk_ms / files_timed,
-                avg_embed_ms=total_embed_ms / files_timed,
-                avg_write_ms=total_write_ms / files_timed,
-                max_embed_ms=max_embed_ms,
-            )
+        phase_timings = self._build_phase_timings()
         degraded_modes: list[str] = []
         if not self._chunkers_ready:
             degraded_modes.append("query_only")
