@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from cocoindex_code.protocol import SearchRequest, encode_request, decode_request
-from cocoindex_code.query import _fuse_rrf, _RRF_K
+from cocoindex_code.query import (
+    _extract_keywords,
+    _fuse_rrf,
+    _RRF_CONSENSUS_BOOST,
+    _RRF_K,
+)
 from cocoindex_code.schema import QueryResult
 
 
@@ -49,6 +54,44 @@ def test_encode_decode_search_request_backward_compat() -> None:
     assert decoded.mode == "semantic"
 
 
+# --- Keyword extraction tests ---
+
+
+def test_extract_keywords_basic() -> None:
+    assert _extract_keywords("database connection pool") == ["database", "connection", "pool"]
+
+
+def test_extract_keywords_short_terms() -> None:
+    """Short but meaningful code terms (io, go, fs, db) should be included."""
+    result = _extract_keywords("io read fs db")
+    assert "io" in result
+    assert "fs" in result
+    assert "db" in result
+
+
+def test_extract_keywords_code_like() -> None:
+    result = _extract_keywords("async_handler error_middleware")
+    assert "async_handler" in result
+    assert "error_middleware" in result
+
+
+def test_extract_keywords_single_char_excluded() -> None:
+    """Single characters should be excluded."""
+    result = _extract_keywords("a b c foo")
+    assert result == ["foo"]
+
+
+def test_extract_keywords_mixed() -> None:
+    result = _extract_keywords("find io.Reader in go code")
+    assert "find" in result
+    assert "io" in result
+    assert "Reader" not in result  # lowercased
+    assert "reader" in result
+    assert "go" in result
+    assert "code" in result
+    assert "in" in result
+
+
 # --- RRF fusion tests ---
 
 
@@ -88,7 +131,6 @@ def test_fuse_rrf_keyword_only() -> None:
 
 def test_fuse_rrf_consensus_boost() -> None:
     """Items in both lists should rank higher than items in only one."""
-    # "a.py:1" appears in both lists
     vector = [
         _make_result("a.py", 1, 0.9),
         _make_result("b.py", 1, 0.8),
@@ -98,7 +140,6 @@ def test_fuse_rrf_consensus_boost() -> None:
         ("c.py", "python", "# code", 1, 10, 1),
     ]
     result = _fuse_rrf(vector, keyword, limit=5)
-    # a.py:1 should be first (appears in both + consensus boost)
     assert result[0].file_path == "a.py"
 
 
@@ -109,9 +150,9 @@ def test_fuse_rrf_respects_limit() -> None:
 
 
 def test_fuse_rrf_score_formula() -> None:
-    """Verify RRF score follows 1/(k+rank) formula."""
+    """Verify RRF score follows 1/(k+rank) formula with consensus boost."""
     vector = [_make_result("a.py", 1, 0.9)]
     keyword = [("a.py", "python", "# code", 1, 10, 1)]
     result = _fuse_rrf(vector, keyword, limit=1)
-    expected = 1.0 / (_RRF_K + 1) + 1.0 / (_RRF_K + 1) + 0.003  # both rank 1 + boost
+    expected = 1.0 / (_RRF_K + 1) + 1.0 / (_RRF_K + 1) + _RRF_CONSENSUS_BOOST
     assert abs(result[0].score - expected) < 1e-6
