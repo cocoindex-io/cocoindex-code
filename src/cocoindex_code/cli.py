@@ -223,6 +223,7 @@ def _search_with_wait_spinner(
     query: str,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
+    exclude_paths: list[str] | None = None,
     limit: int = 10,
     offset: int = 0,
 ) -> SearchResponse:
@@ -248,6 +249,7 @@ def _search_with_wait_spinner(
             query=query,
             languages=languages,
             paths=paths,
+            exclude_paths=exclude_paths,
             limit=limit,
             offset=offset,
             on_waiting=_on_waiting,
@@ -540,6 +542,7 @@ def search(
     query: list[str] = _typer.Argument(..., help="Search query"),
     lang: list[str] = _typer.Option([], "--lang", help="Filter by language"),
     path: str | None = _typer.Option(None, "--path", help="Filter by file path glob"),
+    exclude: list[str] = _typer.Option([], "--exclude", help="Exclude file path glob(s)"),
     offset: int = _typer.Option(0, "--offset", help="Number of results to skip"),
     limit: int = _typer.Option(10, "--limit", help="Maximum results to return"),
     refresh: bool = _typer.Option(False, "--refresh", help="Refresh index before searching"),
@@ -565,6 +568,7 @@ def search(
         query=query_str,
         languages=lang or None,
         paths=paths,
+        exclude_paths=exclude or None,
         limit=limit,
         offset=offset,
     )
