@@ -51,6 +51,7 @@ def _full_scan_query(
     offset: int,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
+    exclude_paths: list[str] | None = None,
 ) -> list[tuple[Any, ...]]:
     """Full scan with SQL-level distance computation and filtering."""
     conditions: list[str] = []
@@ -65,6 +66,11 @@ def _full_scan_query(
         path_clauses = " OR ".join("file_path GLOB ?" for _ in paths)
         conditions.append(f"({path_clauses})")
         params.extend(paths)
+
+    if exclude_paths:
+        exclude_clauses = " AND ".join("file_path NOT GLOB ?" for _ in exclude_paths)
+        conditions.append(f"({exclude_clauses})")
+        params.extend(exclude_paths)
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     params.extend([limit, offset])
@@ -90,6 +96,7 @@ async def query_codebase(
     offset: int = 0,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
+    exclude_paths: list[str] | None = None,
 ) -> list[QueryResult]:
     """
     Perform vector similarity search using vec0 KNN index.
@@ -114,8 +121,8 @@ async def query_codebase(
     embedding_bytes = query_embedding.astype("float32").tobytes()
 
     with db.readonly() as conn:
-        if paths:
-            rows = _full_scan_query(conn, embedding_bytes, limit, offset, languages, paths)
+        if paths or exclude_paths:
+            rows = _full_scan_query(conn, embedding_bytes, limit, offset, languages, paths, exclude_paths)
         elif not languages or len(languages) == 1:
             lang = languages[0] if languages else None
             rows = _knn_query(conn, embedding_bytes, limit + offset, lang)
@@ -131,7 +138,7 @@ async def query_codebase(
                 key=lambda r: r[5],
             )
 
-    if not paths:
+    if not paths and not exclude_paths:
         rows = rows[offset:]
 
     return [
