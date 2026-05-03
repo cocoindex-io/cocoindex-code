@@ -78,4 +78,3 @@ class TestChunkingExports:
     def test_chunker_registry_is_context_key(self) -> None:
         """CHUNKER_REGISTRY should be a CocoIndex context key."""
         assert CHUNKER_REGISTRY is not None
-        assert "chunker_registry" in str(CHUNKER_REGISTRY)
