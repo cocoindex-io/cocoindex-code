@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
-import pytest
-
 from cocoindex_code.schema import CodeChunk, QueryResult
 from cocoindex_code.chunking import Chunk, ChunkerFn, CHUNKER_REGISTRY, TextPosition
 
@@ -21,7 +18,7 @@ class TestCodeChunk:
             content="def hello(): pass",
             start_line=1,
             end_line=1,
-            embedding=np.zeros(384, dtype="float32"),
+            embedding=[0.0] * 384,
         )
         assert chunk.file_path == "src/main.py"
         assert chunk.language == "python"
