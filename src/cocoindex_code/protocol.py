@@ -103,7 +103,6 @@ class IndexProgressUpdate(_msgspec.Struct, tag="index_progress"):
 class IndexWaitingNotice(_msgspec.Struct, tag="index_waiting"):
     """Sent when another indexing is already in progress and the client must wait."""
 
-    pass
 
 
 class SearchResult(_msgspec.Struct):
