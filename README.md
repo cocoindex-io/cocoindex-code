@@ -664,10 +664,12 @@ embedding:
 | scala | | `.scala` |
 | solidity | | `.sol` |
 | sql | | `.sql` |
+| svelte | | `.svelte` |
 | swift | | `.swift` |
 | toml | | `.toml` |
 | tsx | | `.tsx` |
 | typescript | ts | `.ts` |
+| vue | | `.vue` |
 | xml | | `.xml` |
 | yaml | | `.yaml`, `.yml` |
 

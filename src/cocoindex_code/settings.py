@@ -53,6 +53,8 @@ DEFAULT_INCLUDED_PATTERNS: list[str] = [
     "**/*.r",  # R
     "**/*.html",  # HTML
     "**/*.htm",  # HTML
+    "**/*.svelte",  # Svelte
+    "**/*.vue",  # Vue
     "**/*.css",  # CSS
     "**/*.scss",  # SCSS
     "**/*.json",  # JSON
