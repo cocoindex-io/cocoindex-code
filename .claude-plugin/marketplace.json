@@ -1,0 +1,28 @@
+{
+  "name": "cocoindex-code",
+  "version": "1.0.0",
+  "description": "AST-based semantic code search for Claude Code, Cursor, and any skill-compatible coding agent — install in one command.",
+  "owner": {
+    "name": "Roxabi",
+    "email": "mickael@bouly.io"
+  },
+  "plugins": [
+    {
+      "name": "cocoindex-code",
+      "source": "./",
+      "description": "Semantic code search skill — wraps the `ccc` CLI to give coding agents AST-aware search over the current codebase.",
+      "category": "development",
+      "tags": [
+        "semantic-search",
+        "code-search",
+        "ast",
+        "indexing",
+        "rag",
+        "skill"
+      ],
+      "homepage": "https://github.com/Roxabi/cocoindex-code",
+      "repository": "https://github.com/Roxabi/cocoindex-code",
+      "license": "Apache-2.0"
+    }
+  ]
+}
