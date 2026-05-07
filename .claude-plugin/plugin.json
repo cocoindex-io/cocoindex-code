@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "description": "AST-based semantic code search via the ccc CLI. Bundles the ccc skill so coding agents handle init, indexing, and search automatically.",
   "author": {
-    "name": "CocoIndex",
-    "email": "hi@cocoindex.io"
+    "name": "Roxabi",
+    "email": "mickael@bouly.io"
   },
-  "homepage": "https://github.com/cocoindex-io/cocoindex-code",
-  "repository": "https://github.com/cocoindex-io/cocoindex-code",
+  "homepage": "https://github.com/Roxabi/cocoindex-code",
+  "repository": "https://github.com/Roxabi/cocoindex-code",
   "license": "Apache-2.0",
   "keywords": [
     "semantic-search",

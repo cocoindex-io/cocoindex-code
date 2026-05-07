@@ -82,7 +82,7 @@ Works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and oth
 For Claude Code users, this repository is also a [plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). Install the skill from inside Claude Code with:
 
 ```text
-/plugin marketplace add cocoindex-io/cocoindex-code
+/plugin marketplace add Roxabi/cocoindex-code
 /plugin install cocoindex-code@cocoindex-code
 ```
 

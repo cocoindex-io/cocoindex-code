@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "AST-based semantic code search for Claude Code, Cursor, and any skill-compatible coding agent — install in one command.",
   "owner": {
-    "name": "CocoIndex",
-    "email": "hi@cocoindex.io"
+    "name": "Roxabi",
+    "email": "mickael@bouly.io"
   },
   "plugins": [
     {
@@ -20,8 +20,8 @@
         "rag",
         "skill"
       ],
-      "homepage": "https://github.com/cocoindex-io/cocoindex-code",
-      "repository": "https://github.com/cocoindex-io/cocoindex-code",
+      "homepage": "https://github.com/Roxabi/cocoindex-code",
+      "repository": "https://github.com/Roxabi/cocoindex-code",
       "license": "Apache-2.0"
     }
   ]
