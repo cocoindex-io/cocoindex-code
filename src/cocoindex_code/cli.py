@@ -7,12 +7,18 @@ import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import typer as _typer
 
-from .client import DaemonStartError
-from .protocol import DoctorCheckResult, IndexingProgress, ProjectStatusResponse, SearchResponse
+if TYPE_CHECKING:
+    from .protocol import (
+        DoctorCheckResult,
+        IndexingProgress,
+        ProjectStatusResponse,
+        SearchResponse,
+    )
+
 from .settings import (
     DEFAULT_ST_MODEL,
     EmbeddingSettings,
@@ -104,6 +110,8 @@ def _catch_daemon_start_error(func: _F) -> _F:
 
     @functools.wraps(func)
     def wrapper(*args: object, **kwargs: object) -> object:
+        from .client import DaemonStartError
+
         try:
             return func(*args, **kwargs)
         except DaemonStartError as e:
@@ -204,7 +212,7 @@ def _run_index_with_progress(project_root: str) -> None:
         except RuntimeError as e:
             live.stop()
             # Let DaemonStartError propagate to the decorator for consistent handling.
-            if isinstance(e, DaemonStartError):
+            if isinstance(e, _client.DaemonStartError):
                 raise
             _typer.echo(f"Indexing failed: {e}", err=True)
             raise _typer.Exit(code=1)
@@ -397,6 +405,7 @@ def _run_init_model_check(settings_path: Path) -> None:
     from rich.spinner import Spinner as _Spinner
 
     from . import client as _client
+    from .protocol import DoctorCheckResult
 
     err_console = _Console(stderr=True)
     results: list[DoctorCheckResult] = []

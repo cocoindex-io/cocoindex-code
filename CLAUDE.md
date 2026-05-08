@@ -12,8 +12,6 @@ uv run pytest tests/    # Run Python tests
 
 ## Code Conventions
 
-The full review-time detection checklist (with worked examples and post-hoc smell patterns) lives in the [`/review-changes`](~/.claude/skills/review-changes/SKILL.md) skill — run it on uncommitted changes before landing a non-trivial PR. The rules below are write-time mnemonics; project-specific ones (Internal/External modules) stay here in full.
-
 ### Internal vs External Modules
 
 We distinguish between **internal modules** (under packages with `_` prefix, e.g. `_internal.*` or `connectors.*._source`) and **external modules** (which users can directly import).
