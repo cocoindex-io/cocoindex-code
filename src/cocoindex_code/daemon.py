@@ -275,6 +275,7 @@ async def _search_with_wait(
             query=req.query,
             languages=req.languages,
             paths=req.paths,
+            repo_keys=req.repo_keys,
             limit=req.limit,
             offset=req.offset,
         )
@@ -488,6 +489,7 @@ async def _dispatch(
                 query=req.query,
                 languages=req.languages,
                 paths=req.paths,
+                repo_keys=req.repo_keys,
                 limit=req.limit,
                 offset=req.offset,
             )
