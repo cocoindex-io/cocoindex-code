@@ -525,6 +525,23 @@ envs:
 </details>
 
 <details>
+<summary>OpenAI-compatible (custom endpoint)</summary>
+
+Many providers (vLLM, LM Studio, LocalAI, Together, Fireworks, DeepInfra, …) expose an OpenAI-compatible embedding API. Use the `openai/` prefix and point `OPENAI_BASE_URL` at your endpoint:
+
+```yaml
+embedding:
+  model: openai/your-model-name
+envs:
+  OPENAI_BASE_URL: https://your-endpoint/v1
+  OPENAI_API_KEY: your-api-key
+```
+
+Don't append `/embeddings` to the base URL — LiteLLM handles that.
+
+</details>
+
+<details>
 <summary>Azure OpenAI</summary>
 
 ```yaml
@@ -612,7 +629,7 @@ envs:
 
 </details>
 
-Any [LiteLLM-supported model](https://docs.litellm.ai/docs/embedding/supported_embedding) works. When using a LiteLLM model, set `provider: litellm` (or omit `provider` — LiteLLM is the default for non-`sentence-transformers` models).
+Any [LiteLLM-supported model](https://docs.litellm.ai/docs/embedding/supported_embedding) works. When using a LiteLLM model, set `provider: litellm` (or omit `provider` — LiteLLM is the default for non-`sentence-transformers` models). For the full list of env vars each provider reads (API keys, base URLs, regions, …), see LiteLLM's [Setting API Keys](https://docs.litellm.ai/docs/set_keys).
 
 ### Local SentenceTransformers Models
 
