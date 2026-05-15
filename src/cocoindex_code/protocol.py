@@ -22,6 +22,7 @@ class SearchRequest(_msgspec.Struct, tag="search"):
     query: str
     languages: list[str] | None = None
     paths: list[str] | None = None
+    repo_keys: list[str] | None = None
     limit: int = 5
     offset: int = 0
 
@@ -111,6 +112,7 @@ class SearchResult(_msgspec.Struct):
     start_line: int
     end_line: int
     score: float
+    repo_key: str | None = None
 
 
 class SearchResponse(_msgspec.Struct, tag="search"):

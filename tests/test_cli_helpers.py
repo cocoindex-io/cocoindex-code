@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import re
+from io import StringIO
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from cocoindex_code import cli
 from cocoindex_code.cli import (
@@ -13,6 +17,13 @@ from cocoindex_code.cli import (
     require_project_root,
     resolve_default_path,
 )
+from cocoindex_code.protocol import SearchResponse, SearchResult
+
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 def test_require_project_root_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,6 +93,223 @@ def test_resolve_default_path_outside_project(
     monkeypatch.chdir(other)
     result = resolve_default_path(project_root)
     assert result is None
+
+
+def test_search_help_includes_json_option() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli.app, ["search", "--help"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    output = _strip_ansi(result.output)
+    assert "--json" in output
+    assert "--repo-key" in output
+
+
+def test_bridge_help_includes_jsonrpc_option() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli.app, ["bridge", "--help"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert "--jsonrpc" in _strip_ansi(result.output)
+
+
+def test_print_search_results_json_outputs_machine_readable_payload(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    response = SearchResponse(
+        success=True,
+        results=[
+            SearchResult(
+                file_path="src/main.py",
+                language="python",
+                content="def main():\n    return 1",
+                start_line=10,
+                end_line=11,
+                score=0.875,
+            )
+        ],
+        total_returned=1,
+        offset=5,
+        message=None,
+    )
+
+    cli.print_search_results_json(response)
+
+    assert json.loads(capsys.readouterr().out) == {
+        "success": True,
+        "results": [
+            {
+                "file_path": "src/main.py",
+                "repo_key": None,
+                "language": "python",
+                "content": "def main():\n    return 1",
+                "start_line": 10,
+                "end_line": 11,
+                "score": 0.875,
+            }
+        ],
+        "total_returned": 1,
+        "offset": 5,
+        "message": None,
+    }
+
+
+def test_jsonrpc_bridge_ping_and_shutdown() -> None:
+    input_stream = StringIO(
+        '{"jsonrpc":"2.0","id":1,"method":"ping"}\n'
+        '{"jsonrpc":"2.0","id":2,"method":"shutdown"}\n'
+        '{"jsonrpc":"2.0","id":3,"method":"ping"}\n'
+    )
+    output_stream = StringIO()
+
+    def fake_search(
+        project_root: str,
+        query: str,
+        languages: list[str] | None = None,
+        paths: list[str] | None = None,
+        repo_keys: list[str] | None = None,
+        limit: int = 5,
+        offset: int = 0,
+        on_waiting: object | None = None,
+    ) -> SearchResponse:
+        raise AssertionError("search should not be called")
+
+    cli.run_jsonrpc_bridge(input_stream, output_stream, fake_search)
+
+    responses = [json.loads(line) for line in output_stream.getvalue().splitlines()]
+    assert responses == [
+        {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}},
+        {"jsonrpc": "2.0", "id": 2, "result": {"ok": True}},
+    ]
+
+
+def test_jsonrpc_bridge_search_uses_client_payload() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": "search-1",
+                "method": "search",
+                "params": {
+                    "project_root": "/workspace",
+                    "query": "stream writer",
+                    "languages": ["python"],
+                    "paths": ["src/*"],
+                    "repo_keys": ["repo-a"],
+                    "limit": 3,
+                    "offset": 2,
+                },
+            }
+        )
+        + "\n"
+    )
+    output_stream = StringIO()
+    calls: list[dict[str, object]] = []
+
+    def fake_search(
+        project_root: str,
+        query: str,
+        languages: list[str] | None = None,
+        paths: list[str] | None = None,
+        repo_keys: list[str] | None = None,
+        limit: int = 5,
+        offset: int = 0,
+        on_waiting: object | None = None,
+    ) -> SearchResponse:
+        calls.append(
+            {
+                "project_root": project_root,
+                "query": query,
+                "languages": languages,
+                "paths": paths,
+                "repo_keys": repo_keys,
+                "limit": limit,
+                "offset": offset,
+            }
+        )
+        return SearchResponse(
+            success=True,
+            results=[
+                SearchResult(
+                    file_path="src/main.py",
+                    repo_key="repo-a",
+                    language="python",
+                    content="def stream_writer(): pass",
+                    start_line=4,
+                    end_line=4,
+                    score=0.9,
+                )
+            ],
+            total_returned=1,
+            offset=2,
+            message=None,
+        )
+
+    cli.run_jsonrpc_bridge(input_stream, output_stream, fake_search)
+
+    assert calls == [
+        {
+            "project_root": "/workspace",
+            "query": "stream writer",
+            "languages": ["python"],
+            "paths": ["src/*"],
+            "repo_keys": ["repo-a"],
+            "limit": 3,
+            "offset": 2,
+        }
+    ]
+    response = json.loads(output_stream.getvalue())
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": "search-1",
+        "result": {
+            "success": True,
+            "results": [
+                {
+                    "file_path": "src/main.py",
+                    "repo_key": "repo-a",
+                    "language": "python",
+                    "content": "def stream_writer(): pass",
+                    "start_line": 4,
+                    "end_line": 4,
+                    "score": 0.9,
+                }
+            ],
+            "total_returned": 1,
+            "offset": 2,
+            "message": None,
+        },
+    }
+
+
+def test_jsonrpc_bridge_returns_parse_error() -> None:
+    input_stream = StringIO("{not json}\n")
+    output_stream = StringIO()
+
+    def fake_search(
+        project_root: str,
+        query: str,
+        languages: list[str] | None = None,
+        paths: list[str] | None = None,
+        repo_keys: list[str] | None = None,
+        limit: int = 5,
+        offset: int = 0,
+        on_waiting: object | None = None,
+    ) -> SearchResponse:
+        raise AssertionError("search should not be called")
+
+    cli.run_jsonrpc_bridge(input_stream, output_stream, fake_search)
+
+    assert json.loads(output_stream.getvalue()) == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {
+            "code": -32700,
+            "message": "Parse error",
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

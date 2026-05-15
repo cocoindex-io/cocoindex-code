@@ -278,6 +278,7 @@ def search(
     query: str,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
+    repo_keys: list[str] | None = None,
     limit: int = 5,
     offset: int = 0,
     on_waiting: Callable[[], None] | None = None,
@@ -298,6 +299,7 @@ def search(
                     query=query,
                     languages=languages,
                     paths=paths,
+                    repo_keys=repo_keys,
                     limit=limit,
                     offset=offset,
                 )
