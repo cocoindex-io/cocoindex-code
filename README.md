@@ -77,6 +77,17 @@ The agent uses semantic search automatically when it would be helpful. You can a
 
 Works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and other skill-compatible agents.
 
+#### Claude Code plugin marketplace
+
+For Claude Code users, this repository is also a [plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). Install the skill from inside Claude Code with:
+
+```text
+/plugin marketplace add Roxabi/cocoindex-code
+/plugin install cocoindex-code@cocoindex-code
+```
+
+This bundles the same `ccc` skill, with version pinning and `/plugin marketplace update` for updates.
+
 ### MCP Server
 
 Alternatively, use `ccc mcp` to run as an MCP server:
