@@ -90,6 +90,7 @@ def test_sample_compose_uses_daemon_without_source_mount() -> None:
     content = (REPO_ROOT / "sample" / "docker-compose.yml").read_text()
 
     assert ":/workspace" not in content
+    assert "ports:" not in content
     assert "COCOINDEX_CODE_DAEMON_TCP: 0.0.0.0:8765" in content
     assert "cocoindex-code-local-state:/var/cocoindex" in content
     assert "cocoindex-code-local-runtime:/var/run/cocoindex_code" in content
@@ -100,8 +101,35 @@ def test_sample_wrapper_mounts_only_authorized_repo_sidecar() -> None:
 
     assert 'record_authorization "$root" "$common_dir"' in content
     assert '--volume "$root:/workspace"' in content
+    assert '--network "$network"' in content
     assert "COCOINDEX_CODE_SIDECAR=1" in content
+    assert "COCOINDEX_CODE_DAEMON_SUPERVISED=1" in content
     assert 'COCOINDEX_CODE_DAEMON_TCP=$central_container:8765' in content
+    assert 'exec docker "${run_args[@]}"' in content
+
+
+def test_sample_wrapper_authorization_handles_nested_repos_and_worktrees() -> None:
+    content = (REPO_ROOT / "sample" / "bin" / "ccc").read_text()
+
+    assert 'if (( ${#root} > ${#best} )); then' in content
+    assert 'git_common_dir_for()' in content
+    assert 'common_dir="$(git_common_dir_for "$root")"' in content
+    assert 'if [[ "$common_dir" != "$root/.git" ]]; then' in content
+    assert '--volume "$common_dir:$common_dir:ro"' in content
+
+
+def test_sample_wrapper_refuses_unauthorized_paths_and_requires_git_for_init() -> None:
+    content = (REPO_ROOT / "sample" / "bin" / "ccc").read_text()
+
+    assert "ccc init must be run inside a Git repository for Docker authorization." in content
+    assert "This path has not been authorized for Docker-backed ccc access:" in content
+    assert "Run ccc init from the Git repo root or a subdirectory first." in content
+
+
+def test_sample_gitignore_excludes_runtime_authorization_state() -> None:
+    content = (REPO_ROOT / "sample" / ".gitignore").read_text()
+
+    assert "data/" in content
 
 
 def test_sample_makefile_has_default_image_and_reset_target() -> None:

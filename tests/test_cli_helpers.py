@@ -13,6 +13,7 @@ from cocoindex_code.cli import (
     require_project_root,
     resolve_default_path,
 )
+from cocoindex_code.protocol import SearchResponse
 
 
 def test_require_project_root_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -204,6 +205,116 @@ def test_apply_host_cwd_noop_when_unset(
 
     assert Path.cwd() == original_cwd
     assert capsys.readouterr().err == ""
+
+
+def test_search_with_wait_spinner_resolves_sidecar_layers_before_daemon_search(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cocoindex_code.client as client
+    import cocoindex_code.sidecar as sidecar
+
+    async def fake_ensure_sidecar_layer_ids(**kwargs: object) -> list[str]:
+        captured["ensure_kwargs"] = kwargs
+        return ["base", "dirty"]
+
+    def fake_search(**kwargs: object) -> SearchResponse:
+        captured["search_kwargs"] = kwargs
+        return SearchResponse(success=True)
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(sidecar, "sidecar_enabled", lambda: True)
+    monkeypatch.setattr(sidecar, "ensure_sidecar_layer_ids", fake_ensure_sidecar_layer_ids)
+    monkeypatch.setattr(client, "search", fake_search)
+
+    resp = cli._search_with_wait_spinner(
+        project_root=str(tmp_path / "repo"),
+        cwd=str(tmp_path / "repo" / "src"),
+        base_ref="main",
+        query="hello",
+        languages=["python"],
+        paths=["src/*"],
+        limit=3,
+        offset=1,
+    )
+
+    assert resp.success is True
+    ensure_kwargs = captured["ensure_kwargs"]
+    assert isinstance(ensure_kwargs, dict)
+    assert ensure_kwargs["project_root"] == tmp_path / "repo"
+    assert ensure_kwargs["cwd"] == tmp_path / "repo" / "src"
+    assert ensure_kwargs["base_ref"] == "main"
+
+    search_kwargs = captured["search_kwargs"]
+    assert isinstance(search_kwargs, dict)
+    assert search_kwargs["project_root"] == str(tmp_path / "repo")
+    assert search_kwargs["cwd"] == str(tmp_path / "repo" / "src")
+    assert search_kwargs["base_ref"] == "main"
+    assert search_kwargs["layer_ids"] == ["base", "dirty"]
+    assert search_kwargs["languages"] == ["python"]
+    assert search_kwargs["paths"] == ["src/*"]
+    assert search_kwargs["limit"] == 3
+    assert search_kwargs["offset"] == 1
+
+
+def test_search_with_wait_spinner_omits_layer_ids_outside_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cocoindex_code.client as client
+    import cocoindex_code.sidecar as sidecar
+
+    def fail_ensure(**_kwargs: object) -> list[str]:
+        raise AssertionError("sidecar layer resolution should not run")
+
+    def fake_search(**kwargs: object) -> SearchResponse:
+        captured["search_kwargs"] = kwargs
+        return SearchResponse(success=True)
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(sidecar, "sidecar_enabled", lambda: False)
+    monkeypatch.setattr(sidecar, "ensure_sidecar_layer_ids", fail_ensure)
+    monkeypatch.setattr(client, "search", fake_search)
+
+    resp = cli._search_with_wait_spinner(
+        project_root=str(tmp_path / "repo"),
+        query="hello",
+    )
+
+    assert resp.success is True
+    search_kwargs = captured["search_kwargs"]
+    assert isinstance(search_kwargs, dict)
+    assert search_kwargs["layer_ids"] is None
+
+
+def test_run_index_with_progress_uses_sidecar_indexer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import cocoindex_code.client as client
+    import cocoindex_code.sidecar as sidecar
+
+    async def fake_run_sidecar_index(**kwargs: object) -> None:
+        captured["index_kwargs"] = kwargs
+
+    def fail_client_index(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("daemon index should not run in sidecar mode")
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(sidecar, "sidecar_enabled", lambda: True)
+    monkeypatch.setattr(sidecar, "run_sidecar_index", fake_run_sidecar_index)
+    monkeypatch.setattr(client, "index", fail_client_index)
+
+    cli._run_index_with_progress(
+        str(tmp_path / "repo"),
+        cwd=str(tmp_path / "repo" / "src"),
+        base_ref="main",
+    )
+
+    kwargs = captured["index_kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["project_root"] == tmp_path / "repo"
+    assert kwargs["cwd"] == tmp_path / "repo" / "src"
+    assert kwargs["base_ref"] == "main"
+    assert callable(kwargs["on_progress"])
+    assert "Indexing failed" not in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
