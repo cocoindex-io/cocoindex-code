@@ -30,6 +30,7 @@ from .embedder_params import resolve_embedder_params
 from .git_context import GitContextError, resolve_worktree_context
 from .layer_store import LayerStore
 from .layered_project import LayeredProject, build_index_config_hash
+from .layers import LayerBuildResult, LayerRuntime
 from .project import Project
 from .protocol import (
     DaemonEnvRequest,
@@ -59,6 +60,7 @@ from .protocol import (
     Response,
     SearchRequest,
     SearchResponse,
+    SearchResult,
     SearchStreamResponse,
     StopRequest,
     StopResponse,
@@ -245,6 +247,61 @@ class ProjectRegistry:
             )
             for root, project in self._projects.items()
         ]
+
+    async def search_layers(
+        self,
+        *,
+        project_root: str,
+        layer_ids: list[str],
+        query: str,
+        languages: list[str] | None,
+        paths: list[str] | None,
+        limit: int,
+        offset: int,
+    ) -> list[SearchResult]:
+        if self._embedder is None:
+            raise RuntimeError(
+                "Daemon has no global settings loaded. Run `ccc init` to set up cocoindex-code."
+            )
+        stack = []
+        for layer_id in layer_ids:
+            layer = self.layer_store.get_layer(layer_id)
+            if layer is None:
+                raise RuntimeError(f"Layer not found: {layer_id}")
+            manifest = self.layer_store.get_manifest(layer_id)
+            if manifest is None:
+                raise RuntimeError(f"Layer manifest not found: {layer_id}")
+            runtime = await LayerRuntime.create(
+                layer=layer,
+                project_root=Path(project_root),
+                embedder=self._embedder,
+                indexing_params=self.indexing_params,
+                query_params=self.query_params,
+                chunker_registry={},
+                project_cache=self._layer_project_cache,
+            )
+            stack.append(LayerBuildResult(layer=layer, manifest=manifest, runtime=runtime))
+
+        from .layers.layer_stack import LayerStack
+
+        layer_stack = LayerStack(
+            project_root=Path(project_root),
+            state_dir=self.state_dir,
+            store=self.layer_store,
+            embedder=self._embedder,
+            indexing_params=self.indexing_params,
+            query_params=self.query_params,
+            chunker_registry={},
+            project_cache=self._layer_project_cache,
+        )
+        return await layer_stack.search(
+            layers=stack,
+            query=query,
+            languages=languages,
+            paths=paths,
+            limit=limit,
+            offset=offset,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +595,23 @@ async def _dispatch(
             return project.stream_index()
 
         if isinstance(req, SearchRequest):
+            if req.layer_ids is not None:
+                results = await registry.search_layers(
+                    project_root=req.project_root,
+                    layer_ids=req.layer_ids,
+                    query=req.query,
+                    languages=req.languages,
+                    paths=req.paths,
+                    limit=req.limit,
+                    offset=req.offset,
+                )
+                return SearchResponse(
+                    success=True,
+                    results=results,
+                    total_returned=len(results),
+                    offset=req.offset,
+                )
+
             project = await registry.get_project(
                 req.project_root, cwd=req.cwd, base_ref=req.base_ref
             )
@@ -721,7 +795,7 @@ def run_daemon() -> None:
     )
 
     sock_path = daemon_socket_path()
-    if sys.platform != "win32":
+    if connection_family() == "AF_UNIX" and isinstance(sock_path, str):
         try:
             Path(sock_path).unlink(missing_ok=True)
         except Exception:
@@ -791,7 +865,7 @@ def run_daemon() -> None:
         loop.close()
 
         # 4. Remove socket and PID file.
-        if sys.platform != "win32":
+        if connection_family() == "AF_UNIX" and isinstance(sock_path, str):
             try:
                 Path(sock_path).unlink(missing_ok=True)
             except Exception:

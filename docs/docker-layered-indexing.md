@@ -1,143 +1,152 @@
-# Docker Layered Indexing
+# Docker Sidecar Layered Indexing
 
 This guide covers the Docker-specific configuration for Git layered indexing. For the core model, see [Git Layered Indexing](./layered-indexing.md).
 
-## Recommended Compose Setup
+The intended Docker architecture is:
 
-Use the repository compose file:
+- one central daemon container with no source-code mount
+- Docker named volumes for daemon state, runtime files, config, caches, and layer databases
+- short-lived sidecar containers for repo work
+- each sidecar mounts exactly one authorized Git checkout at `/workspace`
+- sidecars talk to the central daemon over a private Docker network
 
-```bash
-docker compose -f docker/docker-compose.yml up -d
-```
+Do not mount `$HOME` or a broad source tree just to make indexing work.
 
-The compose defaults are designed for layered indexing:
+## Repo-Scoped Sample
 
-```yaml
-COCOINDEX_CODE_STATE_DIR: /var/cocoindex/state
-COCOINDEX_CODE_RUNTIME_DIR: /var/run/cocoindex_code
-COCOINDEX_CODE_DB_PATH_MAPPING: /workspace=/var/cocoindex/db
-COCOINDEX_CODE_HOST_PATH_MAPPING: /workspace=$HOME
-```
-
-The important split is:
-
-- source code and settings live on the bind mount under `/workspace`
-- durable daemon layer metadata lives under `/var/cocoindex/state`
-- per-project non-layer DB paths are remapped to `/var/cocoindex/db`
-- sockets, PID files, and logs stay under `/var/run/cocoindex_code`
-
-## Mount the Right Workspace
-
-The default compose file mounts your home directory:
+Build the branch-local image:
 
 ```bash
-COCOINDEX_HOST_WORKSPACE=$HOME docker compose -f docker/docker-compose.yml up -d
+cd sample
+make build
 ```
 
-For a narrower mount, point it at the parent containing both the root clone and linked worktrees:
+Authorize one repo and register its base ref:
 
 ```bash
-COCOINDEX_HOST_WORKSPACE=$HOME/src/github/cocoindex-io \
-  docker compose -f docker/docker-compose.yml up -d
+cd /path/to/repo
+/path/to/cocoindex-code/sample/bin/ccc init --base main
 ```
 
-Example host layout:
+Then index and search:
+
+```bash
+/path/to/cocoindex-code/sample/bin/ccc index
+/path/to/cocoindex-code/sample/bin/ccc search "query planner"
+/path/to/cocoindex-code/sample/bin/ccc overlay status
+```
+
+The wrapper refuses to run outside an authorized repo. Running `ccc init` from another repo authorizes that repo separately. Source access is granted only to the short-lived sidecar for that repo.
+
+Linked worktrees must also be authorized explicitly:
+
+```bash
+cd /path/to/repo.worktrees/feature-1
+/path/to/cocoindex-code/sample/bin/ccc init --base main
+/path/to/cocoindex-code/sample/bin/ccc index
+```
+
+When linked worktrees share the same Git common directory, they can share daemon layer state while each sidecar still mounts only the initialized checkout.
+
+## What Runs Where
+
+Central daemon container:
 
 ```text
-$HOME/src/github/cocoindex-io/
-  cocoindex-code/
-  cocoindex-code.worktrees/
-    feature-1/
+mounts:
+  cocoindex-code-local-state   -> /var/cocoindex
+  cocoindex-code-local-runtime -> /var/run/cocoindex_code
+network:
+  cocoindex-code-local
+listens:
+  COCOINDEX_CODE_DAEMON_TCP=0.0.0.0:8765
+source access:
+  none
 ```
 
-Both paths must be visible inside the same container mount for the daemon to reuse repository and layer state across them.
+Sidecar container:
 
-## Host Wrapper
+```text
+mounts:
+  /authorized/repo             -> /workspace
+  cocoindex-code-local-state   -> /var/cocoindex
+  cocoindex-code-local-runtime -> /var/run/cocoindex_code
+network:
+  cocoindex-code-local
+connects:
+  COCOINDEX_CODE_DAEMON_TCP=cocoindex-code-local-daemon:8765
+source access:
+  only the authorized repo
+```
 
-Use this wrapper so Docker commands resolve the host current directory correctly:
+Indexing runs in the sidecar because it is the process with Git/source access. The resulting layer metadata and layer databases are written to shared daemon state. Search sends the resolved layer IDs to the central daemon, and the daemon serves the query from shared layer databases without mounting the repository.
+
+## State
+
+Host-side sample metadata:
+
+```text
+sample/data/authorized-repos.tsv
+```
+
+Docker named volumes:
+
+| Volume | Mounted As | Purpose |
+|---|---|---|
+| `cocoindex-code-local-state` | `/var/cocoindex` | Global settings, daemon DB, layer metadata, layer DBs, caches |
+| `cocoindex-code-local-runtime` | `/var/run/cocoindex_code` | PID/log runtime files |
+
+Reset sample Docker state:
 
 ```bash
-ccc() {
-  local container="${COCOINDEX_CODE_CONTAINER_NAME:-cocoindex-code}"
-  if [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" != "true" ]; then
-    echo "cocoindex-code container is not running. Start it with: docker compose -f docker/docker-compose.yml up -d" >&2
-    return 1
-  fi
-
-  local flags=(-i)
-  if [ "${1:-}" != "mcp" ] && [ -t 0 ] && [ -t 1 ]; then
-    flags=(-it)
-  fi
-
-  docker exec "${flags[@]}" \
-    -e COCOINDEX_CODE_HOST_CWD="$PWD" \
-    "$container" ccc "$@"
-}
+cd sample
+make reset
 ```
-
-`COCOINDEX_CODE_HOST_CWD` is required for linked worktrees. It tells the container-side CLI which host directory you are actually in, then the path mapping translates it to `/workspace/...`.
-
-## Layered Workflow in Docker
-
-Root clone:
-
-```bash
-cd $HOME/src/github/cocoindex-io/cocoindex-code
-ccc init --base main
-ccc index
-```
-
-Linked worktree:
-
-```bash
-git worktree add ../cocoindex-code.worktrees/feature-1 -b feature-1 main
-cd ../cocoindex-code.worktrees/feature-1
-ccc index
-ccc search "query planner"
-ccc overlay status
-```
-
-The base layer is stored once under `/var/cocoindex/state` and reused by the linked worktree.
 
 ## Environment Variables
 
 | Variable | Purpose |
 |---|---|
-| `COCOINDEX_CODE_IMAGE` | Image used by compose, e.g. `cocoindex/cocoindex-code:full`. |
-| `COCOINDEX_CODE_CONTAINER_NAME` | Container name used by compose and the wrapper. |
-| `COCOINDEX_HOST_WORKSPACE` | Host directory mounted at `/workspace`. Mount a parent that contains all worktrees you want to share. |
-| `COCOINDEX_CODE_HOST_PATH_MAPPING` | Container-to-host path mapping for display and host CWD translation. |
-| `COCOINDEX_CODE_HOST_CWD` | Host current directory passed per `docker exec` invocation. |
-| `COCOINDEX_CODE_STATE_DIR` | Durable daemon layer state. Default: `/var/cocoindex/state`. |
-| `COCOINDEX_CODE_RUNTIME_DIR` | Runtime socket/PID/log directory. Default: `/var/run/cocoindex_code`. |
-| `COCOINDEX_CODE_DB_PATH_MAPPING` | Non-layer project DB remapping. Default: `/workspace=/var/cocoindex/db`. |
-| `PUID`, `PGID` | Linux-only ownership mapping for bind-mounted files and Docker-managed state. |
+| `COCOINDEX_CODE_IMAGE` | Image used for central daemon and sidecars. Default: `cocoindex-code:local-layered`. |
+| `COCOINDEX_CODE_DAEMON_CONTAINER` | Central daemon container name. Default: `cocoindex-code-local-daemon`. |
+| `COCOINDEX_CODE_DOCKER_NETWORK` | Private Docker network. Default: `cocoindex-code-local`. |
+| `COCOINDEX_CODE_STATE_VOLUME` | Shared daemon state named volume. Default: `cocoindex-code-local-state`. |
+| `COCOINDEX_CODE_RUNTIME_VOLUME` | Shared runtime named volume. Default: `cocoindex-code-local-runtime`. |
+| `COCOINDEX_CODE_SAMPLE_DATA_DIR` | Host-side allowlist directory. Default: `sample/data`. |
+| `PUID`, `PGID` | Linux-only ownership mapping. |
+
+Internal sidecar/daemon variables:
+
+| Variable | Purpose |
+|---|---|
+| `COCOINDEX_CODE_SIDECAR=1` | Tells CLI to run repo-mounted indexing locally in the sidecar. |
+| `COCOINDEX_CODE_DAEMON_TCP` | TCP daemon address. Central listens on `0.0.0.0:8765`; sidecars connect to the daemon container name. |
+| `COCOINDEX_CODE_DIR=/var/cocoindex/config` | Shared global settings location. |
+| `COCOINDEX_CODE_STATE_DIR=/var/cocoindex/state` | Durable daemon layer state. |
+| `COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/var/cocoindex/db` | Keeps layer/project databases on Docker native storage. |
 
 ## Debugging
 
-Check daemon status:
+Check the central daemon:
 
 ```bash
-docker exec cocoindex-code ccc daemon status
+cd sample
+make ps
+make logs
 ```
 
-Inspect overlay status from the current host directory:
+Check through a repo-authorized sidecar:
 
 ```bash
-ccc overlay status
+cd /path/to/repo
+/path/to/cocoindex-code/sample/bin/ccc daemon status
+/path/to/cocoindex-code/sample/bin/ccc overlay status
 ```
 
-Inspect state in the container:
+Inspect named volume contents:
 
 ```bash
-docker exec -it cocoindex-code sh
-ls -R /var/cocoindex/state
+docker run --rm -it \
+  -v cocoindex-code-local-state:/var/cocoindex \
+  cocoindex-code:local-layered sh
 ```
-
-Reset all Docker-managed index, layer, and cache state:
-
-```bash
-docker compose -f docker/docker-compose.yml down -v
-```
-
-This preserves your source tree because it is bind-mounted from the host.

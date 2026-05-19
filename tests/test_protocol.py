@@ -51,6 +51,7 @@ def test_encode_decode_search_request_with_defaults() -> None:
     assert isinstance(decoded, SearchRequest)
     assert decoded.cwd is None
     assert decoded.base_ref is None
+    assert decoded.layer_ids is None
     assert decoded.languages is None
     assert decoded.limit == 5
     assert decoded.offset == 0
@@ -66,6 +67,7 @@ def test_encode_decode_search_request_with_all_fields() -> None:
         offset=5,
         cwd="/tmp/proj/src",
         base_ref="main",
+        layer_ids=["base-layer", "branch-layer", "dirty-layer"],
     )
     data = encode_request(req)
     decoded = decode_request(data)
@@ -78,6 +80,7 @@ def test_encode_decode_search_request_with_all_fields() -> None:
     assert decoded.offset == 5
     assert decoded.cwd == "/tmp/proj/src"
     assert decoded.base_ref == "main"
+    assert decoded.layer_ids == ["base-layer", "branch-layer", "dirty-layer"]
 
 
 def test_encode_decode_search_response_with_results() -> None:

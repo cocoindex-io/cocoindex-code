@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import os
 import sys
@@ -217,6 +218,8 @@ def _run_index_with_progress(
     from rich.spinner import Spinner as _Spinner
 
     from . import client as _client
+    from .protocol import IndexResponse as _IndexResponse
+    from .sidecar import run_sidecar_index, sidecar_enabled
 
     err_console = _Console(stderr=True)
     last_progress_line: str | None = None
@@ -237,13 +240,24 @@ def _run_index_with_progress(
             live.update(_Spinner("dots", last_progress_line))
 
         try:
-            resp = _client.index(
-                project_root,
-                cwd=cwd,
-                base_ref=base_ref,
-                on_progress=_on_progress,
-                on_waiting=_on_waiting,
-            )
+            if sidecar_enabled():
+                asyncio.run(
+                    run_sidecar_index(
+                        project_root=Path(project_root),
+                        cwd=Path(cwd) if cwd is not None else Path(project_root),
+                        base_ref=base_ref,
+                        on_progress=_on_progress,
+                    )
+                )
+                resp = _IndexResponse(success=True)
+            else:
+                resp = _client.index(
+                    project_root,
+                    cwd=cwd,
+                    base_ref=base_ref,
+                    on_progress=_on_progress,
+                    on_waiting=_on_waiting,
+                )
         except RuntimeError as e:
             live.stop()
             # Let DaemonStartError propagate to the decorator for consistent handling.
@@ -277,6 +291,7 @@ def _search_with_wait_spinner(
     from rich.spinner import Spinner as _Spinner
 
     from . import client as _client
+    from .sidecar import ensure_sidecar_layer_ids, sidecar_enabled
 
     err_console = _Console(stderr=True)
 
@@ -288,11 +303,22 @@ def _search_with_wait_spinner(
                 refresh=True,
             )
 
+        layer_ids = None
+        if sidecar_enabled():
+            layer_ids = asyncio.run(
+                ensure_sidecar_layer_ids(
+                    project_root=Path(project_root),
+                    cwd=Path(cwd) if cwd is not None else Path(project_root),
+                    base_ref=base_ref,
+                )
+            )
+
         resp = _client.search(
             project_root=project_root,
             query=query,
             cwd=cwd,
             base_ref=base_ref,
+            layer_ids=layer_ids,
             languages=languages,
             paths=paths,
             limit=limit,

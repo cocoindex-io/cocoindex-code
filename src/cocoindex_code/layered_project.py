@@ -154,6 +154,14 @@ class LayeredProject:
             offset=offset,
         )
 
+    async def ensure_layer_ids(
+        self,
+        on_progress: Callable[[IndexingProgress], None] | None = None,
+    ) -> list[str]:
+        layers = await self._ensure_layers(on_progress=on_progress)
+        self._last_layers = layers
+        return [layer.layer.id for layer in layers]
+
     def get_status(self) -> ProjectStatusResponse:
         total_chunks = 0
         total_files_set: set[str] = set()

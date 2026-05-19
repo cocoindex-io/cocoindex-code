@@ -24,6 +24,7 @@ class SearchRequest(_msgspec.Struct, tag="search"):
     query: str
     cwd: str | None = None
     base_ref: str | None = None
+    layer_ids: list[str] | None = None
     languages: list[str] | None = None
     paths: list[str] | None = None
     limit: int = 5

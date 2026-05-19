@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import TypeAlias
 
 from .settings import user_settings_dir
 
@@ -48,13 +49,22 @@ def daemon_state_dir() -> Path:
     return Path.home() / ".local" / "share" / "cocoindex-code"
 
 
+DaemonAddress: TypeAlias = str | tuple[str, int]
+
+
 def connection_family() -> str:
     """Return the multiprocessing connection family for this platform."""
+    if os.environ.get("COCOINDEX_CODE_DAEMON_TCP"):
+        return "AF_INET"
     return "AF_PIPE" if sys.platform == "win32" else "AF_UNIX"
 
 
-def daemon_socket_path() -> str:
+def daemon_socket_path() -> DaemonAddress:
     """Return the daemon socket/pipe address."""
+    tcp = os.environ.get("COCOINDEX_CODE_DAEMON_TCP")
+    if tcp:
+        host, _, port = tcp.partition(":")
+        return (host or "127.0.0.1", int(port or "8765"))
     if sys.platform == "win32":
         import hashlib
 

@@ -158,7 +158,7 @@ def _connect_and_handshake() -> Connection:
 def _raw_connect_and_handshake() -> Connection:
     """Low-level connect + handshake without auto-start logic."""
     sock = daemon_socket_path()
-    if sys.platform != "win32" and not os.path.exists(sock):
+    if connection_family() == "AF_UNIX" and isinstance(sock, str) and not os.path.exists(sock):
         raise ConnectionRefusedError(f"Daemon socket not found: {sock}")
     try:
         conn = Client(sock, family=connection_family())
@@ -183,6 +183,34 @@ def _raw_connect_and_handshake() -> Connection:
         conn.close()
         raise DaemonVersionError(resp)
     _print_handshake_warnings(resp)
+    return conn
+
+
+def _raw_connect_version_handshake_only() -> Connection:
+    """Connect and perform only protocol-version validation.
+
+    Used for shutdown: if settings changed, the normal handshake intentionally
+    raises ``DaemonVersionError`` so regular requests restart, but shutdown must
+    still be able to tell the old daemon to exit.
+    """
+    sock = daemon_socket_path()
+    conn = Client(sock, family=connection_family())
+    try:
+        conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
+        data = conn.recv_bytes()
+        resp = decode_response(data)
+    except Exception:
+        conn.close()
+        raise
+    if isinstance(resp, ErrorResponse):
+        conn.close()
+        raise RuntimeError(f"Daemon error: {resp.message}")
+    if not isinstance(resp, HandshakeResponse):
+        conn.close()
+        raise RuntimeError(f"Unexpected handshake response: {type(resp).__name__}")
+    if not resp.ok:
+        conn.close()
+        raise DaemonVersionError(resp)
     return conn
 
 
@@ -288,6 +316,7 @@ def search(
     query: str,
     cwd: str | None = None,
     base_ref: str | None = None,
+    layer_ids: list[str] | None = None,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
     limit: int = 5,
@@ -312,6 +341,7 @@ def search(
                     query=query,
                     cwd=cwd,
                     base_ref=base_ref,
+                    layer_ids=layer_ids,
                     languages=languages,
                     paths=paths,
                     limit=limit,
@@ -418,14 +448,15 @@ def doctor(
 
 def is_daemon_running() -> bool:
     """Check if the daemon is running."""
-    if sys.platform == "win32":
+    if connection_family() != "AF_UNIX":
         try:
             conn = Client(daemon_socket_path(), family=connection_family())
             conn.close()
             return True
         except (ConnectionRefusedError, OSError):
             return False
-    return os.path.exists(daemon_socket_path())
+    sock = daemon_socket_path()
+    return isinstance(sock, str) and os.path.exists(sock)
 
 
 def start_daemon() -> subprocess.Popen[bytes]:
@@ -532,7 +563,7 @@ def stop_daemon() -> None:
 
     # 1) Graceful StopRequest via socket (bypass auto-start)
     try:
-        conn = _raw_connect_and_handshake()
+        conn = _raw_connect_version_handshake_only()
         try:
             conn.send_bytes(encode_request(StopRequest()))
             conn.recv_bytes()
@@ -567,10 +598,11 @@ def _cleanup_stale_files(pid_path: Path, pid: int | None) -> None:
     """Remove socket and PID file after the daemon has exited."""
     if sys.platform != "win32":
         sock = daemon_socket_path()
-        try:
-            Path(sock).unlink(missing_ok=True)
-        except Exception:
-            pass
+        if isinstance(sock, str):
+            try:
+                Path(sock).unlink(missing_ok=True)
+            except Exception:
+                pass
     if pid is not None:
         try:
             stored = pid_path.read_text().strip()
@@ -604,7 +636,7 @@ def _wait_for_daemon(
     deadline = time.monotonic() + timeout
     sock_path = daemon_socket_path()
     while time.monotonic() < deadline:
-        if sys.platform == "win32":
+        if connection_family() != "AF_UNIX":
             try:
                 conn = Client(sock_path, family=connection_family())
                 conn.close()
@@ -612,7 +644,7 @@ def _wait_for_daemon(
             except (ConnectionRefusedError, OSError):
                 pass
         else:
-            if os.path.exists(sock_path):
+            if isinstance(sock_path, str) and os.path.exists(sock_path):
                 return
 
         # Daemon socket not yet up — if we spawned a subprocess that already

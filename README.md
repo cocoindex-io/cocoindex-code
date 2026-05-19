@@ -211,9 +211,15 @@ By default, `ccc search` scopes results to your current working directory (relat
 A Docker image is available for teams who want a reproducible, dependency-free
 setup — no Python, `uv`, or system dependencies required on the host.
 
-The recommended approach is a **persistent container**: start it once, and use
-`docker exec` to run CLI commands or connect MCP sessions to it. The daemon
-inside stays warm across sessions, so the embedding model is loaded only once.
+The recommended secure approach is the **central daemon + on-demand sidecar**
+model: one daemon container owns shared state and short-lived sidecars mount
+exactly one authorized repository when `ccc init`, `ccc index`, or `ccc search`
+runs. This avoids giving the daemon broad access to `$HOME` or a whole source
+tree. See [Docker Sidecar Layered Indexing](./docs/docker-layered-indexing.md).
+
+The persistent-workspace compose flow below is still useful for trusted local
+development, but it mounts the configured workspace into the daemon container.
+Do not use it when repository access must be granted selectively.
 
 ### Choosing an image
 
@@ -234,7 +240,30 @@ The rest of this section uses `:latest` — substitute `:full` in the `image:` /
 > (slim) variant is unaffected — LiteLLM runs the model on the provider's
 > side, so Docker vs. native makes no difference.
 
-### Quick start — `docker compose up -d`
+### Secure quick start: daemon + sidecars
+
+Build the branch-local image and install/use the sidecar wrapper:
+
+```bash
+cd sample
+make build
+make install-ccc-wrapper   # optional; otherwise call sample/bin/ccc directly
+```
+
+Authorize and index exactly one repo:
+
+```bash
+cd /path/to/repo
+ccc init --base main
+ccc index
+ccc search "authentication logic"
+```
+
+`ccc init` records the current Git root as authorized. Later commands refuse to
+run outside an authorized repo. Sidecars mount only the authorized repo at
+`/workspace` and talk to the central daemon over a private Docker network.
+
+### Trusted-workspace compose: `docker compose up -d`
 
 Bring it up in one line — no clone needed (bash / zsh):
 

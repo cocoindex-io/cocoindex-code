@@ -34,6 +34,7 @@ def test_docker_entrypoint_prepares_state_db_cache_and_runtime_dirs() -> None:
     assert '"$SENTENCE_TRANSFORMERS_HOME"' in content
     assert '"$COCOINDEX_CODE_RUNTIME_DIR"' in content
     assert "chown -R coco:coco /var/cocoindex" in content
+    assert 'exec gosu coco "$@"' in content
 
 
 def test_docker_compose_exposes_local_use_knobs_and_healthcheck() -> None:
@@ -62,6 +63,8 @@ def test_docker_compose_exposes_local_use_knobs_and_healthcheck() -> None:
 def test_readme_documents_docker_state_runtime_and_host_cwd_mapping() -> None:
     content = (REPO_ROOT / "README.md").read_text()
 
+    assert "central daemon + on-demand sidecar" in content
+    assert "Sidecars mount only the authorized repo" in content
     assert "COCOINDEX_CODE_HOST_CWD=\"$PWD\"" in content
     assert "docker exec \"${flags[@]}\"" in content
     assert "ccc mcp" in content
@@ -71,6 +74,42 @@ def test_readme_documents_docker_state_runtime_and_host_cwd_mapping() -> None:
     assert "/var/run/cocoindex_code" in content
     assert "COCOINDEX_CODE_DB_PATH_MAPPING" in content
     assert "COCOINDEX_CODE_HOST_PATH_MAPPING" in content
+
+
+def test_docker_sidecar_docs_describe_repo_scoped_architecture() -> None:
+    content = (REPO_ROOT / "docs" / "docker-layered-indexing.md").read_text()
+
+    assert "one central daemon container with no source-code mount" in content
+    assert "short-lived sidecar containers" in content
+    assert "Do not mount `$HOME` or a broad source tree" in content
+    assert "COCOINDEX_CODE_DAEMON_TCP" in content
+    assert "COCOINDEX_CODE_SIDECAR=1" in content
+
+
+def test_sample_compose_uses_daemon_without_source_mount() -> None:
+    content = (REPO_ROOT / "sample" / "docker-compose.yml").read_text()
+
+    assert ":/workspace" not in content
+    assert "COCOINDEX_CODE_DAEMON_TCP: 0.0.0.0:8765" in content
+    assert "cocoindex-code-local-state:/var/cocoindex" in content
+    assert "cocoindex-code-local-runtime:/var/run/cocoindex_code" in content
+
+
+def test_sample_wrapper_mounts_only_authorized_repo_sidecar() -> None:
+    content = (REPO_ROOT / "sample" / "bin" / "ccc").read_text()
+
+    assert 'record_authorization "$root" "$common_dir"' in content
+    assert '--volume "$root:/workspace"' in content
+    assert "COCOINDEX_CODE_SIDECAR=1" in content
+    assert 'COCOINDEX_CODE_DAEMON_TCP=$central_container:8765' in content
+
+
+def test_sample_makefile_has_default_image_and_reset_target() -> None:
+    content = (REPO_ROOT / "sample" / "Makefile").read_text()
+
+    assert "IMAGE ?= cocoindex-code:local-layered" in content
+    assert "reset: down" in content
+    assert "docker volume rm" in content
 
 
 def test_docker_compose_config_is_valid(tmp_path: Path) -> None:

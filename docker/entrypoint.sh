@@ -36,6 +36,13 @@ if [ -n "$PUID" ] && [ -n "$PGID" ]; then
     fi
 fi
 
+if [ "$#" -gt 0 ]; then
+    if [ -n "$PUID" ] && [ -n "$PGID" ]; then
+        exec gosu coco "$@"
+    fi
+    exec "$@"
+fi
+
 run_daemon() {
     if [ -n "$PUID" ] && [ -n "$PGID" ]; then
         gosu coco ccc run-daemon

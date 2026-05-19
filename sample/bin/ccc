@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+image="${COCOINDEX_CODE_IMAGE:-cocoindex-code:local-layered}"
+central_container="${COCOINDEX_CODE_DAEMON_CONTAINER:-cocoindex-code-local-daemon}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+sample_dir="$(cd "$script_dir/.." && pwd)"
+data_dir="${COCOINDEX_CODE_SAMPLE_DATA_DIR:-$sample_dir/data}"
+registry="$data_dir/authorized-repos.tsv"
+state_dir="$data_dir/state"
+runtime_dir="$data_dir/runtime"
+state_volume="${COCOINDEX_CODE_STATE_VOLUME:-cocoindex-code-local-state}"
+runtime_volume="${COCOINDEX_CODE_RUNTIME_VOLUME:-cocoindex-code-local-runtime}"
+network="${COCOINDEX_CODE_DOCKER_NETWORK:-cocoindex-code-local}"
+
+mkdir -p "$data_dir"
+
+sha_12() {
+	printf '%s' "$1" | shasum -a 256 | awk '{print substr($1, 1, 12)}'
+}
+
+canonical_path() {
+	python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "$1"
+}
+
+git_root_for() {
+	git -C "$1" rev-parse --show-toplevel 2>/dev/null | xargs -I{} python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "{}"
+}
+
+git_common_dir_for() {
+	local root="$1"
+	local raw
+	raw="$(git -C "$root" rev-parse --git-common-dir)"
+	if [[ "$raw" = /* ]]; then
+		canonical_path "$raw"
+	else
+		canonical_path "$root/$raw"
+	fi
+}
+
+is_path_within() {
+	local child="$1"
+	local parent="$2"
+	[[ "$child" == "$parent" || "$child" == "$parent"/* ]]
+}
+
+record_authorization() {
+	local root="$1"
+	local common_dir="$2"
+	local tmp
+	tmp="$(mktemp)"
+	if [[ -f "$registry" ]]; then
+		awk -F '\t' -v root="$root" '$1 != root { print }' "$registry" > "$tmp"
+	fi
+	printf '%s\t%s\n' "$root" "$common_dir" >> "$tmp"
+	mv "$tmp" "$registry"
+}
+
+lookup_authorized_root() {
+	local cwd="$1"
+	local best=""
+	[[ -f "$registry" ]] || return 1
+	while IFS=$'\t' read -r root _common; do
+		if is_path_within "$cwd" "$root"; then
+			if (( ${#root} > ${#best} )); then
+				best="$root"
+			fi
+		fi
+	done < "$registry"
+	[[ -n "$best" ]] || return 1
+	echo "$best"
+}
+
+common_dir_for_authorized_root() {
+	local wanted="$1"
+	awk -F '\t' -v root="$wanted" '$1 == root { print $2; exit }' "$registry"
+}
+
+ensure_image_exists() {
+	if ! docker image inspect "$image" >/dev/null 2>&1; then
+		echo "Docker image '$image' does not exist." >&2
+		echo "Build it with: cd '$sample_dir' && make build" >&2
+		exit 1
+	fi
+}
+
+ensure_central_daemon() {
+	docker network inspect "$network" >/dev/null 2>&1 || docker network create "$network" >/dev/null
+	if [[ "$(docker inspect -f '{{.State.Running}}' "$central_container" 2>/dev/null || true)" == "true" ]]; then
+		return
+	fi
+	if docker inspect "$central_container" >/dev/null 2>&1; then
+		docker rm "$central_container" >/dev/null
+	fi
+	local run_args=(
+		run -d
+		--name "$central_container"
+		--network "$network"
+		--volume "$state_volume:/var/cocoindex"
+		--volume "$runtime_volume:/var/run/cocoindex_code"
+		-e COCOINDEX_CODE_DAEMON_TCP=0.0.0.0:8765
+		-e COCOINDEX_CODE_DIR=/var/cocoindex/config
+		-e COCOINDEX_CODE_STATE_DIR=/var/cocoindex/state
+		-e COCOINDEX_CODE_RUNTIME_DIR=/var/run/cocoindex_code
+		-e COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/var/cocoindex/db
+		-e COCOINDEX_CODE_DAEMON_SUPERVISED=1
+	)
+	if [[ -n "${PUID:-}" ]]; then
+		run_args+=(-e "PUID=$PUID")
+	fi
+	if [[ -n "${PGID:-}" ]]; then
+		run_args+=(-e "PGID=$PGID")
+	fi
+	run_args+=("$image")
+	docker "${run_args[@]}" >/dev/null
+}
+
+run_sidecar() {
+	local root="$1"
+	local common_dir="$2"
+	local host_cwd="$3"
+	shift 3
+
+	local run_args=(
+		run --rm -i
+		--network "$network"
+		--volume "$root:/workspace"
+		--volume "$state_volume:/var/cocoindex"
+		--volume "$runtime_volume:/var/run/cocoindex_code"
+		-e "COCOINDEX_CODE_DAEMON_TCP=$central_container:8765"
+		-e COCOINDEX_CODE_SIDECAR=1
+		-e COCOINDEX_CODE_DAEMON_SUPERVISED=1
+		-e COCOINDEX_CODE_DIR=/var/cocoindex/config
+		-e COCOINDEX_CODE_STATE_DIR=/var/cocoindex/state
+		-e COCOINDEX_CODE_RUNTIME_DIR=/var/run/cocoindex_code
+		-e COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/var/cocoindex/db
+		-e "COCOINDEX_CODE_HOST_PATH_MAPPING=/workspace=$root"
+		-e "COCOINDEX_CODE_HOST_CWD=$host_cwd"
+	)
+
+	if [[ "${1-}" != "mcp" && -t 0 && -t 1 ]]; then
+		run_args=(run --rm -it "${run_args[@]:3}")
+	fi
+
+	if [[ "$common_dir" != "$root/.git" ]]; then
+		run_args+=(--volume "$common_dir:$common_dir:ro")
+	fi
+	if [[ -n "${PUID:-}" ]]; then
+		run_args+=(-e "PUID=$PUID")
+	fi
+	if [[ -n "${PGID:-}" ]]; then
+		run_args+=(-e "PGID=$PGID")
+	fi
+	run_args+=("$image" ccc "$@")
+	exec docker "${run_args[@]}"
+}
+
+ensure_image_exists
+ensure_central_daemon
+
+cwd="$(canonical_path "${COCOINDEX_CODE_HOST_CWD:-$PWD}")"
+
+if [[ "${1-}" == "init" ]]; then
+	root="$(git_root_for "$cwd")"
+	if [[ -z "$root" ]]; then
+		echo "ccc init must be run inside a Git repository for Docker authorization." >&2
+		exit 1
+	fi
+	common_dir="$(git_common_dir_for "$root")"
+	record_authorization "$root" "$common_dir"
+	run_sidecar "$root" "$common_dir" "$cwd" "$@"
+fi
+
+root="$(lookup_authorized_root "$cwd" || true)"
+if [[ -z "$root" ]]; then
+	echo "This path has not been authorized for Docker-backed ccc access:" >&2
+	echo "  $cwd" >&2
+	echo "Run ccc init from the Git repo root or a subdirectory first." >&2
+	exit 1
+fi
+
+common_dir="$(common_dir_for_authorized_root "$root")"
+run_sidecar "$root" "$common_dir" "$cwd" "$@"
