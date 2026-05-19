@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, Any
+
+# Identify this application in cocoindex's telemetry payloads. Must be set
+# before any `import cocoindex` runs (the value is read once at telemetry
+# init time). See cocoindex-io/cocoindex#1992.
+os.environ.setdefault("COCOINDEX_APPLICATION_FOR_TRACKING", "cocoindex-code")
 
 logging.basicConfig(level=logging.WARNING)
 

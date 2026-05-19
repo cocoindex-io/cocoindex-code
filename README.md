@@ -749,6 +749,18 @@ If you previously configured `cocoindex-code` via environment variables, the `co
 | `COCOINDEX_CODE_EXCLUDED_PATTERNS` | `exclude_patterns` in project `settings.yml` |
 | `COCOINDEX_CODE_EXTRA_EXTENSIONS` | `include_patterns` + `language_overrides` in project `settings.yml` |
 
+## Telemetry
+
+`cocoindex-code` sends anonymous usage telemetry through CocoIndex so we can see how the tool is used in aggregate and prioritize improvements. The events identify themselves as `application: cocoindex-code`.
+
+We **do not** collect your source code, file paths, queries, search results, embeddings, settings, or any other content from your codebase or environment.
+
+To opt out, set:
+
+```bash
+export COCOINDEX_DISABLE_USAGE_TRACKING=1
+```
+
 ## Large codebase / Enterprise
 [CocoIndex](https://github.com/cocoindex-io/cocoindex) is an ultra efficient indexing engine that also works on large codebases at scale for enterprises. In enterprise scenarios it is a lot more efficient to share indexes with teammates when there are large or many repos. We also have advanced features like branch dedupe etc designed for enterprise users.
 
