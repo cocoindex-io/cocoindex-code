@@ -22,20 +22,15 @@ from .protocol import (
     ProjectStatusResponse,
     SearchResult,
 )
-from .query import query_codebase
-from .settings import (
-    cocoindex_db_path as _cocoindex_db_path,
-)
+from .query import query_codebase, query_codebase_with_embedding
 from .settings import (
     resolve_db_dir,
-)
-from .settings import (
-    target_sqlite_db_path as _target_sqlite_db_path,
 )
 from .shared import (
     CODEBASE_DIR,
     EMBEDDER,
     INDEXING_EMBED_PARAMS,
+    PROJECT_ROOT,
     QUERY_EMBED_PARAMS,
     SQLITE_DB,
     Embedder,
@@ -46,6 +41,8 @@ class Project:
     _env: coco.Environment
     _app: coco.App[[], None]
     _project_root: Path
+    _source_root: Path
+    _target_sqlite_db_path: Path
     _index_lock: asyncio.Lock
     _initial_index_done: asyncio.Event
     _indexing_stats: IndexingProgress | None = None
@@ -183,10 +180,39 @@ class Project:
         offset: int = 0,
     ) -> list[SearchResult]:
         """Search within this project."""
-        target_db = _target_sqlite_db_path(self._project_root)
         results = await query_codebase(
             query=query,
-            target_sqlite_db_path=target_db,
+            target_sqlite_db_path=self._target_sqlite_db_path,
+            env=self._env,
+            limit=limit,
+            offset=offset,
+            languages=languages,
+            paths=paths,
+        )
+        return [
+            SearchResult(
+                file_path=r.file_path,
+                language=r.language,
+                content=r.content,
+                start_line=r.start_line,
+                end_line=r.end_line,
+                score=r.score,
+            )
+            for r in results
+        ]
+
+    def search_with_embedding(
+        self,
+        embedding_bytes: bytes,
+        languages: list[str] | None = None,
+        paths: list[str] | None = None,
+        limit: int = 5,
+        offset: int = 0,
+    ) -> list[SearchResult]:
+        """Search using a caller-provided query embedding."""
+        results = query_codebase_with_embedding(
+            embedding_bytes=embedding_bytes,
+            target_sqlite_db_path=self._target_sqlite_db_path,
             env=self._env,
             limit=limit,
             offset=offset,
@@ -263,6 +289,8 @@ class Project:
         indexing_params: dict[str, Any],
         query_params: dict[str, Any],
         chunker_registry: dict[str, ChunkerFn] | None = None,
+        source_root: Path | None = None,
+        db_dir: Path | None = None,
     ) -> Project:
         """Create a project with explicit embedder and per-call params.
 
@@ -282,19 +310,21 @@ class Project:
                 to a ``ChunkerFn``. When a suffix matches, the registered
                 chunker is called instead of the built-in splitter.
         """
+        source_root = source_root or project_root
         settings_dir = project_root / ".cocoindex_code"
         settings_dir.mkdir(parents=True, exist_ok=True)
 
-        db_dir = resolve_db_dir(project_root)
+        db_dir = db_dir or resolve_db_dir(project_root)
         db_dir.mkdir(parents=True, exist_ok=True)
 
-        cocoindex_db = _cocoindex_db_path(project_root)
-        target_sqlite_db = _target_sqlite_db_path(project_root)
+        cocoindex_db = db_dir / "cocoindex.db"
+        target_sqlite_db = db_dir / "target_sqlite.db"
 
         settings = coco.Settings.from_env(cocoindex_db)
 
         context = coco.ContextProvider()
-        context.provide(CODEBASE_DIR, project_root)
+        context.provide(CODEBASE_DIR, source_root)
+        context.provide(PROJECT_ROOT, project_root)
         context.provide(SQLITE_DB, coco_sqlite.connect(str(target_sqlite_db), load_vec=True))
         context.provide(EMBEDDER, embedder)
         context.provide(INDEXING_EMBED_PARAMS, dict(indexing_params))
@@ -314,6 +344,8 @@ class Project:
         result._env = env
         result._app = app
         result._project_root = project_root
+        result._source_root = source_root
+        result._target_sqlite_db_path = target_sqlite_db
         result._index_lock = asyncio.Lock()
         result._initial_index_done = asyncio.Event()
         return result

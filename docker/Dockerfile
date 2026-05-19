@@ -3,7 +3,7 @@
 #
 # Stable layers (reuse across releases — digest reproducible from the RUN
 # command string + base image, so users keep them in local cache):
-#   1. apt install gosu + create coco user
+#   1. apt install gosu + git + create coco user
 #   2. install uv
 #   3. (full only) `uv pip install sentence-transformers` — ~1 GB of torch +
 #      transformers. This is the heavy, slow-changing layer we're optimizing
@@ -11,7 +11,7 @@
 #   4. (full only) pre-bake the default embedding model under
 #      /var/cocoindex/cache/... so the named volume's copy-up populates it
 #      on first start without a network fetch.
-#   5. writable-path setup (mkdir /var/cocoindex/db + /var/run/cocoindex_code,
+#   5. writable-path setup (mkdir /var/cocoindex/state + /var/cocoindex/db + /var/run/cocoindex_code,
 #      chown to coco) + env vars + entrypoint copy.
 #
 # Per-release layers (invalidate when the source tree changes):
@@ -36,7 +36,7 @@
 FROM python:3.12-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gosu \
+    && apt-get install -y --no-install-recommends git gosu \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 1000 coco \
     && useradd -u 1000 -g 1000 -m coco
@@ -65,7 +65,7 @@ RUN mkdir -p /var/cocoindex/cache/huggingface /var/cocoindex/cache/sentence-tran
 # entrypoint re-chowns to the host user; under root (Docker Desktop
 # default) coco-ownership is harmless since processes run as root and can
 # write anywhere.
-RUN mkdir -p /var/cocoindex/db /var/run/cocoindex_code \
+RUN mkdir -p /var/cocoindex/state /var/cocoindex/db /var/cocoindex/cache/huggingface /var/cocoindex/cache/sentence-transformers /var/run/cocoindex_code \
     && chown -R coco:coco /var/cocoindex /var/run/cocoindex_code
 
 WORKDIR /workspace
@@ -73,6 +73,7 @@ WORKDIR /workspace
 # Runtime defaults — see the spec for what each does. All overridable at
 # `docker run -e ...` time.
 ENV COCOINDEX_CODE_DIR=/workspace/.cocoindex_code \
+    COCOINDEX_CODE_STATE_DIR=/var/cocoindex/state \
     COCOINDEX_CODE_RUNTIME_DIR=/var/run/cocoindex_code \
     COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/var/cocoindex/db \
     COCOINDEX_CODE_DAEMON_SUPERVISED=1

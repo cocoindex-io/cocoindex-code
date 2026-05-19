@@ -44,6 +44,8 @@ app = _typer.Typer(
 
 daemon_app = _typer.Typer(name="daemon", help="Manage the daemon process.")
 app.add_typer(daemon_app, name="daemon")
+overlay_app = _typer.Typer(name="overlay", help="Inspect and prune Git index overlays.")
+app.add_typer(overlay_app, name="overlay")
 
 
 @app.callback()
@@ -93,6 +95,28 @@ def require_project_root() -> Path:
         _typer.echo(
             "Error: Not in an initialized project directory.\n"
             "Run `ccc init` in your project root to get started.",
+            err=True,
+        )
+        raise _typer.Exit(code=1)
+    return root
+
+
+def require_project_root_from(cwd: Path | None) -> Path:
+    """Find the initialized project root for *cwd* or the process CWD."""
+    if cwd is None:
+        return require_project_root()
+    gs_path = user_settings_path()
+    if not gs_path.is_file():
+        _typer.echo(
+            f"Error: Global settings not found: {format_path_for_display(gs_path)}\n"
+            "Run `ccc init` to create it with default settings.",
+            err=True,
+        )
+        raise _typer.Exit(code=1)
+    root = find_project_root(cwd)
+    if root is None:
+        _typer.echo(
+            f"Error: Not in an initialized project directory: {format_path_for_display(cwd)}",
             err=True,
         )
         raise _typer.Exit(code=1)
@@ -181,7 +205,12 @@ def print_search_results(response: SearchResponse) -> None:
         _typer.echo(r.content)
 
 
-def _run_index_with_progress(project_root: str) -> None:
+def _run_index_with_progress(
+    project_root: str,
+    *,
+    cwd: str | None = None,
+    base_ref: str | None = None,
+) -> None:
     """Run indexing with streaming progress display. Exits on failure."""
     from rich.console import Console as _Console
     from rich.live import Live as _Live
@@ -208,7 +237,13 @@ def _run_index_with_progress(project_root: str) -> None:
             live.update(_Spinner("dots", last_progress_line))
 
         try:
-            resp = _client.index(project_root, on_progress=_on_progress, on_waiting=_on_waiting)
+            resp = _client.index(
+                project_root,
+                cwd=cwd,
+                base_ref=base_ref,
+                on_progress=_on_progress,
+                on_waiting=_on_waiting,
+            )
         except RuntimeError as e:
             live.stop()
             # Let DaemonStartError propagate to the decorator for consistent handling.
@@ -229,6 +264,8 @@ def _run_index_with_progress(project_root: str) -> None:
 def _search_with_wait_spinner(
     project_root: str,
     query: str,
+    cwd: str | None = None,
+    base_ref: str | None = None,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
     limit: int = 10,
@@ -254,6 +291,8 @@ def _search_with_wait_spinner(
         resp = _client.search(
             project_root=project_root,
             query=query,
+            cwd=cwd,
+            base_ref=base_ref,
             languages=languages,
             paths=paths,
             limit=limit,
@@ -477,6 +516,42 @@ def _setup_user_settings_interactive(litellm_model_flag: str | None) -> None:
     _typer.echo()
 
 
+def _register_overlay_policy(project_root: Path, base_ref: str) -> None:
+    from ._daemon_paths import daemon_state_dir
+    from .embedder_params import resolve_embedder_params
+    from .layered_project import build_index_config_hash
+    from .layers import LayerStore
+    from .settings import load_user_settings
+    from .version_control import GitContextError, resolve_worktree
+
+    user_settings = load_user_settings()
+    params = resolve_embedder_params(user_settings.embedding)
+    config_hash = build_index_config_hash(
+        project_root,
+        indexing_params=params.indexing,
+        query_params=params.query,
+    )
+    try:
+        worktree = resolve_worktree(
+            project_root, base_ref=base_ref, index_config_hash=config_hash
+        )
+    except GitContextError as e:
+        _typer.echo(f"Warning: could not register Git overlay policy: {e}", err=True)
+        return
+
+    store = LayerStore(daemon_state_dir() / "daemon.db")
+    store.upsert_repository(
+        repo_id=worktree.repository.id,
+        repo_name=worktree.repository.repo_name,
+        remote_url=worktree.repository.remote_url,
+        normalized_remote_url=worktree.repository.normalized_remote_url,
+        repo_relative_root=worktree.repository.repo_relative_root,
+        last_seen_root=worktree.repository.last_seen_root,
+    )
+    store.upsert_overlay_policy(repo_id=worktree.repository.id, base_ref=worktree.branch.base_ref)
+    _typer.echo(f"Registered Git overlay base: {worktree.branch.base_ref}")
+
+
 @app.command()
 def init(
     litellm_model: str | None = _typer.Option(
@@ -485,6 +560,7 @@ def init(
         help="Use the given LiteLLM model and skip provider/model prompts.",
     ),
     force: bool = _typer.Option(False, "-f", "--force", help="Skip parent directory warning"),
+    base_ref: str | None = _typer.Option(None, "--base", help="Git base ref for overlays"),
 ) -> None:
     """Initialize a project for cocoindex-code."""
     cwd = Path.cwd().resolve()
@@ -506,6 +582,8 @@ def init(
     # Check if already initialized
     if settings_file.is_file():
         _typer.echo("Project already initialized.")
+        if base_ref is not None:
+            _register_overlay_policy(cwd, base_ref)
         return
 
     # Check parent directories for markers
@@ -524,6 +602,9 @@ def init(
     save_project_settings(cwd, default_project_settings())
     _typer.echo(f"Created project settings: {format_path_for_display(settings_file)}")
 
+    if base_ref is not None:
+        _register_overlay_policy(cwd, base_ref)
+
     # Add to .gitignore
     add_to_gitignore(cwd)
 
@@ -533,13 +614,18 @@ def init(
 
 @app.command()
 @_catch_daemon_start_error
-def index() -> None:
+def index(
+    cwd: Path | None = _typer.Option(None, "--cwd", help="Workspace path to index"),
+    base_ref: str | None = _typer.Option(None, "--base", help="Git base ref"),
+) -> None:
     """Create/update index for the codebase."""
     from . import client as _client
 
-    project_root = str(require_project_root())
+    project_root_path = require_project_root_from(cwd.resolve() if cwd is not None else None)
+    project_root = str(project_root_path)
+    request_cwd = str(cwd.resolve()) if cwd is not None else None
     print_project_header(project_root)
-    _run_index_with_progress(project_root)
+    _run_index_with_progress(project_root, cwd=request_cwd, base_ref=base_ref)
     print_index_stats(_client.project_status(project_root))
 
 
@@ -552,13 +638,17 @@ def search(
     offset: int = _typer.Option(0, "--offset", help="Number of results to skip"),
     limit: int = _typer.Option(10, "--limit", help="Maximum results to return"),
     refresh: bool = _typer.Option(False, "--refresh", help="Refresh index before searching"),
+    cwd: Path | None = _typer.Option(None, "--cwd", help="Workspace path to search"),
+    base_ref: str | None = _typer.Option(None, "--base", help="Git base ref"),
 ) -> None:
     """Semantic search across the codebase."""
-    project_root = str(require_project_root())
+    project_root_path = require_project_root_from(cwd.resolve() if cwd is not None else None)
+    project_root = str(project_root_path)
+    request_cwd = str(cwd.resolve()) if cwd is not None else None
     query_str = " ".join(query)
 
     if refresh:
-        _run_index_with_progress(project_root)
+        _run_index_with_progress(project_root, cwd=request_cwd, base_ref=base_ref)
 
     # Default path filter from CWD
     paths: list[str] | None = None
@@ -572,6 +662,8 @@ def search(
     resp = _search_with_wait_spinner(
         project_root=project_root,
         query=query_str,
+        cwd=request_cwd,
+        base_ref=base_ref,
         languages=lang or None,
         paths=paths,
         limit=limit,
@@ -828,7 +920,7 @@ def mcp() -> None:
     async def _run_mcp() -> None:
         from .server import create_mcp_server
 
-        mcp_server = create_mcp_server(project_root)
+        mcp_server = create_mcp_server(project_root, cwd=str(Path.cwd().resolve()))
         asyncio.create_task(_bg_index(project_root))
         await mcp_server.run_stdio_async()
 
@@ -846,6 +938,47 @@ async def _bg_index(project_root: str) -> None:
         await loop.run_in_executor(None, lambda: _client.index(project_root))
     except Exception:
         pass
+
+
+# --- Overlay subcommands ---
+
+
+@overlay_app.command("status")
+@_catch_daemon_start_error
+def overlay_status(
+    cwd: Path | None = _typer.Option(None, "--cwd", help="Workspace path to inspect"),
+    base_ref: str | None = _typer.Option(None, "--base", help="Git base ref"),
+) -> None:
+    """Show daemon layer metadata for the current Git repo."""
+    from . import client as _client
+
+    project_root_path = require_project_root_from(cwd.resolve() if cwd is not None else None)
+    request_cwd = str(cwd.resolve()) if cwd is not None else None
+    resp = _client.overlay_status(str(project_root_path), cwd=request_cwd, base_ref=base_ref)
+    if resp.repo_id is not None:
+        _typer.echo(f"Repo: {resp.repo_id}")
+    if not resp.layers:
+        _typer.echo("No layers.")
+        return
+    for layer in resp.layers:
+        _typer.echo(
+            f"{layer.kind:6} {layer.status:8} {layer.layer_id} "
+            f"ref={layer.ref_name or '-'} affected={layer.affected_count} "
+            f"tombstones={layer.tombstoned_count}"
+        )
+
+
+@overlay_app.command("prune")
+@_catch_daemon_start_error
+def overlay_prune() -> None:
+    """Prune expired dirty and branch overlays."""
+    from . import client as _client
+
+    resp = _client.overlay_prune()
+    if not resp.pruned_layer_ids:
+        _typer.echo("No expired layers pruned.")
+        return
+    _typer.echo(f"Pruned {len(resp.pruned_layer_ids)} layer(s).")
 
 
 # --- Daemon subcommands ---

@@ -40,6 +40,10 @@ from .protocol import (
     IndexRequest,
     IndexResponse,
     IndexWaitingNotice,
+    OverlayPruneRequest,
+    OverlayPruneResponse,
+    OverlayStatusRequest,
+    OverlayStatusResponse,
     ProjectStatusRequest,
     ProjectStatusResponse,
     RemoveProjectRequest,
@@ -242,14 +246,20 @@ def _send(req: Request) -> Response:
 
 def index(
     project_root: str,
+    cwd: str | None = None,
+    base_ref: str | None = None,
     on_progress: Callable[[IndexingProgress], None] | None = None,
     on_waiting: Callable[[], None] | None = None,
 ) -> IndexResponse:
     """Request indexing with streaming progress. Blocks until complete."""
     project_root = normalize_input_path(project_root)
+    if cwd is not None:
+        cwd = normalize_input_path(cwd)
     conn = _connect_and_handshake()
     try:
-        conn.send_bytes(encode_request(IndexRequest(project_root=project_root)))
+        conn.send_bytes(
+            encode_request(IndexRequest(project_root=project_root, cwd=cwd, base_ref=base_ref))
+        )
         while True:
             try:
                 data = conn.recv_bytes()
@@ -276,6 +286,8 @@ def index(
 def search(
     project_root: str,
     query: str,
+    cwd: str | None = None,
+    base_ref: str | None = None,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
     limit: int = 5,
@@ -289,6 +301,8 @@ def search(
     until the final ``SearchResponse``.
     """
     project_root = normalize_input_path(project_root)
+    if cwd is not None:
+        cwd = normalize_input_path(cwd)
     conn = _connect_and_handshake()
     try:
         conn.send_bytes(
@@ -296,6 +310,8 @@ def search(
                 SearchRequest(
                     project_root=project_root,
                     query=query,
+                    cwd=cwd,
+                    base_ref=base_ref,
                     languages=languages,
                     paths=paths,
                     limit=limit,
@@ -343,6 +359,21 @@ def stop() -> StopResponse:
 def daemon_env() -> DaemonEnvResponse:
     """Get environment variable names from the daemon."""
     return _send(DaemonEnvRequest())  # type: ignore[return-value]
+
+
+def overlay_status(
+    project_root: str,
+    cwd: str | None = None,
+    base_ref: str | None = None,
+) -> OverlayStatusResponse:
+    project_root = normalize_input_path(project_root)
+    if cwd is not None:
+        cwd = normalize_input_path(cwd)
+    return _send(OverlayStatusRequest(project_root=project_root, cwd=cwd, base_ref=base_ref))  # type: ignore[return-value]
+
+
+def overlay_prune() -> OverlayPruneResponse:
+    return _send(OverlayPruneRequest())  # type: ignore[return-value]
 
 
 def doctor(

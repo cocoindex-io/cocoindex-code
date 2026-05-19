@@ -104,7 +104,6 @@ async def query_codebase(
             "Please run a query with refresh_index=True first."
         )
 
-    db = env.get_context(SQLITE_DB)
     embedder = env.get_context(EMBEDDER)
     query_params = env.get_context(QUERY_EMBED_PARAMS)
 
@@ -112,7 +111,35 @@ async def query_codebase(
     query_embedding = await embedder.embed(query, **query_params)
 
     embedding_bytes = query_embedding.astype("float32").tobytes()
+    return query_codebase_with_embedding(
+        embedding_bytes=embedding_bytes,
+        target_sqlite_db_path=target_sqlite_db_path,
+        env=env,
+        limit=limit,
+        offset=offset,
+        languages=languages,
+        paths=paths,
+    )
 
+
+def query_codebase_with_embedding(
+    *,
+    embedding_bytes: bytes,
+    target_sqlite_db_path: Path,
+    env: Any,
+    limit: int = 10,
+    offset: int = 0,
+    languages: list[str] | None = None,
+    paths: list[str] | None = None,
+) -> list[QueryResult]:
+    """Perform vector search using a precomputed query embedding."""
+    if not target_sqlite_db_path.exists():
+        raise RuntimeError(
+            f"Index database not found at {target_sqlite_db_path}. "
+            "Please run a query with refresh_index=True first."
+        )
+
+    db = env.get_context(SQLITE_DB)
     with db.readonly() as conn:
         if paths:
             rows = _full_scan_query(conn, embedding_bytes, limit, offset, languages, paths)

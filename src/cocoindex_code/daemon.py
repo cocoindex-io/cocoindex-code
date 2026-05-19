@@ -22,10 +22,14 @@ from ._daemon_paths import (
     daemon_pid_path,
     daemon_runtime_dir,
     daemon_socket_path,
+    daemon_state_dir,
 )
 from ._version import __version__
 from .chunking import ChunkerFn as _ChunkerFn
 from .embedder_params import resolve_embedder_params
+from .git_context import GitContextError, resolve_worktree_context
+from .layer_store import LayerStore
+from .layered_project import LayeredProject, build_index_config_hash
 from .project import Project
 from .protocol import (
     DaemonEnvRequest,
@@ -43,6 +47,11 @@ from .protocol import (
     IndexRequest,
     IndexStreamResponse,
     IndexWaitingNotice,
+    OverlayLayerInfo,
+    OverlayPruneRequest,
+    OverlayPruneResponse,
+    OverlayStatusRequest,
+    OverlayStatusResponse,
     ProjectStatusRequest,
     RemoveProjectRequest,
     RemoveProjectResponse,
@@ -127,7 +136,8 @@ class ProjectRegistry:
     mismatch once the file is created and trigger a supervisor respawn.
     """
 
-    _projects: dict[str, Project]
+    _projects: dict[str, Project | LayeredProject]
+    _layer_project_cache: dict[str, Project]
     _embedder: Embedder | None
     indexing_params: dict[str, Any]
     query_params: dict[str, Any]
@@ -139,35 +149,74 @@ class ProjectRegistry:
         query_params: dict[str, Any] | None = None,
     ) -> None:
         self._projects = {}
+        self._layer_project_cache = {}
         self._embedder = embedder
         self.indexing_params = dict(indexing_params) if indexing_params else {}
         self.query_params = dict(query_params) if query_params else {}
+        self.state_dir = daemon_state_dir()
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.layer_store = LayerStore(self.state_dir / "daemon.db")
 
-    async def get_project(self, project_root: str) -> Project:
+    async def get_project(
+        self,
+        project_root: str,
+        *,
+        cwd: str | None = None,
+        base_ref: str | None = None,
+    ) -> Project | LayeredProject:
         """Get or create a Project for the given root. Lazy initialization."""
         if self._embedder is None:
             raise RuntimeError(
                 "Daemon has no global settings loaded. Run `ccc init` to set up cocoindex-code."
             )
-        if project_root not in self._projects:
-            root = Path(project_root)
+        root = Path(project_root)
+        request_cwd = Path(cwd) if cwd is not None else root
+        cache_key = f"{root.resolve()}\0{request_cwd.resolve()}\0{base_ref or ''}"
+        if cache_key not in self._projects:
             project_settings = load_project_settings(root)
             chunker_registry = _resolve_chunker_registry(project_settings.chunkers)
-            project = await Project.create(
-                root,
-                self._embedder,
-                indexing_params=self.indexing_params,
-                query_params=self.query_params,
-                chunker_registry=chunker_registry,
-            )
-            self._projects[project_root] = project
-        return self._projects[project_root]
+            try:
+                config_hash = build_index_config_hash(
+                    root,
+                    indexing_params=self.indexing_params,
+                    query_params=self.query_params,
+                )
+                resolve_worktree_context(
+                    request_cwd, base_ref=base_ref, index_config_hash=config_hash
+                )
+            except GitContextError:
+                project: Project | LayeredProject = await Project.create(
+                    root,
+                    self._embedder,
+                    indexing_params=self.indexing_params,
+                    query_params=self.query_params,
+                    chunker_registry=chunker_registry,
+                )
+            else:
+                project = LayeredProject(
+                    project_root=root,
+                    cwd=request_cwd,
+                    base_ref=base_ref,
+                    state_dir=self.state_dir,
+                    store=self.layer_store,
+                    embedder=self._embedder,
+                    indexing_params=self.indexing_params,
+                    query_params=self.query_params,
+                    chunker_registry=chunker_registry,
+                    project_cache=self._layer_project_cache,
+                )
+            self._projects[cache_key] = project
+        return self._projects[cache_key]
 
     def remove_project(self, project_root: str) -> bool:
         """Remove a project from the registry. Returns True if it was loaded."""
         import gc
 
-        project = self._projects.pop(project_root, None)
+        prefix = f"{Path(project_root).resolve()}\0"
+        keys = [key for key in self._projects if key.startswith(prefix) or key == project_root]
+        project = None
+        for key in keys:
+            project = self._projects.pop(key, None)
         if project is not None:
             project.close()
             del project
@@ -181,14 +230,17 @@ class ProjectRegistry:
 
         for project in self._projects.values():
             project.close()
+        for project in self._layer_project_cache.values():
+            project.close()
         self._projects.clear()
+        self._layer_project_cache.clear()
         gc.collect()
 
     def list_projects(self) -> list[DaemonProjectInfo]:
         """List all loaded projects with their indexing state."""
         return [
             DaemonProjectInfo(
-                project_root=root,
+                project_root=root.split("\0", 1)[0],
                 indexing=project._index_lock.locked(),
             )
             for root, project in self._projects.items()
@@ -270,7 +322,7 @@ async def handle_connection(
 
 
 async def _search_with_wait(
-    project: Project, req: SearchRequest
+    project: Any, req: SearchRequest
 ) -> AsyncIterator[SearchStreamResponse]:
     """Stream search response, waiting for ongoing indexing first."""
     yield IndexWaitingNotice()
@@ -480,11 +532,15 @@ async def _dispatch(
     """
     try:
         if isinstance(req, IndexRequest):
-            project = await registry.get_project(req.project_root)
+            project = await registry.get_project(
+                req.project_root, cwd=req.cwd, base_ref=req.base_ref
+            )
             return project.stream_index()
 
         if isinstance(req, SearchRequest):
-            project = await registry.get_project(req.project_root)
+            project = await registry.get_project(
+                req.project_root, cwd=req.cwd, base_ref=req.base_ref
+            )
             await project.ensure_indexing_started()
 
             if project.should_wait_for_indexing:
@@ -540,6 +596,51 @@ async def _dispatch(
                     for m in get_host_path_mappings()
                 ],
             )
+
+        if isinstance(req, OverlayStatusRequest):
+            try:
+                config_hash = build_index_config_hash(
+                    Path(req.project_root),
+                    indexing_params=registry.indexing_params,
+                    query_params=registry.query_params,
+                )
+                ctx = resolve_worktree_context(
+                    Path(req.cwd) if req.cwd is not None else Path(req.project_root),
+                    base_ref=req.base_ref,
+                    index_config_hash=config_hash,
+                )
+                layers = registry.layer_store.list_layers(repo_id=ctx.repo_id)
+                repo_id: str | None = ctx.repo_id
+            except Exception:
+                layers = registry.layer_store.list_layers()
+                repo_id = None
+            layer_infos: list[OverlayLayerInfo] = []
+            for layer in layers:
+                manifest = registry.layer_store.get_manifest(layer.layer_id)
+                layer_infos.append(
+                    OverlayLayerInfo(
+                        layer_id=layer.layer_id,
+                        repo_id=layer.repo_id,
+                        kind=layer.kind.value,
+                        ref_name=layer.ref_name,
+                        commit=layer.commit,
+                        status=layer.status,
+                        affected_count=len(manifest.affected_paths) if manifest else 0,
+                        tombstoned_count=len(manifest.tombstoned_paths) if manifest else 0,
+                    )
+                )
+            return OverlayStatusResponse(
+                repo_id=repo_id,
+                layers=layer_infos,
+            )
+
+        if isinstance(req, OverlayPruneRequest):
+            pruned = registry.layer_store.prune_expired()
+            for layer in pruned:
+                import shutil
+
+                shutil.rmtree(layer.source_dir.parent, ignore_errors=True)
+            return OverlayPruneResponse(pruned_layer_ids=[layer.layer_id for layer in pruned])
 
         if isinstance(req, DoctorRequest):
             return _handle_doctor(req, registry)

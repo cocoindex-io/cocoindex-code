@@ -32,6 +32,7 @@ Embedder = Union["SentenceTransformerEmbedder", "LiteLLMEmbedder"]
 EMBEDDER = coco.ContextKey[Embedder]("embedder", detect_change=True)
 SQLITE_DB = coco.ContextKey[sqlite.ManagedConnection]("index_db")
 CODEBASE_DIR = coco.ContextKey[pathlib.Path]("codebase")
+PROJECT_ROOT = coco.ContextKey[pathlib.Path]("project_root")
 INDEXING_EMBED_PARAMS = coco.ContextKey[dict[str, Any]]("indexing_embed_params")
 QUERY_EMBED_PARAMS = coco.ContextKey[dict[str, Any]]("query_embed_params")
 

@@ -31,6 +31,23 @@ def daemon_runtime_dir() -> Path:
     return user_settings_dir()
 
 
+def daemon_state_dir() -> Path:
+    """Return the durable daemon-owned state directory.
+
+    This is separate from both project checkout state and daemon runtime files:
+    it stores shared layer metadata, materialized layer sources, and layer
+    databases.  ``COCOINDEX_CODE_STATE_DIR`` exists mostly for tests and
+    advanced users; otherwise we follow XDG data-home on Unix-like systems.
+    """
+    override = os.environ.get("COCOINDEX_CODE_STATE_DIR")
+    if override:
+        return Path(override)
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        return Path(xdg_data_home) / "cocoindex-code"
+    return Path.home() / ".local" / "share" / "cocoindex-code"
+
+
 def connection_family() -> str:
     """Return the multiprocessing connection family for this platform."""
     return "AF_PIPE" if sys.platform == "win32" else "AF_UNIX"

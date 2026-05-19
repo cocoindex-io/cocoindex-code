@@ -14,10 +14,23 @@
 # graceful shutdown still flows through the normal cleanup path.
 set -e
 
+COCOINDEX_CODE_STATE_DIR=${COCOINDEX_CODE_STATE_DIR:-/var/cocoindex/state}
+COCOINDEX_CODE_RUNTIME_DIR=${COCOINDEX_CODE_RUNTIME_DIR:-/var/run/cocoindex_code}
+HF_HOME=${HF_HOME:-/var/cocoindex/cache/huggingface}
+SENTENCE_TRANSFORMERS_HOME=${SENTENCE_TRANSFORMERS_HOME:-/var/cocoindex/cache/sentence-transformers}
+export COCOINDEX_CODE_STATE_DIR COCOINDEX_CODE_RUNTIME_DIR HF_HOME SENTENCE_TRANSFORMERS_HOME
+
+mkdir -p \
+    "$COCOINDEX_CODE_STATE_DIR" \
+    /var/cocoindex/db \
+    "$HF_HOME" \
+    "$SENTENCE_TRANSFORMERS_HOME" \
+    "$COCOINDEX_CODE_RUNTIME_DIR"
+
 if [ -n "$PUID" ] && [ -n "$PGID" ]; then
     groupmod -o -g "$PGID" coco
     usermod -o -u "$PUID" coco
-    chown -R coco:coco /var/cocoindex /var/run/cocoindex_code
+    chown -R coco:coco /var/cocoindex "$COCOINDEX_CODE_RUNTIME_DIR"
     if [ -d /workspace/.cocoindex_code ]; then
         chown coco:coco /workspace/.cocoindex_code 2>/dev/null || true
     fi

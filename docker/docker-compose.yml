@@ -13,23 +13,47 @@
 # Override the image via COCOINDEX_CODE_IMAGE — for example:
 #   COCOINDEX_CODE_IMAGE=cocoindex/cocoindex-code:full docker compose up -d
 #   COCOINDEX_CODE_IMAGE=ghcr.io/cocoindex-io/cocoindex-code:latest docker compose up -d
+#
+# Optional knobs:
+#   COCOINDEX_CODE_CONTAINER_NAME=my-ccc
+#   COCOINDEX_CODE_STATE_DIR=/var/cocoindex/state
+#   COCOINDEX_CODE_RUNTIME_DIR=/var/run/cocoindex_code
+#   COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/var/cocoindex/db
+#
+# For Git layered indexing, mount a workspace parent that contains both the
+# root clone and linked worktrees. Keep COCOINDEX_CODE_STATE_DIR on the
+# persistent cocoindex-data volume so base/branch layers survive container
+# recreation. See docs/docker-layered-indexing.md.
 
 services:
   cocoindex-code:
     image: ${COCOINDEX_CODE_IMAGE:-cocoindex/cocoindex-code:latest}
-    container_name: cocoindex-code
+    container_name: ${COCOINDEX_CODE_CONTAINER_NAME:-cocoindex-code}
     volumes:
       - ${COCOINDEX_HOST_WORKSPACE:-${HOME}}:/workspace
       - cocoindex-data:/var/cocoindex
     environment:
+      COCOINDEX_CODE_STATE_DIR: ${COCOINDEX_CODE_STATE_DIR:-/var/cocoindex/state}
+      COCOINDEX_CODE_RUNTIME_DIR: ${COCOINDEX_CODE_RUNTIME_DIR:-/var/run/cocoindex_code}
+      COCOINDEX_CODE_DB_PATH_MAPPING: ${COCOINDEX_CODE_DB_PATH_MAPPING:-/workspace=/var/cocoindex/db}
       # Makes CLI and MCP output show your real paths
       # (e.g. `/Users/you/myproject/...`) instead of container paths
       # (e.g. `/workspace/myproject/...`).
-      COCOINDEX_CODE_HOST_PATH_MAPPING: /workspace=${COCOINDEX_HOST_WORKSPACE:-${HOME}}
+      COCOINDEX_CODE_HOST_PATH_MAPPING: ${COCOINDEX_CODE_HOST_PATH_MAPPING:-/workspace=${COCOINDEX_HOST_WORKSPACE:-${HOME}}}
       # Linux only: set these so files written to your workspace are owned by
       # you rather than root. Not needed on macOS / Windows — leave empty.
       PUID: ${PUID:-}
       PGID: ${PGID:-}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "ccc daemon status >/dev/null 2>&1 || test -S /var/run/cocoindex_code/daemon.sock",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
 volumes:
   cocoindex-data:

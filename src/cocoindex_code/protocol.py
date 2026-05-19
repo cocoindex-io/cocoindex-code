@@ -15,11 +15,15 @@ class HandshakeRequest(_msgspec.Struct, tag="handshake"):
 
 class IndexRequest(_msgspec.Struct, tag="index"):
     project_root: str
+    cwd: str | None = None
+    base_ref: str | None = None
 
 
 class SearchRequest(_msgspec.Struct, tag="search"):
     project_root: str
     query: str
+    cwd: str | None = None
+    base_ref: str | None = None
     languages: list[str] | None = None
     paths: list[str] | None = None
     limit: int = 5
@@ -50,6 +54,16 @@ class DaemonEnvRequest(_msgspec.Struct, tag="daemon_env"):
     pass
 
 
+class OverlayStatusRequest(_msgspec.Struct, tag="overlay_status"):
+    project_root: str
+    cwd: str | None = None
+    base_ref: str | None = None
+
+
+class OverlayPruneRequest(_msgspec.Struct, tag="overlay_prune"):
+    pass
+
+
 Request = (
     HandshakeRequest
     | IndexRequest
@@ -60,6 +74,8 @@ Request = (
     | StopRequest
     | DoctorRequest
     | DaemonEnvRequest
+    | OverlayStatusRequest
+    | OverlayPruneRequest
 )
 
 # ---------------------------------------------------------------------------
@@ -111,6 +127,11 @@ class SearchResult(_msgspec.Struct):
     start_line: int
     end_line: int
     score: float
+    repo_id: str | None = None
+    branch: str | None = None
+    commit: str | None = None
+    layer_kind: str | None = None
+    layer_id: str | None = None
 
 
 class SearchResponse(_msgspec.Struct, tag="search"):
@@ -176,6 +197,26 @@ class DaemonEnvResponse(_msgspec.Struct, tag="daemon_env"):
     host_path_mappings: list[DbPathMappingEntry] = []
 
 
+class OverlayLayerInfo(_msgspec.Struct):
+    layer_id: str
+    repo_id: str
+    kind: str
+    ref_name: str | None
+    commit: str | None
+    status: str
+    affected_count: int = 0
+    tombstoned_count: int = 0
+
+
+class OverlayStatusResponse(_msgspec.Struct, tag="overlay_status"):
+    repo_id: str | None
+    layers: list[OverlayLayerInfo]
+
+
+class OverlayPruneResponse(_msgspec.Struct, tag="overlay_prune"):
+    pruned_layer_ids: list[str]
+
+
 class ErrorResponse(_msgspec.Struct, tag="error"):
     message: str
     # Full formatted traceback from the daemon, when the error originates from an
@@ -195,6 +236,8 @@ Response = (
     | StopResponse
     | DoctorResponse
     | DaemonEnvResponse
+    | OverlayStatusResponse
+    | OverlayPruneResponse
     | ErrorResponse
 )
 

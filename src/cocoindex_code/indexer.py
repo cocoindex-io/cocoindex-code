@@ -20,6 +20,7 @@ from .shared import (
     CODEBASE_DIR,
     EMBEDDER,
     INDEXING_EMBED_PARAMS,
+    PROJECT_ROOT,
     SQLITE_DB,
     CodeChunk,
 )
@@ -152,7 +153,7 @@ async def process_file(
         return
 
     suffix = file.file_path.path.suffix
-    project_root = coco.use_context(CODEBASE_DIR)
+    project_root = coco.use_context(PROJECT_ROOT)
     ps = load_project_settings(project_root)
     ext_lang_map = {f".{lo.ext}": lo.lang for lo in ps.language_overrides}
     language = (
@@ -197,7 +198,8 @@ async def process_file(
 @coco.fn
 async def indexer_main() -> None:
     """Main indexing function - walks files and processes each."""
-    project_root = coco.use_context(CODEBASE_DIR)
+    project_root = coco.use_context(PROJECT_ROOT)
+    codebase_dir = coco.use_context(CODEBASE_DIR)
     ps = load_project_settings(project_root)
     gitignore_spec = load_gitignore_spec(project_root)
 
@@ -218,7 +220,7 @@ async def indexer_main() -> None:
         included_patterns=ps.include_patterns,
         excluded_patterns=ps.exclude_patterns,
     )
-    matcher: FilePathMatcher = GitignoreAwareMatcher(base_matcher, gitignore_spec, project_root)
+    matcher: FilePathMatcher = GitignoreAwareMatcher(base_matcher, gitignore_spec, codebase_dir)
 
     files = localfs.walk_dir(
         CODEBASE_DIR,

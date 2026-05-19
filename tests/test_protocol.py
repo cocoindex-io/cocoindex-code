@@ -49,6 +49,8 @@ def test_encode_decode_search_request_with_defaults() -> None:
     data = encode_request(req)
     decoded = decode_request(data)
     assert isinstance(decoded, SearchRequest)
+    assert decoded.cwd is None
+    assert decoded.base_ref is None
     assert decoded.languages is None
     assert decoded.limit == 5
     assert decoded.offset == 0
@@ -62,6 +64,8 @@ def test_encode_decode_search_request_with_all_fields() -> None:
         paths=["src/*"],
         limit=20,
         offset=5,
+        cwd="/tmp/proj/src",
+        base_ref="main",
     )
     data = encode_request(req)
     decoded = decode_request(data)
@@ -72,6 +76,8 @@ def test_encode_decode_search_request_with_all_fields() -> None:
     assert decoded.paths == ["src/*"]
     assert decoded.limit == 20
     assert decoded.offset == 5
+    assert decoded.cwd == "/tmp/proj/src"
+    assert decoded.base_ref == "main"
 
 
 def test_encode_decode_search_response_with_results() -> None:
@@ -85,6 +91,11 @@ def test_encode_decode_search_response_with_results() -> None:
                 start_line=1,
                 end_line=1,
                 score=0.95,
+                repo_id="repo",
+                branch="main",
+                commit="abc",
+                layer_kind="base",
+                layer_id="layer",
             ),
         ],
         total_returned=1,
@@ -97,6 +108,7 @@ def test_encode_decode_search_response_with_results() -> None:
     assert len(decoded.results) == 1
     assert decoded.results[0].file_path == "main.py"
     assert decoded.results[0].score == 0.95
+    assert decoded.results[0].layer_kind == "base"
 
 
 def test_encode_decode_error_response() -> None:
@@ -126,11 +138,13 @@ def test_encode_decode_daemon_status_response() -> None:
 
 
 def test_tagged_union_dispatch() -> None:
-    req = IndexRequest(project_root="/tmp")
+    req = IndexRequest(project_root="/tmp", cwd="/tmp/sub", base_ref="main")
     data = encode_request(req)
     decoded = decode_request(data)
     assert isinstance(decoded, IndexRequest)
     assert not isinstance(decoded, HandshakeRequest)
+    assert decoded.cwd == "/tmp/sub"
+    assert decoded.base_ref == "main"
 
 
 def test_encode_decode_doctor_request() -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -177,6 +178,33 @@ def test_first_start_uses_baked_model(container: str) -> None:
     assert "Downloading" not in log_result.stderr
 
 
+def test_docker_runtime_state_defaults_use_var_cocoindex(container: str) -> None:
+    """Docker image defaults keep durable daemon state on the data volume."""
+    env_result = docker_exec(
+        container,
+        [
+            "sh",
+            "-c",
+            "printf '%s\n%s\n%s\n' "
+            '"$COCOINDEX_CODE_STATE_DIR" '
+            '"$COCOINDEX_CODE_RUNTIME_DIR" '
+            '"$COCOINDEX_CODE_DB_PATH_MAPPING"',
+        ],
+    )
+    lines = env_result.stdout.splitlines()
+    assert lines == [
+        "/var/cocoindex/state",
+        "/var/run/cocoindex_code",
+        "/workspace=/var/cocoindex/db",
+    ]
+
+    dir_result = docker_exec(
+        container,
+        ["sh", "-c", "test -d /var/cocoindex/state && test -d /var/cocoindex/db"],
+    )
+    assert dir_result.returncode == 0
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="PUID/PGID only meaningful on Linux")
 def test_linux_puid_gives_host_owned_files(
     docker_image: str, fixture_workspace: Path, tmp_path: Path
@@ -230,6 +258,11 @@ def test_linux_puid_gives_host_owned_files(
         st = settings_file.stat()
         assert st.st_uid == uid, f"Expected uid {uid}, got {st.st_uid}"
         assert st.st_gid == gid, f"Expected gid {gid}, got {st.st_gid}"
+
+        state_owner = docker_exec(name, ["stat", "-c", "%u:%g", "/var/cocoindex/state"])
+        db_owner = docker_exec(name, ["stat", "-c", "%u:%g", "/var/cocoindex/db"])
+        assert state_owner.stdout.strip() == f"{uid}:{gid}"
+        assert db_owner.stdout.strip() == f"{uid}:{gid}"
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
 
@@ -260,6 +293,7 @@ def test_docker_compose_smoke(docker_image: str, fixture_workspace: Path, tmp_pa
 
     env = dict(os.environ)
     env["COCOINDEX_HOST_WORKSPACE"] = str(fixture_workspace)
+    env["COCOINDEX_CODE_CONTAINER_NAME"] = f"ccc-compose-e2e-{uuid.uuid4().hex[:8]}"
 
     try:
         subprocess.run(
@@ -297,6 +331,30 @@ def test_docker_compose_smoke(docker_image: str, fixture_workspace: Path, tmp_pa
             time.sleep(1)
         else:
             raise TimeoutError("Daemon did not become ready via compose")
+
+        defaults = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(compose_dst),
+                "exec",
+                "-T",
+                "cocoindex-code",
+                "sh",
+                "-c",
+                "printf '%s\n%s\n' \"$COCOINDEX_CODE_STATE_DIR\" \"$COCOINDEX_CODE_RUNTIME_DIR\"",
+            ],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert defaults.stdout.splitlines() == [
+            "/var/cocoindex/state",
+            "/var/run/cocoindex_code",
+        ]
 
         # Index, then search.
         subprocess.run(

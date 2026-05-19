@@ -61,6 +61,10 @@ Two install styles — they mirror the Docker image variants of the same names:
 
 Next, set up your [coding agent integration](#coding-agent-integration) — or jump to [Manual CLI Usage](#manual-cli-usage) if you prefer direct control.
 
+Docs:
+- [Git Layered Indexing](./docs/layered-indexing.md): configure reusable `base > branch > dirty` Git layers for root clones and linked worktrees.
+- [Docker Layered Indexing](./docs/docker-layered-indexing.md): run the layered daemon in Docker with persistent native state.
+
 ## Coding Agent Integration
 
 ### Skill (Recommended)
@@ -162,6 +166,16 @@ The background daemon starts automatically on first use.
 
 > **Tip:** `ccc index` auto-initializes if you haven't run `ccc init` yet, so you can skip straight to indexing.
 
+For Git repositories, you can configure layered indexing once from the root clone:
+
+```bash
+ccc init --base main                    # share a base layer across linked worktrees
+ccc index                               # builds base + branch + dirty layers as needed
+ccc overlay status                      # inspect the current layer stack
+```
+
+Linked worktrees reuse the same daemon-owned base layer and only index branch and dirty deltas. See [Git Layered Indexing](./docs/layered-indexing.md) for the full configuration model.
+
 ### CLI Reference
 
 | Command | Description |
@@ -170,6 +184,8 @@ The background daemon starts automatically on first use.
 | `ccc index` | Build or update the index (auto-inits if needed). Shows streaming progress. |
 | `ccc search <query>` | Semantic search across the codebase |
 | `ccc status` | Show index stats (chunk count, file count, language breakdown) |
+| `ccc overlay status` | Inspect Git layered indexing state for the current worktree |
+| `ccc overlay prune` | Prune expired branch and dirty layers |
 | `ccc mcp` | Run as MCP server in stdio mode |
 | `ccc doctor` | Run diagnostics — checks settings, daemon, model, file matching, and index health |
 | `ccc reset` | Delete index databases. `--all` also removes settings. `-f` skips confirmation. |
@@ -185,6 +201,7 @@ ccc search --lang python --lang markdown schema      # filter by language
 ccc search --path 'src/utils/*' query handler        # filter by path
 ccc search --offset 10 --limit 5 database schema     # pagination
 ccc search --refresh database schema                 # update index first, then search
+ccc index --base release/1.2                         # override Git overlay base ref once
 ```
 
 By default, `ccc search` scopes results to your current working directory (relative to the project root). Use `--path` to override.
@@ -231,11 +248,12 @@ PUID=$(id -u) PGID=$(id -g) docker compose -f <(curl -L https://raw.githubuserco
 
 Or grab [`docker/docker-compose.yml`](./docker/docker-compose.yml) and run `docker compose up -d` next to it (works on any shell, including Windows cmd / PowerShell).
 
-By default your home directory is mounted into the container (set
-`COCOINDEX_HOST_WORKSPACE` to narrow this to a specific code folder). Index
-data and the embedding model cache persist in a Docker volume across
-restarts. Your global settings file at `$HOME/.cocoindex_code/global_settings.yml`
-is visible and editable on the host; edits take effect on your next `ccc` command.
+By default your home directory is mounted into the container. For team setups,
+prefer a narrower mount such as `COCOINDEX_HOST_WORKSPACE=$HOME/src` or one
+repo path. Index data, daemon Git-layer state, and the embedding model cache
+persist in the `cocoindex-data` Docker volume under `/var/cocoindex`. Your
+global settings file at `$HOME/.cocoindex_code/global_settings.yml` is visible
+and editable on the host; edits take effect on your next `ccc` command.
 
 > **Pick a different image:** set `COCOINDEX_CODE_IMAGE` to override the
 > default. For example, the `:full` variant or GHCR:
@@ -254,6 +272,9 @@ docker run -d --name cocoindex-code \
   --volume "$HOME:/workspace" \
   --volume cocoindex-data:/var/cocoindex \
   -e COCOINDEX_CODE_HOST_PATH_MAPPING="/workspace=$HOME" \
+  -e COCOINDEX_CODE_STATE_DIR=/var/cocoindex/state \
+  -e COCOINDEX_CODE_RUNTIME_DIR=/var/run/cocoindex_code \
+  -e COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/var/cocoindex/db \
   cocoindex/cocoindex-code:latest
 ```
 </details>
@@ -267,18 +288,35 @@ docker run -d --name cocoindex-code \
   --volume "$HOME:/workspace" \
   --volume cocoindex-data:/var/cocoindex \
   -e COCOINDEX_CODE_HOST_PATH_MAPPING="/workspace=$HOME" \
+  -e COCOINDEX_CODE_STATE_DIR=/var/cocoindex/state \
+  -e COCOINDEX_CODE_RUNTIME_DIR=/var/run/cocoindex_code \
+  -e COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/var/cocoindex/db \
   cocoindex/cocoindex-code:latest
 ```
 </details>
 
 ### Shell wrapper for `ccc` commands
 
-Paste this into `~/.bashrc` / `~/.zshrc` so `ccc` feels native on the host
-and picks up the right project based on your current directory:
+Paste this into `~/.bashrc` / `~/.zshrc` so `ccc` feels native on the host,
+picks up the right project based on your current directory, and uses the right
+TTY mode for interactive commands vs. MCP or piped stdin:
 
 ```bash
 ccc() {
-  docker exec -it -e COCOINDEX_CODE_HOST_CWD="$PWD" cocoindex-code ccc "$@"
+  local container="${COCOINDEX_CODE_CONTAINER_NAME:-cocoindex-code}"
+  if [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" != "true" ]; then
+    echo "cocoindex-code container is not running. Start it with: docker compose -f docker/docker-compose.yml up -d" >&2
+    return 1
+  fi
+
+  local flags=(-i)
+  if [ "${1:-}" != "mcp" ] && [ -t 0 ] && [ -t 1 ]; then
+    flags=(-it)
+  fi
+
+  docker exec "${flags[@]}" \
+    -e COCOINDEX_CODE_HOST_CWD="$PWD" \
+    "$container" ccc "$@"
 }
 ```
 
@@ -346,6 +384,86 @@ docker rm -f cocoindex-code
 docker volume rm cocoindex-db cocoindex-model-cache
 ```
 
+For regular upgrades, keep the volume and recreate the container:
+
+```bash
+docker compose -f docker/docker-compose.yml pull
+docker compose -f docker/docker-compose.yml up -d
+```
+
+Switch between the slim and full images by changing `COCOINDEX_CODE_IMAGE`:
+
+```bash
+COCOINDEX_CODE_IMAGE=cocoindex/cocoindex-code:latest docker compose -f docker/docker-compose.yml up -d
+COCOINDEX_CODE_IMAGE=cocoindex/cocoindex-code:full docker compose -f docker/docker-compose.yml up -d
+```
+
+### Docker debugging
+
+Useful commands:
+
+```bash
+# Logs from the daemon supervisor and daemon process
+docker logs -f cocoindex-code
+
+# Shell inside the container
+docker exec -it cocoindex-code sh
+
+# Daemon readiness/status
+docker exec cocoindex-code ccc daemon status
+docker exec cocoindex-code test -S /var/run/cocoindex_code/daemon.sock
+
+# Restart the container
+docker restart cocoindex-code
+
+# Stop and remove the container, preserving index/state/cache volume
+docker rm -f cocoindex-code
+
+# Reset all Docker-managed index/state/cache data
+docker compose -f docker/docker-compose.yml down -v
+```
+
+Docker paths:
+
+| Data | Default path |
+|---|---|
+| Host workspace mount | `/workspace` |
+| Settings on the mounted workspace | `/workspace/.cocoindex_code/global_settings.yml` |
+| DB/index files | `/var/cocoindex/db` via `COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/var/cocoindex/db` |
+| Durable daemon Git-layer state | `/var/cocoindex/state` via `COCOINDEX_CODE_STATE_DIR` |
+| Runtime socket, PID, and daemon log | `/var/run/cocoindex_code` via `COCOINDEX_CODE_RUNTIME_DIR` |
+| Embedding/cache data | `/var/cocoindex/cache` |
+
+Local Git worktrees that use the same Docker container should share the Docker
+daemon state in `/var/cocoindex/state`. That lets the local daemon Git-layer
+feature reuse daemon-owned layer metadata and materialized layer sources across
+projects while keeping transient sockets under `/var/run/cocoindex_code`.
+
+For layered indexing in Docker, initialize the base ref from the root clone and
+then use linked worktrees through the same wrapper/container:
+
+```bash
+cd $HOME/src/github/cocoindex-io/cocoindex-code
+ccc init --base main
+ccc index
+
+git worktree add ../cocoindex-code.worktrees/feature-1 -b feature-1 main
+cd ../cocoindex-code.worktrees/feature-1
+ccc index
+ccc overlay status
+```
+
+Mount a workspace parent that contains both the root clone and linked
+worktrees. For example:
+
+```bash
+COCOINDEX_HOST_WORKSPACE=$HOME/src/github/cocoindex-io \
+  docker compose -f docker/docker-compose.yml up -d
+```
+
+See [Docker Layered Indexing](./docs/docker-layered-indexing.md) for the full
+Docker setup and troubleshooting guide.
+
 ### Configuration via environment variables
 
 Pass configuration to `docker run` / compose with `-e`:
@@ -365,6 +483,25 @@ Pass configuration to `docker run` / compose with `-e`:
 > to everything under it. If that's too broad, bind-mount a narrower
 > directory instead (`COCOINDEX_HOST_WORKSPACE=/path/to/code`).
 
+Supported Docker environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `COCOINDEX_CODE_IMAGE` | Compose image, e.g. `cocoindex/cocoindex-code:full`. |
+| `COCOINDEX_CODE_CONTAINER_NAME` | Compose container name, default `cocoindex-code`. |
+| `COCOINDEX_HOST_WORKSPACE` | Host directory mounted at `/workspace`, default `${HOME}`. |
+| `COCOINDEX_CODE_HOST_PATH_MAPPING` | Container-to-host path mapping for displayed paths. |
+| `COCOINDEX_CODE_HOST_CWD` | Host current directory forwarded by `docker exec` wrappers. |
+| `COCOINDEX_CODE_STATE_DIR` | Durable daemon state directory, default `/var/cocoindex/state`. |
+| `COCOINDEX_CODE_RUNTIME_DIR` | Runtime socket/PID/log directory, default `/var/run/cocoindex_code`. |
+| `COCOINDEX_CODE_DB_PATH_MAPPING` | DB/index storage remapping, default `/workspace=/var/cocoindex/db`. |
+| `PUID`, `PGID` | Linux UID/GID used to chown Docker-managed paths and write host-owned workspace files. |
+
+`COCOINDEX_CODE_STATE_DIR` is where repository/worktree metadata, overlay
+policy, layer manifests, and materialized layer sources are stored. Keep it on
+the persistent Docker volume if you want base layers to survive container
+recreation.
+
 ### Build the image locally
 
 ```bash
@@ -373,6 +510,7 @@ docker build -t cocoindex-code:local -f docker/Dockerfile .
 
 ## Features
 - **Semantic Code Search**: Find relevant code using natural language queries when grep doesn't work well, and save tokens immediately.
+- **Git Layered Indexing**: Reuse a shared base index across root clones and linked worktrees, then index only branch and dirty deltas. Configure it with `ccc init --base main`; see [Git Layered Indexing](./docs/layered-indexing.md).
 - **Ultra Performant**: ⚡ Built on top of ultra performant [Rust indexing engine](https://github.com/cocoindex-io/cocoindex). Only re-indexes changed files for fast updates.
 - **Multi-Language Support**: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++, C#, SQL, Shell, and more.
 - **Embedded**: Portable and just works, no database setup required!
@@ -492,6 +630,23 @@ def my_chunker(path: Path, content: str) -> tuple[str | None, list[Chunk]]:
 - return a `list[Chunk]` with the chunks you want stored in the index
 
 See [`src/cocoindex_code/chunking.py`](./src/cocoindex_code/chunking.py) for the public types and [`tests/example_toml_chunker.py`](./tests/example_toml_chunker.py) for a complete example.
+
+### Git Layered Indexing Configuration
+
+For Git repositories, `ccc init --base <ref>` stores a repository-level overlay
+policy in daemon state. The checkout-local `settings.yml` still controls file
+matching and chunking, while daemon state controls the shared base ref used by
+root clones and linked worktrees.
+
+```bash
+ccc init --base main
+ccc index
+ccc overlay status
+```
+
+The daemon stores durable layer metadata under `COCOINDEX_CODE_STATE_DIR` and
+uses stable hash IDs, so moving a repository or linked worktree does not
+invalidate reusable base and branch layers. See [Git Layered Indexing](./docs/layered-indexing.md) for details.
 
 ## Embedding Models
 

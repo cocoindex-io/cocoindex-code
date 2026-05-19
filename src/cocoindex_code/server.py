@@ -56,9 +56,10 @@ class SearchResultModel(BaseModel):
 # === Daemon-backed MCP server factory ===
 
 
-def create_mcp_server(project_root: str) -> FastMCP:
+def create_mcp_server(project_root: str, cwd: str | None = None) -> FastMCP:
     """Create a lightweight MCP server that delegates to the daemon."""
     mcp = FastMCP("cocoindex-code", instructions=_MCP_INSTRUCTIONS)
+    request_cwd = cwd or str(Path.cwd())
 
     @mcp.tool(
         name="search",
@@ -124,12 +125,15 @@ def create_mcp_server(project_root: str) -> FastMCP:
         loop = asyncio.get_event_loop()
         try:
             if refresh_index:
-                await loop.run_in_executor(None, lambda: _client.index(project_root))
+                await loop.run_in_executor(
+                    None, lambda: _client.index(project_root, cwd=request_cwd)
+                )
             resp = await loop.run_in_executor(
                 None,
                 lambda: _client.search(
                     project_root=project_root,
                     query=query,
+                    cwd=request_cwd,
                     languages=languages,
                     paths=paths,
                     limit=limit,
@@ -321,7 +325,7 @@ def main() -> None:
             print(f"Indexing failed: {resp.message}")
     else:
         # Default: run MCP server
-        mcp_server = create_mcp_server(str(project_root))
+        mcp_server = create_mcp_server(str(project_root), cwd=str(Path.cwd().resolve()))
 
         async def _serve() -> None:
             from .cli import _bg_index
