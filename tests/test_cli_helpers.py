@@ -14,6 +14,47 @@ from cocoindex_code.cli import (
     resolve_default_path,
 )
 from cocoindex_code.protocol import SearchResponse
+from cocoindex_code.sidecar import SidecarIndexReport, SidecarLayerSummary
+
+
+def _sample_sidecar_report(project_root: Path) -> SidecarIndexReport:
+    return SidecarIndexReport(
+        project_root=project_root,
+        cwd=project_root,
+        repo_id="repo-123",
+        branch="feature",
+        base_ref="origin/main",
+        base_commit="abcdef1234567890",
+        head_commit="fedcba9876543210",
+        layers=(
+            SidecarLayerSummary(
+                layer_id="branch-layer",
+                kind="branch",
+                ref_name="feature",
+                commit="fedcba9876543210",
+                previous_commit="abcdef1234567890",
+                merge_base="abcdef1234567890",
+                base_layer_id="base-layer",
+                status="ready",
+                built=True,
+                affected_count=12,
+                tombstoned_count=1,
+            ),
+            SidecarLayerSummary(
+                layer_id="base-layer",
+                kind="base",
+                ref_name="origin/main",
+                commit="abcdef1234567890",
+                previous_commit=None,
+                merge_base=None,
+                base_layer_id=None,
+                status="ready",
+                built=False,
+                affected_count=0,
+                tombstoned_count=0,
+            ),
+        ),
+    )
 
 
 def test_require_project_root_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -308,8 +349,9 @@ def test_run_index_with_progress_uses_sidecar_indexer(
     import cocoindex_code.client as client
     import cocoindex_code.sidecar as sidecar
 
-    async def fake_run_sidecar_index(**kwargs: object) -> None:
+    async def fake_run_sidecar_index(**kwargs: object) -> SidecarIndexReport:
         captured["index_kwargs"] = kwargs
+        return _sample_sidecar_report(tmp_path / "repo")
 
     def fail_client_index(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("daemon index should not run in sidecar mode")
@@ -319,12 +361,14 @@ def test_run_index_with_progress_uses_sidecar_indexer(
     monkeypatch.setattr(sidecar, "run_sidecar_index", fake_run_sidecar_index)
     monkeypatch.setattr(client, "index", fail_client_index)
 
-    cli._run_index_with_progress(
+    report = cli._run_index_with_progress(
         str(tmp_path / "repo"),
         cwd=str(tmp_path / "repo" / "src"),
         base_ref="main",
     )
 
+    assert report is not None
+    assert report.repo_id == "repo-123"
     kwargs = captured["index_kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["project_root"] == tmp_path / "repo"
@@ -332,6 +376,37 @@ def test_run_index_with_progress_uses_sidecar_indexer(
     assert kwargs["base_ref"] == "main"
     assert callable(kwargs["on_progress"])
     assert "Indexing failed" not in capsys.readouterr().err
+
+
+def test_index_command_skips_daemon_project_status_in_sidecar_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import cocoindex_code.client as client
+    import cocoindex_code.sidecar as sidecar
+
+    project_root = tmp_path / "repo"
+
+    def fail_project_status(_project_root: str) -> object:
+        raise AssertionError("sidecar index must not ask daemon for non-mounted project status")
+
+    monkeypatch.setattr(cli, "require_project_root_from", lambda _cwd: project_root)
+    monkeypatch.setattr(
+        cli,
+        "_run_index_with_progress",
+        lambda *_args, **_kwargs: _sample_sidecar_report(project_root),
+    )
+    monkeypatch.setattr(sidecar, "sidecar_enabled", lambda: True)
+    monkeypatch.setattr(client, "project_status", fail_project_status)
+
+    cli.index(cwd=None, base_ref=None)
+
+    out = capsys.readouterr().out
+    assert f"Project: {project_root}" in out
+    assert "Layered index:" in out
+    assert "Repo ID: repo-123" in out
+    assert "branch built" in out
+    assert "diff=12 paths, tombstones=1" in out
+    assert "Index stats:" not in out
 
 
 # ---------------------------------------------------------------------------

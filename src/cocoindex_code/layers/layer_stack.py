@@ -39,6 +39,7 @@ class LayerBuildResult:
     layer: Layer
     manifest: LayerManifest
     runtime: LayerRuntime
+    built: bool = False
 
     @property
     def record(self) -> Layer:
@@ -255,11 +256,13 @@ class LayerStack:
     ) -> LayerBuildResult:
         paths = LayerPaths.for_layer(self.state_dir, worktree.repository.id, layer_id)
         existing = self.store.get_layer(layer_id)
+        built = False
         if (
             existing is None
             or existing.status != "ready"
             or not paths.target_sqlite.exists()
         ):
+            built = True
             shutil.rmtree(paths.root, ignore_errors=True)
             paths.source.mkdir(parents=True, exist_ok=True)
             paths.db_dir.mkdir(parents=True, exist_ok=True)
@@ -294,7 +297,7 @@ class LayerStack:
         if manifest is None:
             raise RuntimeError(f"Layer manifest missing after build: {layer_id}")
         runtime = await self._runtime(layer)
-        return LayerBuildResult(layer=layer, manifest=manifest, runtime=runtime)
+        return LayerBuildResult(layer=layer, manifest=manifest, runtime=runtime, built=built)
 
     def _require_layer(self, layer_id: str) -> Layer:
         layer = self.store.get_layer(layer_id)

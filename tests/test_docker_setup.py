@@ -55,6 +55,9 @@ def test_docker_compose_uses_sidecar_daemon_model() -> None:
     assert "COCOINDEX_CODE_DB_PATH_MAPPING: /workspace=/var/cocoindex/db" in content
     assert "cocoindex-code-local-state:/var/cocoindex" in content
     assert "cocoindex-code-local-runtime:/var/run/cocoindex_code" in content
+    assert "name: ${COCOINDEX_CODE_STATE_VOLUME:-cocoindex-code-local-state}" in content
+    assert "name: ${COCOINDEX_CODE_RUNTIME_VOLUME:-cocoindex-code-local-runtime}" in content
+    assert "external: true" in content
     assert "ccc daemon status" in content
     assert "daemon.sock" in content
 
@@ -120,6 +123,18 @@ def test_wrapper_mounts_only_authorized_repo_sidecar() -> None:
     assert 'exec docker "${run_args[@]}"' in content
 
 
+def test_wrapper_recreates_incompatible_daemon_container() -> None:
+    content = (REPO_ROOT / "bin" / "ccc").read_text()
+
+    assert "daemon_container_matches_expected()" in content
+    assert "container_has_volume_mount" in content
+    assert "container_has_env" in content
+    assert '{{.Destination}}{{"\\t"}}{{.Type}}{{"\\t"}}{{.Name}}' in content
+    assert '{{println .Destination "\\t" .Type' not in content
+    assert "Recreating incompatible cocoindex-code daemon container" in content
+    assert 'docker rm -f "$central_container"' in content
+
+
 def test_wrapper_defaults_settings_dir_to_host_home() -> None:
     content = (REPO_ROOT / "bin" / "ccc").read_text()
 
@@ -168,11 +183,14 @@ def test_makefile_has_default_image_and_reset_target() -> None:
     assert "IMAGE ?= cocoindex-code:local-layered" in content
     assert "CCC_VARIANT ?= slim" in content
     assert "CCC_WRAPPER ?= bin/ccc" in content
+    assert "DAEMON_CONTAINER ?= cocoindex-code-local-daemon" in content
     assert "build: build-local" in content
     assert "build-local:" in content
     assert "-f docker/Dockerfile" in content
     assert "--build-arg CCC_INSTALL_SPEC=/ccc-src" in content
     assert "build-pypi:" in content
+    assert "Removing non-Compose daemon container" in content
+    assert "docker volume create" in content
     assert "reset: down" in content
     assert "docker volume rm" in content
 

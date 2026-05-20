@@ -19,6 +19,7 @@ if TYPE_CHECKING:
         ProjectStatusResponse,
         SearchResponse,
     )
+    from .sidecar import SidecarIndexReport
 
 from .settings import (
     DEFAULT_ST_MODEL,
@@ -190,6 +191,38 @@ def print_index_stats(status: ProjectStatusResponse) -> None:
             _typer.echo(f"    {lang}: {count} chunks")
 
 
+def _short_hash(value: str | None) -> str:
+    if value is None:
+        return "-"
+    return value[:12]
+
+
+def print_layered_index_report(report: SidecarIndexReport) -> None:
+    _typer.echo("\nLayered index:")
+    _typer.echo(f"  Repo ID: {report.repo_id or '-'}")
+    _typer.echo(f"  Project: {format_path_for_display(report.project_root)}")
+    _typer.echo(f"  Worktree: {format_path_for_display(report.cwd)}")
+    _typer.echo(f"  Branch: {report.branch or '-'}")
+    _typer.echo(f"  Base: {report.base_ref or '-'} @ {_short_hash(report.base_commit)}")
+    _typer.echo(f"  Head: {_short_hash(report.head_commit)}")
+    _typer.echo("  Layers:")
+    for layer in report.layers:
+        action = "built" if layer.built else "reused"
+        diff = f"diff={layer.affected_count} paths"
+        if layer.tombstoned_count:
+            diff += f", tombstones={layer.tombstoned_count}"
+        previous = layer.previous_commit or layer.merge_base
+        _typer.echo(
+            "    "
+            f"{layer.kind:<6} {action:<6} "
+            f"id={layer.layer_id} "
+            f"ref={layer.ref_name or '-'} "
+            f"prev={_short_hash(previous)} "
+            f"commit={_short_hash(layer.commit)} "
+            f"{diff}"
+        )
+
+
 def print_search_results(response: SearchResponse) -> None:
     """Print formatted search results."""
     if not response.success:
@@ -211,7 +244,7 @@ def _run_index_with_progress(
     *,
     cwd: str | None = None,
     base_ref: str | None = None,
-) -> None:
+) -> SidecarIndexReport | None:
     """Run indexing with streaming progress display. Exits on failure."""
     from rich.console import Console as _Console
     from rich.live import Live as _Live
@@ -223,6 +256,7 @@ def _run_index_with_progress(
 
     err_console = _Console(stderr=True)
     last_progress_line: str | None = None
+    sidecar_report: SidecarIndexReport | None = None
 
     with _Live(_Spinner("dots", "Indexing..."), console=err_console, transient=True) as live:
 
@@ -241,7 +275,7 @@ def _run_index_with_progress(
 
         try:
             if sidecar_enabled():
-                asyncio.run(
+                sidecar_report = asyncio.run(
                     run_sidecar_index(
                         project_root=Path(project_root),
                         cwd=Path(cwd) if cwd is not None else Path(project_root),
@@ -273,6 +307,7 @@ def _run_index_with_progress(
     if not resp.success:
         _typer.echo(f"Indexing failed: {resp.message}", err=True)
         raise _typer.Exit(code=1)
+    return sidecar_report
 
 
 def _search_with_wait_spinner(
@@ -660,12 +695,17 @@ def index(
 ) -> None:
     """Create/update index for the codebase."""
     from . import client as _client
+    from .sidecar import sidecar_enabled
 
     project_root_path = require_project_root_from(cwd.resolve() if cwd is not None else None)
     project_root = str(project_root_path)
     request_cwd = str(cwd.resolve()) if cwd is not None else None
     print_project_header(project_root)
-    _run_index_with_progress(project_root, cwd=request_cwd, base_ref=base_ref)
+    sidecar_report = _run_index_with_progress(project_root, cwd=request_cwd, base_ref=base_ref)
+    if sidecar_enabled():
+        if sidecar_report is not None:
+            print_layered_index_report(sidecar_report)
+        return
     print_index_stats(_client.project_status(project_root))
 
 

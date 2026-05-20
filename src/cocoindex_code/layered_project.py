@@ -18,7 +18,7 @@ from .protocol import (
 )
 from .settings import load_project_settings
 from .shared import Embedder
-from .version_control import resolve_worktree
+from .version_control import remote_tracking_ref_for_local_branch, resolve_worktree
 
 
 def _sha_short(value: str) -> str:
@@ -158,9 +158,16 @@ class LayeredProject:
         self,
         on_progress: Callable[[IndexingProgress], None] | None = None,
     ) -> list[str]:
+        layers = await self.ensure_layer_results(on_progress=on_progress)
+        return [layer.layer.id for layer in layers]
+
+    async def ensure_layer_results(
+        self,
+        on_progress: Callable[[IndexingProgress], None] | None = None,
+    ) -> list[LayerBuildResult]:
         layers = await self._ensure_layers(on_progress=on_progress)
         self._last_layers = layers
-        return [layer.layer.id for layer in layers]
+        return layers
 
     def get_status(self) -> ProjectStatusResponse:
         total_chunks = 0
@@ -208,10 +215,20 @@ class LayeredProject:
         worktree = resolve_worktree(self.cwd, base_ref=self.base_ref, index_config_hash=config_hash)
         if self.base_ref is None:
             stored_base_ref = self.store.get_overlay_base_ref(worktree.repository.id)
-            if stored_base_ref is not None and stored_base_ref != worktree.branch.base_ref:
-                worktree = resolve_worktree(
-                    self.cwd, base_ref=stored_base_ref, index_config_hash=config_hash
-                )
+            if stored_base_ref is not None:
+                remote_base_ref = remote_tracking_ref_for_local_branch(self.cwd, stored_base_ref)
+                if remote_base_ref is not None and remote_base_ref != stored_base_ref:
+                    worktree = resolve_worktree(
+                        self.cwd, base_ref=remote_base_ref, index_config_hash=config_hash
+                    )
+                    self.store.upsert_overlay_policy(
+                        repo_id=worktree.repository.id, base_ref=remote_base_ref
+                    )
+                    stored_base_ref = remote_base_ref
+                if stored_base_ref != worktree.branch.base_ref:
+                    worktree = resolve_worktree(
+                        self.cwd, base_ref=stored_base_ref, index_config_hash=config_hash
+                    )
         return await self._stack.ensure(
             worktree=worktree,
             config_hash=config_hash,

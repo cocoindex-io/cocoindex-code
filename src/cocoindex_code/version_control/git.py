@@ -121,7 +121,7 @@ def _dirty_snapshot_hash(repo_root: Path, entries: tuple[GitStatusEntry, ...]) -
 
 
 def _resolve_base_ref(repo: pygit2.Repository, requested: str | None) -> str:
-    candidates = [requested] if requested else ["origin/main", "main", "master", "HEAD"]
+    candidates = [requested] if requested else _default_base_ref_candidates(repo)
     for candidate in candidates:
         if candidate is None:
             continue
@@ -130,7 +130,73 @@ def _resolve_base_ref(repo: pygit2.Repository, requested: str | None) -> str:
             return candidate
         except (KeyError, ValueError, pygit2.GitError):
             continue
-    raise GitContextError("No usable base ref found")
+    if requested:
+        raise GitContextError(f"No usable base ref found for {requested}")
+    raise GitContextError(
+        "No usable default base ref found. Configure an upstream branch or run "
+        "`ccc init --base <ref>`."
+    )
+
+
+def _shorten_ref_name(ref_name: str) -> str:
+    for prefix in ("refs/remotes/", "refs/heads/"):
+        if ref_name.startswith(prefix):
+            return ref_name.removeprefix(prefix)
+    return ref_name
+
+
+def _branch_upstream_ref(repo: pygit2.Repository, branch_name: str) -> str | None:
+    try:
+        branch = repo.branches.local.get(branch_name)
+    except (KeyError, ValueError, pygit2.GitError):
+        return None
+    if branch is None:
+        return None
+    try:
+        upstream = branch.upstream
+    except (KeyError, ValueError, pygit2.GitError):
+        return None
+    if upstream is None:
+        return None
+    return _shorten_ref_name(upstream.name)
+
+
+def _current_branch_upstream_ref(repo: pygit2.Repository) -> str | None:
+    try:
+        return _branch_upstream_ref(repo, repo.head.shorthand)
+    except (KeyError, ValueError, pygit2.GitError):
+        return None
+
+
+def _remote_head_refs(repo: pygit2.Repository) -> list[str]:
+    refs: list[str] = []
+    for ref_name in sorted(repo.references):
+        if not ref_name.startswith("refs/remotes/") or not ref_name.endswith("/HEAD"):
+            continue
+        try:
+            ref = repo.lookup_reference(ref_name)
+            refs.append(_shorten_ref_name(ref.resolve().name))
+        except (KeyError, ValueError, pygit2.GitError):
+            continue
+    return refs
+
+
+def _default_base_ref_candidates(repo: pygit2.Repository) -> list[str]:
+    candidates: list[str] = []
+    upstream = _current_branch_upstream_ref(repo)
+    if upstream is not None:
+        candidates.append(upstream)
+    candidates.extend(_remote_head_refs(repo))
+    return list(dict.fromkeys(candidates))
+
+
+def remote_tracking_ref_for_local_branch(
+    cwd: str | os.PathLike[str] | Path,
+    branch_name: str,
+) -> str | None:
+    """Return the configured upstream ref for a local branch, if any."""
+    repo = _open_repo(Path(cwd).resolve())
+    return _branch_upstream_ref(repo, branch_name)
 
 
 def _git_common_dir(repo: pygit2.Repository) -> Path:

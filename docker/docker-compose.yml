@@ -36,7 +36,11 @@ services:
 
 volumes:
   cocoindex-code-local-state:
+    name: ${COCOINDEX_CODE_STATE_VOLUME:-cocoindex-code-local-state}
+    external: true
   cocoindex-code-local-runtime:
+    name: ${COCOINDEX_CODE_RUNTIME_VOLUME:-cocoindex-code-local-runtime}
+    external: true
 
 networks:
   cocoindex-code-local:

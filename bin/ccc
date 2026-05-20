@@ -87,10 +87,49 @@ ensure_image_exists() {
 	fi
 }
 
+container_has_env() {
+	local expected="$1"
+	docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$central_container" \
+		2>/dev/null | grep -Fx -- "$expected" >/dev/null
+}
+
+container_has_volume_mount() {
+	local destination="$1"
+	local volume_name="$2"
+	docker inspect -f '{{range .Mounts}}{{.Destination}}{{"\t"}}{{.Type}}{{"\t"}}{{.Name}}{{"\n"}}{{end}}' \
+		"$central_container" 2>/dev/null | awk -F '\t' \
+		-v destination="$destination" -v volume_name="$volume_name" \
+		'$1 == destination && $2 == "volume" && $3 == volume_name { found = 1 } END { exit !found }'
+}
+
+container_has_bind_mount() {
+	local destination="$1"
+	docker inspect -f '{{range .Mounts}}{{.Destination}}{{"\t"}}{{.Type}}{{"\n"}}{{end}}' \
+		"$central_container" 2>/dev/null | awk -F '\t' \
+		-v destination="$destination" \
+		'$1 == destination && $2 == "bind" { found = 1 } END { exit !found }'
+}
+
+daemon_container_matches_expected() {
+	[[ "$(docker inspect -f '{{.Config.Image}}' "$central_container" 2>/dev/null || true)" == "$image" ]] || return 1
+	container_has_bind_mount "$container_settings_dir" || return 1
+	container_has_volume_mount "$container_state_root" "$state_volume" || return 1
+	container_has_volume_mount "$container_runtime_dir" "$runtime_volume" || return 1
+	container_has_env "COCOINDEX_CODE_DAEMON_TCP=$daemon_listen_addr" || return 1
+	container_has_env "COCOINDEX_CODE_DIR=$container_settings_dir" || return 1
+	container_has_env "COCOINDEX_CODE_STATE_DIR=$container_state_dir" || return 1
+	container_has_env "COCOINDEX_CODE_RUNTIME_DIR=$container_runtime_dir" || return 1
+	container_has_env "COCOINDEX_CODE_DB_PATH_MAPPING=$container_db_path_mapping" || return 1
+}
+
 ensure_central_daemon() {
 	docker network inspect "$network" >/dev/null 2>&1 || docker network create "$network" >/dev/null
 	if [[ "$(docker inspect -f '{{.State.Running}}' "$central_container" 2>/dev/null || true)" == "true" ]]; then
-		return
+		if daemon_container_matches_expected; then
+			return
+		fi
+		echo "Recreating incompatible cocoindex-code daemon container: $central_container" >&2
+		docker rm -f "$central_container" >/dev/null
 	fi
 	if docker inspect "$central_container" >/dev/null 2>&1; then
 		docker rm "$central_container" >/dev/null

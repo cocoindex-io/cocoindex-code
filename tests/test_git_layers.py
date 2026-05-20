@@ -86,6 +86,42 @@ def test_resolve_worktree_context_worktree_id_uses_name_and_branch(tmp_path: Pat
     assert first_ctx.repo_root != second_ctx.repo_root
 
 
+def test_resolve_worktree_context_uses_configured_branch_upstream(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    _git(repo, "branch", "-m", "master")
+    origin_master = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "update-ref", "refs/remotes/origin/master", origin_master)
+    _git(repo, "branch", "--set-upstream-to=origin/master", "master")
+    (repo / "main.py").write_text("def changed() -> str:\n    return 'changed'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "local master advanced")
+
+    ctx = resolve_worktree_context(repo, base_ref=None, index_config_hash="cfg")
+
+    assert ctx.branch.base_ref == "origin/master"
+    assert ctx.branch.base_commit == origin_master
+    assert ctx.branch.head_commit != ctx.branch.base_commit
+
+
+def test_resolve_worktree_context_uses_remote_head_when_no_branch_upstream(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    origin_default = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "update-ref", "refs/remotes/upstream/default", origin_default)
+    _git(repo, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/default")
+    (repo / "main.py").write_text("def changed() -> str:\n    return 'changed'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "local branch advanced")
+
+    ctx = resolve_worktree_context(repo, base_ref=None, index_config_hash="cfg")
+
+    assert ctx.branch.base_ref == "upstream/default"
+    assert ctx.branch.base_commit == origin_default
+
+
 def test_layer_store_persists_ready_layers_and_manifests(tmp_path: Path) -> None:
     store = LayerStore(tmp_path / "daemon.db")
     record = store.upsert_layer(
