@@ -26,6 +26,30 @@ canonical_path() {
 	python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "$1"
 }
 
+slugify() {
+	python3 - "$1" "${2:-63}" <<'PY'
+import re
+import sys
+import unicodedata
+
+value = unicodedata.normalize("NFKD", sys.argv[1].strip().lower())
+value = value.encode("ascii", "ignore").decode()
+value = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
+max_len = int(sys.argv[2])
+value = value[:max_len].rstrip("-")
+print(value or "unknown")
+PY
+}
+
+short_hash() {
+	python3 - "$1" <<'PY'
+import hashlib
+import sys
+
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])
+PY
+}
+
 git_root_for() {
 	git -C "$1" rev-parse --show-toplevel 2>/dev/null | xargs -I{} python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "{}"
 }
@@ -39,6 +63,55 @@ git_common_dir_for() {
 	else
 		canonical_path "$root/$raw"
 	fi
+}
+
+git_repo_name_for() {
+	local root="$1"
+	local remote_url
+	remote_url="$(git -C "$root" config --get remote.origin.url 2>/dev/null || true)"
+	python3 - "$root" "$remote_url" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+remote_url = sys.argv[2].strip().removesuffix(".git")
+if remote_url:
+    remote_url = remote_url.replace(":", "/")
+    print(remote_url.rstrip("/").rsplit("/", 1)[-1] or root.name)
+else:
+    print(root.name)
+PY
+}
+
+git_branch_for() {
+	local root="$1"
+	local branch
+	branch="$(git -C "$root" branch --show-current 2>/dev/null || true)"
+	if [[ -n "$branch" ]]; then
+		echo "$branch"
+		return
+	fi
+	branch="$(git -C "$root" rev-parse --short HEAD 2>/dev/null || true)"
+	if [[ -n "$branch" ]]; then
+		echo "detached-$branch"
+	else
+		echo "unknown"
+	fi
+}
+
+sidecar_container_name() {
+	local root="$1"
+	local host_cwd="$2"
+	local command_name="${3:-cmd}"
+	local repo_name branch_name repo_slug branch_slug command_slug suffix
+	repo_name="$(git_repo_name_for "$root")"
+	branch_name="$(git_branch_for "$root")"
+	repo_slug="$(slugify "$repo_name" 40)"
+	branch_slug="$(slugify "$branch_name" 96)"
+	command_slug="$(slugify "$command_name" 24)"
+	suffix="$(short_hash "$root|$branch_name|$command_name|$host_cwd|$$|$RANDOM")"
+	printf 'cocoindex-code-sidecar-%s-%s-%s-%s\n' \
+		"$repo_slug" "$branch_slug" "$command_slug" "$suffix"
 }
 
 is_path_within() {
@@ -163,10 +236,21 @@ run_sidecar() {
 	local common_dir="$2"
 	local host_cwd="$3"
 	shift 3
+	local sidecar_command="${1:-cmd}"
+	local sidecar_container repo_name branch_name
+	sidecar_container="$(sidecar_container_name "$root" "$host_cwd" "$sidecar_command")"
+	repo_name="$(git_repo_name_for "$root")"
+	branch_name="$(git_branch_for "$root")"
 
 	local run_args=(
 		run --rm -i
+		--name "$sidecar_container"
 		--network "$network"
+		--label "io.cocoindex.code.role=sidecar"
+		--label "io.cocoindex.code.repo=$repo_name"
+		--label "io.cocoindex.code.branch=$branch_name"
+		--label "io.cocoindex.code.command=$sidecar_command"
+		--label "io.cocoindex.code.worktree=$root"
 		--volume "$root:$workspace_dir"
 		--volume "$root:$root"
 		--volume "$host_settings_dir:$container_settings_dir"

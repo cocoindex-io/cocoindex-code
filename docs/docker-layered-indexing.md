@@ -78,6 +78,14 @@ source access:
 Sidecar container:
 
 ```text
+name:
+  cocoindex-code-sidecar-<repo>-<branch>-<command>-<hash>
+labels:
+  io.cocoindex.code.role=sidecar
+  io.cocoindex.code.repo=<repo>
+  io.cocoindex.code.branch=<branch>
+  io.cocoindex.code.command=<command>
+  io.cocoindex.code.worktree=<authorized repo path>
 mounts:
   /authorized/repo             -> /workspace
   /authorized/repo             -> /authorized/repo
@@ -95,6 +103,12 @@ source access:
 The second repo bind mount is the same authorized checkout, not a parent
 directory. It exists so linked-worktree `.git` metadata that contains absolute
 host paths still resolves inside the sidecar.
+
+Sidecar names use lowercase Docker-safe slugs, so a repo/branch such as
+`fever2` and `feature/PLATFORM-5958-example` appears in `docker ps` as a name
+like `cocoindex-code-sidecar-fever2-feature-platform-5958-example-index-<hash>`.
+The labels keep the unsanitized repo, branch, command, and worktree values for
+inspection and filtering.
 
 Indexing runs in the sidecar because it is the process with Git/source access. The resulting layer metadata and layer databases are written to shared daemon state. Search sends the resolved layer IDs to the central daemon, and the daemon serves the query from shared layer databases without mounting the repository.
 

@@ -86,6 +86,8 @@ def test_docker_sidecar_docs_describe_repo_scoped_architecture() -> None:
     assert "Do not mount `$HOME` or a broad source tree" in content
     assert "same absolute path it has on the host" in content
     assert "linked-worktree metadata" in content
+    assert "cocoindex-code-sidecar-<repo>-<branch>-<command>-<hash>" in content
+    assert "io.cocoindex.code.branch=<branch>" in content
     assert "COCOINDEX_CODE_DAEMON_TCP" in content
     assert "COCOINDEX_CODE_SIDECAR=1" in content
 
@@ -109,6 +111,7 @@ def test_wrapper_mounts_only_authorized_repo_sidecar() -> None:
     content = (REPO_ROOT / "bin" / "ccc").read_text()
 
     assert 'record_authorization "$root" "$common_dir"' in content
+    assert '--name "$sidecar_container"' in content
     assert '--volume "$root:$workspace_dir"' in content
     assert '--volume "$root:$root"' in content
     assert '--volume "$host_settings_dir:$container_settings_dir"' in content
@@ -124,6 +127,28 @@ def test_wrapper_mounts_only_authorized_repo_sidecar() -> None:
     assert "COCOINDEX_CODE_DB_PATH_MAPPING=$container_db_path_mapping" in content
     assert 'COCOINDEX_CODE_HOST_PATH_MAPPING=$workspace_dir=$root' in content
     assert 'exec docker "${run_args[@]}"' in content
+
+
+def test_wrapper_names_sidecars_by_repo_branch_command() -> None:
+    content = (REPO_ROOT / "bin" / "ccc").read_text()
+
+    assert "sidecar_container_name()" in content
+    assert "git_repo_name_for()" in content
+    assert "git_branch_for()" in content
+    assert "slugify()" in content
+    assert 'cocoindex-code-sidecar-%s-%s-%s-%s' in content
+    assert 'repo_slug="$(slugify "$repo_name" 40)"' in content
+    assert 'branch_slug="$(slugify "$branch_name" 96)"' in content
+    assert 'command_slug="$(slugify "$command_name" 24)"' in content
+    assert (
+        'suffix="$(short_hash "$root|$branch_name|$command_name|$host_cwd|$$|$RANDOM")"'
+        in content
+    )
+    assert '--label "io.cocoindex.code.role=sidecar"' in content
+    assert '--label "io.cocoindex.code.repo=$repo_name"' in content
+    assert '--label "io.cocoindex.code.branch=$branch_name"' in content
+    assert '--label "io.cocoindex.code.command=$sidecar_command"' in content
+    assert '--label "io.cocoindex.code.worktree=$root"' in content
 
 
 def test_wrapper_recreates_incompatible_daemon_container() -> None:
