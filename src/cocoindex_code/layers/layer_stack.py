@@ -40,6 +40,7 @@ class LayerBuildResult:
     manifest: LayerManifest
     runtime: LayerRuntime
     built: bool = False
+    progress: IndexingProgress | None = None
 
     @property
     def record(self) -> Layer:
@@ -257,6 +258,7 @@ class LayerStack:
         paths = LayerPaths.for_layer(self.state_dir, worktree.repository.id, layer_id)
         existing = self.store.get_layer(layer_id)
         built = False
+        progress: IndexingProgress | None = None
         if (
             existing is None
             or existing.status != "ready"
@@ -284,7 +286,13 @@ class LayerStack:
             materialize(paths.source)
             layer = self._require_layer(layer_id)
             runtime = await self._runtime(layer)
-            await runtime.run_index(on_progress=on_progress)
+            def _on_progress(snapshot: IndexingProgress) -> None:
+                nonlocal progress
+                progress = snapshot
+                if on_progress is not None:
+                    on_progress(snapshot)
+
+            await runtime.run_index(on_progress=_on_progress)
             self.store.replace_manifest(
                 layer_id,
                 affected_paths=affected_paths,
@@ -297,7 +305,13 @@ class LayerStack:
         if manifest is None:
             raise RuntimeError(f"Layer manifest missing after build: {layer_id}")
         runtime = await self._runtime(layer)
-        return LayerBuildResult(layer=layer, manifest=manifest, runtime=runtime, built=built)
+        return LayerBuildResult(
+            layer=layer,
+            manifest=manifest,
+            runtime=runtime,
+            built=built,
+            progress=progress,
+        )
 
     def _require_layer(self, layer_id: str) -> Layer:
         layer = self.store.get_layer(layer_id)

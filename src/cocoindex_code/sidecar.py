@@ -33,6 +33,9 @@ class SidecarLayerSummary:
     built: bool
     affected_count: int
     tombstoned_count: int
+    indexed_file_count: int | None = None
+    indexed_chunk_count: int | None = None
+    progress: IndexingProgress | None = None
 
 
 @dataclass(frozen=True)
@@ -51,19 +54,7 @@ def _summarize_layers(
     *, project_root: Path, cwd: Path, layers: list[LayerBuildResult]
 ) -> SidecarIndexReport:
     summaries = tuple(
-        SidecarLayerSummary(
-            layer_id=layer.layer.id,
-            kind=layer.layer.kind.value,
-            ref_name=layer.layer.ref_name,
-            commit=layer.layer.commit_hash,
-            previous_commit=layer.layer.base_commit_hash,
-            merge_base=layer.layer.merge_base_hash,
-            base_layer_id=layer.layer.base_layer_id,
-            status=layer.layer.status,
-            built=layer.built,
-            affected_count=len(layer.manifest.affected_paths),
-            tombstoned_count=len(layer.manifest.tombstoned_paths),
-        )
+        _summarize_layer(layer)
         for layer in layers
     )
     base = next((layer for layer in summaries if layer.kind == "base"), None)
@@ -78,6 +69,26 @@ def _summarize_layers(
         base_commit=base.commit if base is not None else None,
         head_commit=top.commit if top is not None else None,
         layers=summaries,
+    )
+
+
+def _summarize_layer(layer: LayerBuildResult) -> SidecarLayerSummary:
+    status = layer.runtime.project.get_status()
+    return SidecarLayerSummary(
+        layer_id=layer.layer.id,
+        kind=layer.layer.kind.value,
+        ref_name=layer.layer.ref_name,
+        commit=layer.layer.commit_hash,
+        previous_commit=layer.layer.base_commit_hash,
+        merge_base=layer.layer.merge_base_hash,
+        base_layer_id=layer.layer.base_layer_id,
+        status=layer.layer.status,
+        built=layer.built,
+        affected_count=len(layer.manifest.affected_paths),
+        tombstoned_count=len(layer.manifest.tombstoned_paths),
+        indexed_file_count=status.total_files if status.index_exists else None,
+        indexed_chunk_count=status.total_chunks if status.index_exists else None,
+        progress=layer.progress,
     )
 
 

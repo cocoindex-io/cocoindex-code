@@ -13,7 +13,7 @@ from cocoindex_code.cli import (
     require_project_root,
     resolve_default_path,
 )
-from cocoindex_code.protocol import SearchResponse
+from cocoindex_code.protocol import IndexingProgress, SearchResponse
 from cocoindex_code.sidecar import SidecarIndexReport, SidecarLayerSummary
 
 
@@ -39,6 +39,16 @@ def _sample_sidecar_report(project_root: Path) -> SidecarIndexReport:
                 built=True,
                 affected_count=12,
                 tombstoned_count=1,
+                indexed_file_count=8,
+                indexed_chunk_count=34,
+                progress=IndexingProgress(
+                    num_execution_starts=8,
+                    num_unchanged=2,
+                    num_adds=5,
+                    num_deletes=1,
+                    num_reprocesses=0,
+                    num_errors=0,
+                ),
             ),
             SidecarLayerSummary(
                 layer_id="base-layer",
@@ -52,6 +62,8 @@ def _sample_sidecar_report(project_root: Path) -> SidecarIndexReport:
                 built=False,
                 affected_count=0,
                 tombstoned_count=0,
+                indexed_file_count=120,
+                indexed_chunk_count=610,
             ),
         ),
     )
@@ -406,6 +418,10 @@ def test_index_command_skips_daemon_project_status_in_sidecar_mode(
     assert "Repo ID: repo-123" in out
     assert "branch built" in out
     assert "diff=12 paths, tombstones=1" in out
+    assert "index=8 files, 34 chunks" in out
+    assert "8 listed, 5 added, 2 unchanged, 0 reprocessed, 1 deleted, 0 errors" in out
+    assert "base   reused" in out
+    assert "index=120 files, 610 chunks" in out
     assert "Index stats:" not in out
 
 

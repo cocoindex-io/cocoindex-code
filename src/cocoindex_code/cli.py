@@ -211,6 +211,19 @@ def print_layered_index_report(report: SidecarIndexReport) -> None:
         diff = f"diff={layer.affected_count} paths"
         if layer.tombstoned_count:
             diff += f", tombstones={layer.tombstoned_count}"
+        index = ""
+        if layer.indexed_file_count is not None and layer.indexed_chunk_count is not None:
+            index = f" index={layer.indexed_file_count} files, {layer.indexed_chunk_count} chunks"
+        progress = ""
+        if layer.progress is not None:
+            progress = (
+                f" progress={layer.progress.num_execution_starts} listed,"
+                f" {layer.progress.num_adds} added,"
+                f" {layer.progress.num_unchanged} unchanged,"
+                f" {layer.progress.num_reprocesses} reprocessed,"
+                f" {layer.progress.num_deletes} deleted,"
+                f" {layer.progress.num_errors} errors"
+            )
         previous = layer.previous_commit or layer.merge_base
         _typer.echo(
             "    "
@@ -220,6 +233,8 @@ def print_layered_index_report(report: SidecarIndexReport) -> None:
             f"prev={_short_hash(previous)} "
             f"commit={_short_hash(layer.commit)} "
             f"{diff}"
+            f"{index}"
+            f"{progress}"
         )
 
 
