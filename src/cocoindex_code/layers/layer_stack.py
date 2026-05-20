@@ -98,12 +98,12 @@ class LayerStack:
             branch_name=worktree.branch.name,
             last_seen_path=worktree.path,
         )
-        base = await self._ensure_base(worktree, config_hash, on_progress)
         parent_layers = await self._nearest_indexed_ancestor_chain(
             worktree=worktree,
             config_hash=config_hash,
         )
         if parent_layers is None:
+            base = await self._ensure_base(worktree, config_hash, on_progress)
             parent_layers = [base]
         branch = await self._ensure_branch(worktree, parent_layers[0], config_hash, on_progress)
         layers = parent_layers
@@ -302,6 +302,8 @@ class LayerStack:
                     worktree.id,
                     worktree.branch.name,
                     worktree.branch.head_commit,
+                    parent_commit,
+                    parent.layer.id,
                     worktree.dirty.snapshot_hash,
                     config_hash,
                 ]

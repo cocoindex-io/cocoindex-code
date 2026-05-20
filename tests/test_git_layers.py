@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -10,6 +11,7 @@ from cocoindex_code._daemon_paths import daemon_state_dir
 from cocoindex_code.git_context import normalize_remote_url, resolve_worktree_context
 from cocoindex_code.layer_store import LayerKind, LayerStore
 from cocoindex_code.layered_project import LayeredProject
+from cocoindex_code.protocol import IndexingProgress
 from cocoindex_code.settings import default_project_settings, save_project_settings
 
 
@@ -28,6 +30,100 @@ def _init_repo(path: Path) -> Path:
     _git(path, "commit", "-m", "initial")
     _git(path, "remote", "add", "origin", "git@github.com:Example/Repo.git")
     return path
+
+
+class _FakeRuntime:
+    def __init__(self, layer: Any) -> None:
+        self.layer = layer
+        self.project = object()
+
+    async def run_index(self, on_progress: Any = None) -> None:
+        self.layer.paths.target_sqlite.parent.mkdir(parents=True, exist_ok=True)
+        self.layer.paths.target_sqlite.touch()
+        if on_progress is not None:
+            on_progress(IndexingProgress(1, 0, 1, 0, 0, 0))
+
+
+async def _fake_runtime_create(**kwargs: Any) -> _FakeRuntime:
+    return _FakeRuntime(kwargs["layer"])
+
+
+def _install_fake_layer_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    import cocoindex_code.layers.layer_stack as layer_stack
+
+    monkeypatch.setattr(
+        layer_stack.LayerRuntime,
+        "create",
+        staticmethod(_fake_runtime_create),
+    )
+
+
+def _fake_layered_project(
+    *,
+    repo: Path,
+    base_ref: str,
+    state_dir: Path,
+    store: LayerStore,
+) -> LayeredProject:
+    return LayeredProject(
+        project_root=repo,
+        cwd=repo,
+        base_ref=base_ref,
+        state_dir=state_dir,
+        store=store,
+        embedder=object(),
+        indexing_params={},
+        query_params={},
+        chunker_registry={},
+        project_cache={},
+    )
+
+
+def _touch_layer_target(layer: Any) -> None:
+    layer.paths.target_sqlite.parent.mkdir(parents=True, exist_ok=True)
+    layer.paths.target_sqlite.touch()
+
+
+def _upsert_ready_layer(
+    *,
+    store: LayerStore,
+    state_dir: Path,
+    repo_id: str,
+    layer_id: str,
+    kind: LayerKind,
+    ref_name: str,
+    commit: str,
+    base_commit: str | None,
+    base_layer_id: str | None,
+    config_hash: str,
+    affected_paths: list[str],
+    tombstoned_paths: list[str] | None = None,
+) -> Any:
+    root = state_dir / "manual-layers" / layer_id
+    layer = store.upsert_layer(
+        layer_id=layer_id,
+        repo_id=repo_id,
+        kind=kind,
+        ref_name=ref_name,
+        commit=commit,
+        base_commit=base_commit,
+        base_layer_id=base_layer_id,
+        source_dir=root / "src",
+        db_dir=root / "db",
+        status="building",
+        config_hash=config_hash,
+    )
+    store.replace_manifest(
+        layer_id,
+        affected_paths=affected_paths,
+        tombstoned_paths=tombstoned_paths or [],
+        expires_at=None,
+    )
+    _touch_layer_target(layer)
+    store.mark_layer_ready(layer_id)
+    ready = store.get_layer(layer_id)
+    assert ready is not None
+    return ready
 
 
 def test_daemon_state_dir_defaults_to_xdg_data_home(
@@ -122,6 +218,29 @@ def test_resolve_worktree_context_uses_remote_head_when_no_branch_upstream(
     assert ctx.branch.base_commit == origin_default
 
 
+def test_ancestor_distances_only_returns_commits_reachable_from_head(tmp_path: Path) -> None:
+    from cocoindex_code.version_control.git import ancestor_distances
+
+    repo = _init_repo(tmp_path / "repo")
+    base_commit = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-b", "other")
+    (repo / "other.py").write_text("def other() -> str:\n    return 'other'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "other")
+    other_head = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "main")
+    (repo / "main.py").write_text("def main() -> str:\n    return 'main'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "main")
+    main_head = _git(repo, "rev-parse", "HEAD")
+
+    assert ancestor_distances(
+        repo,
+        head=main_head,
+        candidate_commits=[base_commit, other_head, main_head, "missing"],
+    ) == {base_commit: 1, main_head: 0}
+
+
 def test_layer_store_persists_ready_layers_and_manifests(tmp_path: Path) -> None:
     store = LayerStore(tmp_path / "daemon.db")
     record = store.upsert_layer(
@@ -212,31 +331,7 @@ async def test_layered_project_creates_base_and_branch_manifests(
 async def test_layered_project_builds_from_nearest_indexed_ancestor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from typing import Any
-
-    import cocoindex_code.layers.layer_stack as layer_stack
-    from cocoindex_code.protocol import IndexingProgress
-
-    class FakeRuntime:
-        def __init__(self, layer: Any) -> None:
-            self.layer = layer
-            self.project = object()
-
-        async def run_index(self, on_progress: object = None) -> None:
-            self.layer.paths.target_sqlite.parent.mkdir(parents=True, exist_ok=True)
-            self.layer.paths.target_sqlite.touch()
-            if on_progress is not None:
-                on_progress(IndexingProgress(1, 0, 1, 0, 0, 0))
-
-    async def fake_runtime_create(**kwargs: Any) -> FakeRuntime:
-        return FakeRuntime(kwargs["layer"])
-
-    monkeypatch.setattr(
-        layer_stack.LayerRuntime,
-        "create",
-        staticmethod(fake_runtime_create),
-    )
-
+    _install_fake_layer_runtime(monkeypatch)
     monkeypatch.setenv("COCOINDEX_CODE_STATE_DIR", str(tmp_path / "state"))
     repo = _init_repo(tmp_path / "repo")
     base_commit = _git(repo, "rev-parse", "HEAD")
@@ -250,17 +345,11 @@ async def test_layered_project_builds_from_nearest_indexed_ancestor(
     store = LayerStore(state_dir / "daemon.db")
 
     def make_project() -> LayeredProject:
-        return LayeredProject(
-            project_root=repo,
-            cwd=repo,
+        return _fake_layered_project(
+            repo=repo,
             base_ref=base_commit,
             state_dir=state_dir,
             store=store,
-            embedder=object(),
-            indexing_params={},
-            query_params={},
-            chunker_registry={},
-            project_cache={},
         )
 
     master_project = make_project()
@@ -297,3 +386,313 @@ async def test_layered_project_builds_from_nearest_indexed_ancestor(
     assert feature_layer.layer.base_layer_id == master_layer.layer.id
     assert feature_layer.manifest.affected_paths == frozenset({"feature.py"})
     assert feature_layer.manifest.tombstoned_paths == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_layered_project_does_not_build_configured_base_when_ancestor_chain_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_layer_runtime(monkeypatch)
+    monkeypatch.setenv("COCOINDEX_CODE_STATE_DIR", str(tmp_path / "state"))
+    repo = _init_repo(tmp_path / "repo")
+    base_commit = _git(repo, "rev-parse", "HEAD")
+    (repo / "master.py").write_text("def master_only() -> str:\n    return 'master'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "master")
+    master_head = _git(repo, "rev-parse", "HEAD")
+
+    state_dir = daemon_state_dir()
+    store = LayerStore(state_dir / "daemon.db")
+    master_project = _fake_layered_project(
+        repo=repo,
+        base_ref=base_commit,
+        state_dir=state_dir,
+        store=store,
+    )
+    try:
+        master_layers = await master_project.ensure_layer_results()
+    finally:
+        master_project.close()
+    master_layer = next(layer for layer in master_layers if layer.layer.kind == LayerKind.BRANCH)
+
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "feature.py").write_text("def feature_only() -> str:\n    return 'feature'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feature")
+
+    feature_project = _fake_layered_project(
+        repo=repo,
+        base_ref=master_head,
+        state_dir=state_dir,
+        store=store,
+    )
+    try:
+        feature_layers = await feature_project.ensure_layer_results()
+    finally:
+        feature_project.close()
+
+    feature_layer, reused_master_layer, _base_layer = feature_layers
+    assert feature_layer.manifest.affected_paths == frozenset({"feature.py"})
+    assert reused_master_layer.layer.id == master_layer.layer.id
+    assert not any(
+        layer.kind == LayerKind.BASE and layer.commit_hash == master_head
+        for layer in store.list_layers(repo_id=master_layer.layer.repo_id)
+    )
+
+
+@pytest.mark.asyncio
+async def test_layered_project_ignores_unusable_indexed_ancestor_layers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cocoindex_code.layered_project import build_index_config_hash
+    from cocoindex_code.version_control import resolve_worktree
+
+    _install_fake_layer_runtime(monkeypatch)
+    monkeypatch.setenv("COCOINDEX_CODE_STATE_DIR", str(tmp_path / "state"))
+    repo = _init_repo(tmp_path / "repo")
+    base_commit = _git(repo, "rev-parse", "HEAD")
+    (repo / "master.py").write_text("def master_only() -> str:\n    return 'master'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "master")
+    master_head = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "feature.py").write_text("def feature_only() -> str:\n    return 'feature'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feature")
+
+    state_dir = daemon_state_dir()
+    store = LayerStore(state_dir / "daemon.db")
+    config_hash = build_index_config_hash(repo, indexing_params={}, query_params={})
+    worktree = resolve_worktree(repo, base_ref=base_commit, index_config_hash=config_hash)
+    invalid_layer = store.upsert_layer(
+        layer_id="missing-target-db",
+        repo_id=worktree.repository.id,
+        kind=LayerKind.BRANCH,
+        ref_name="master",
+        commit=master_head,
+        base_commit=base_commit,
+        base_layer_id="missing-base",
+        source_dir=state_dir / "invalid" / "src",
+        db_dir=state_dir / "invalid" / "db",
+        status="building",
+        config_hash=config_hash,
+    )
+    store.replace_manifest(
+        invalid_layer.id,
+        affected_paths=["master.py"],
+        tombstoned_paths=[],
+        expires_at=None,
+    )
+    store.mark_layer_ready(invalid_layer.id)
+
+    project = _fake_layered_project(
+        repo=repo,
+        base_ref=base_commit,
+        state_dir=state_dir,
+        store=store,
+    )
+    try:
+        layers = await project.ensure_layer_results()
+    finally:
+        project.close()
+
+    branch_layer = layers[0]
+    assert branch_layer.layer.base_commit_hash == base_commit
+    assert branch_layer.manifest.affected_paths == frozenset({"feature.py", "master.py"})
+
+
+@pytest.mark.asyncio
+async def test_layered_project_ignores_indexed_ancestor_with_broken_parent_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cocoindex_code.layered_project import build_index_config_hash
+    from cocoindex_code.version_control import resolve_worktree
+
+    _install_fake_layer_runtime(monkeypatch)
+    monkeypatch.setenv("COCOINDEX_CODE_STATE_DIR", str(tmp_path / "state"))
+    repo = _init_repo(tmp_path / "repo")
+    base_commit = _git(repo, "rev-parse", "HEAD")
+    (repo / "master.py").write_text("def master_only() -> str:\n    return 'master'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "master")
+    master_head = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "feature.py").write_text("def feature_only() -> str:\n    return 'feature'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feature")
+
+    state_dir = daemon_state_dir()
+    store = LayerStore(state_dir / "daemon.db")
+    config_hash = build_index_config_hash(repo, indexing_params={}, query_params={})
+    worktree = resolve_worktree(repo, base_ref=base_commit, index_config_hash=config_hash)
+    broken_layer = _upsert_ready_layer(
+        store=store,
+        state_dir=state_dir,
+        repo_id=worktree.repository.id,
+        layer_id="broken-parent-chain",
+        kind=LayerKind.BRANCH,
+        ref_name="master",
+        commit=master_head,
+        base_commit=base_commit,
+        base_layer_id="missing-base",
+        config_hash=config_hash,
+        affected_paths=["master.py"],
+    )
+    assert broken_layer.paths.target_sqlite.exists()
+
+    project = _fake_layered_project(
+        repo=repo,
+        base_ref=base_commit,
+        state_dir=state_dir,
+        store=store,
+    )
+    try:
+        layers = await project.ensure_layer_results()
+    finally:
+        project.close()
+
+    branch_layer = layers[0]
+    assert branch_layer.layer.base_commit_hash == base_commit
+    assert branch_layer.manifest.affected_paths == frozenset({"feature.py", "master.py"})
+
+
+@pytest.mark.asyncio
+async def test_dirty_layer_identity_includes_selected_parent_layer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_layer_runtime(monkeypatch)
+    monkeypatch.setenv("COCOINDEX_CODE_STATE_DIR", str(tmp_path / "state"))
+    repo = _init_repo(tmp_path / "repo")
+    base_commit = _git(repo, "rev-parse", "HEAD")
+    (repo / "master.py").write_text("def master_only() -> str:\n    return 'master'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "master")
+    master_head = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "feature.py").write_text("def feature_only() -> str:\n    return 'feature'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feature")
+    (repo / "dirty.py").write_text("def dirty() -> str:\n    return 'dirty'\n")
+
+    state_dir = daemon_state_dir()
+    store = LayerStore(state_dir / "daemon.db")
+    feature_project = _fake_layered_project(
+        repo=repo,
+        base_ref=base_commit,
+        state_dir=state_dir,
+        store=store,
+    )
+    try:
+        original_layers = await feature_project.ensure_layer_results()
+    finally:
+        feature_project.close()
+    old_dirty, old_branch, base_layer = original_layers
+    assert old_dirty.layer.kind == LayerKind.DIRTY
+    old_branch.layer.paths.target_sqlite.unlink()
+
+    master_layer = _upsert_ready_layer(
+        store=store,
+        state_dir=state_dir,
+        repo_id=base_layer.layer.repo_id,
+        layer_id="manual-master-layer",
+        kind=LayerKind.BRANCH,
+        ref_name="master",
+        commit=master_head,
+        base_commit=base_commit,
+        base_layer_id=base_layer.layer.id,
+        config_hash=base_layer.layer.config_hash or "",
+        affected_paths=["master.py"],
+    )
+
+    refreshed_project = _fake_layered_project(
+        repo=repo,
+        base_ref=base_commit,
+        state_dir=state_dir,
+        store=store,
+    )
+    try:
+        refreshed_layers = await refreshed_project.ensure_layer_results()
+    finally:
+        refreshed_project.close()
+
+    new_dirty, new_branch, reused_master, _reused_base = refreshed_layers
+    assert new_dirty.layer.kind == LayerKind.DIRTY
+    assert new_dirty.layer.id != old_dirty.layer.id
+    assert new_dirty.layer.base_layer_id == new_branch.layer.id
+    assert new_branch.layer.base_layer_id == master_layer.id
+    assert reused_master.layer.id == master_layer.id
+
+
+@pytest.mark.asyncio
+async def test_layered_project_prefers_smaller_layer_at_same_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cocoindex_code.layered_project import build_index_config_hash
+    from cocoindex_code.version_control import resolve_worktree
+
+    _install_fake_layer_runtime(monkeypatch)
+    monkeypatch.setenv("COCOINDEX_CODE_STATE_DIR", str(tmp_path / "state"))
+    repo = _init_repo(tmp_path / "repo")
+    base_commit = _git(repo, "rev-parse", "HEAD")
+    (repo / "main.py").write_text("def changed() -> str:\n    return 'changed'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "head")
+    head_commit = _git(repo, "rev-parse", "HEAD")
+
+    state_dir = daemon_state_dir()
+    store = LayerStore(state_dir / "daemon.db")
+    config_hash = build_index_config_hash(repo, indexing_params={}, query_params={})
+    worktree = resolve_worktree(repo, base_ref=base_commit, index_config_hash=config_hash)
+    base_layer = _upsert_ready_layer(
+        store=store,
+        state_dir=state_dir,
+        repo_id=worktree.repository.id,
+        layer_id="manual-base-layer",
+        kind=LayerKind.BASE,
+        ref_name="base",
+        commit=base_commit,
+        base_commit=None,
+        base_layer_id=None,
+        config_hash=config_hash,
+        affected_paths=[],
+    )
+    _upsert_ready_layer(
+        store=store,
+        state_dir=state_dir,
+        repo_id=worktree.repository.id,
+        layer_id="large-layer-at-head",
+        kind=LayerKind.BRANCH,
+        ref_name="feature",
+        commit=head_commit,
+        base_commit=base_commit,
+        base_layer_id=base_layer.id,
+        config_hash=config_hash,
+        affected_paths=[f"file_{i}.py" for i in range(20)],
+    )
+    small_layer = _upsert_ready_layer(
+        store=store,
+        state_dir=state_dir,
+        repo_id=worktree.repository.id,
+        layer_id="small-layer-at-head",
+        kind=LayerKind.BRANCH,
+        ref_name="feature",
+        commit=head_commit,
+        base_commit=base_commit,
+        base_layer_id=base_layer.id,
+        config_hash=config_hash,
+        affected_paths=["main.py"],
+    )
+
+    project = _fake_layered_project(
+        repo=repo,
+        base_ref=base_commit,
+        state_dir=state_dir,
+        store=store,
+    )
+    try:
+        layers = await project.ensure_layer_results()
+    finally:
+        project.close()
+
+    assert layers[0].layer.id == small_layer.id
+    assert layers[0].built is False
