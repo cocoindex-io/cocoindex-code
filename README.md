@@ -262,8 +262,10 @@ ccc search "authentication logic"
 ```
 
 `ccc init` records the current Git root as authorized. Later commands refuse to
-run outside an authorized repo. Sidecars mount only the authorized repo at
-`/workspace` and talk to the central daemon over a private Docker network.
+run outside an authorized repo. Sidecars mount only the authorized repo, at
+`/workspace` and at the same absolute path it has on the host so libgit2 can
+resolve linked-worktree metadata. They talk to the central daemon over a private
+Docker network.
 
 ### Trusted-workspace compose: `docker compose up -d`
 

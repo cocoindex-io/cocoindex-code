@@ -168,6 +168,7 @@ run_sidecar() {
 		run --rm -i
 		--network "$network"
 		--volume "$root:$workspace_dir"
+		--volume "$root:$root"
 		--volume "$host_settings_dir:$container_settings_dir"
 		--volume "$state_volume:$container_state_root"
 		--volume "$runtime_volume:$container_runtime_dir"

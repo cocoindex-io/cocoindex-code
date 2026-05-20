@@ -84,6 +84,8 @@ def test_docker_sidecar_docs_describe_repo_scoped_architecture() -> None:
     assert "one central daemon container with no source-code mount" in content
     assert "short-lived sidecar containers" in content
     assert "Do not mount `$HOME` or a broad source tree" in content
+    assert "same absolute path it has on the host" in content
+    assert "linked-worktree metadata" in content
     assert "COCOINDEX_CODE_DAEMON_TCP" in content
     assert "COCOINDEX_CODE_SIDECAR=1" in content
 
@@ -108,6 +110,7 @@ def test_wrapper_mounts_only_authorized_repo_sidecar() -> None:
 
     assert 'record_authorization "$root" "$common_dir"' in content
     assert '--volume "$root:$workspace_dir"' in content
+    assert '--volume "$root:$root"' in content
     assert '--volume "$host_settings_dir:$container_settings_dir"' in content
     assert '--volume "$state_volume:$container_state_root"' in content
     assert '--volume "$runtime_volume:$container_runtime_dir"' in content

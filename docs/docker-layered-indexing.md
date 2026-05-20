@@ -7,7 +7,9 @@ The intended Docker architecture is:
 - one central daemon container with no source-code mount
 - Docker named volumes for daemon state, runtime files, config, caches, and layer databases
 - short-lived sidecar containers for repo work
-- each sidecar mounts exactly one authorized Git checkout at `/workspace`
+- each sidecar mounts exactly one authorized Git checkout at `/workspace` and at
+  the same absolute path it has on the host, so libgit2 can resolve
+  linked-worktree metadata without exposing a broader source tree
 - sidecars talk to the central daemon over a private Docker network
 
 Do not mount `$HOME` or a broad source tree just to make indexing work.
@@ -78,6 +80,7 @@ Sidecar container:
 ```text
 mounts:
   /authorized/repo             -> /workspace
+  /authorized/repo             -> /authorized/repo
   $HOME/.cocoindex_code        -> /home/coco/.cocoindex_code
   cocoindex-code-local-state   -> /var/cocoindex
   cocoindex-code-local-runtime -> /var/run/cocoindex_code
@@ -88,6 +91,10 @@ connects:
 source access:
   only the authorized repo
 ```
+
+The second repo bind mount is the same authorized checkout, not a parent
+directory. It exists so linked-worktree `.git` metadata that contains absolute
+host paths still resolves inside the sidecar.
 
 Indexing runs in the sidecar because it is the process with Git/source access. The resulting layer metadata and layer databases are written to shared daemon state. Search sends the resolved layer IDs to the central daemon, and the daemon serves the query from shared layer databases without mounting the repository.
 
