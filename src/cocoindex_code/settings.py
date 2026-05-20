@@ -322,13 +322,17 @@ def project_settings_path(project_root: Path) -> Path:
 
 
 def find_project_root(start: Path) -> Path | None:
-    """Walk up from *start* looking for ``.cocoindex_code/settings.yml``.
+    """Walk up from *start* looking for a project root.
 
-    Returns the directory containing it, or ``None``.
+    A repo-local ``.cocoindex_code/settings.yml`` is a project marker when it
+    exists. Otherwise a Git root is enough; project settings then fall back to
+    defaults instead of forcing a repo-local config file.
     """
     current = start.resolve()
     while True:
         if (current / _SETTINGS_DIR_NAME / _SETTINGS_FILE_NAME).is_file():
+            return current
+        if (current / ".git").exists():
             return current
         parent = current.parent
         if parent == current:
@@ -593,11 +597,11 @@ def save_initial_user_settings(
 def load_project_settings(project_root: Path) -> ProjectSettings:
     """Read ``$PROJECT_ROOT/.cocoindex_code/settings.yml``.
 
-    Raises ``FileNotFoundError`` if the file does not exist.
+    Falls back to default settings if no repo-local settings file exists.
     """
     path = project_settings_path(project_root)
     if not path.is_file():
-        raise FileNotFoundError(f"Project settings not found: {path}")
+        return default_project_settings()
     try:
         with open(path) as f:
             data = _yaml.safe_load(f)

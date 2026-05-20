@@ -1,14 +1,24 @@
 IMAGE ?= cocoindex-code:local-layered
 COMPOSE ?= docker compose -f docker-compose.yml
-IMAGE ?= cocoindex-code:local-layered
+CCC_VARIANT ?= slim
 
-.PHONY: build up restart ps logs down reset install-ccc-wrapper
+.PHONY: build build-local build-pypi up restart ps logs down reset install-ccc-wrapper
 
-build:
+build: build-local
+
+build-local:
 	docker build \
 		-t "$(IMAGE)" \
 		-f ../docker/Dockerfile \
+		--build-arg CCC_VARIANT="$(CCC_VARIANT)" \
 		--build-arg CCC_INSTALL_SPEC=/ccc-src \
+		..
+
+build-pypi:
+	docker build \
+		-t "$(IMAGE)" \
+		-f ../docker/Dockerfile \
+		--build-arg CCC_VARIANT="$(CCC_VARIANT)" \
 		..
 
 ps:

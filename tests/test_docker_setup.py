@@ -37,25 +37,24 @@ def test_docker_entrypoint_prepares_state_db_cache_and_runtime_dirs() -> None:
     assert 'exec gosu coco "$@"' in content
 
 
-def test_docker_compose_exposes_local_use_knobs_and_healthcheck() -> None:
+def test_docker_compose_uses_sidecar_daemon_model() -> None:
     content = (REPO_ROOT / "docker" / "docker-compose.yml").read_text()
 
-    assert "${COCOINDEX_CODE_IMAGE:-cocoindex/cocoindex-code:latest}" in content
-    assert "${COCOINDEX_CODE_CONTAINER_NAME:-cocoindex-code}" in content
-    assert "${COCOINDEX_HOST_WORKSPACE:-${HOME}}:/workspace" in content
-    assert "COCOINDEX_CODE_STATE_DIR: ${COCOINDEX_CODE_STATE_DIR:-/var/cocoindex/state}" in content
+    assert "${COCOINDEX_CODE_IMAGE:-cocoindex-code:local-layered}" in content
+    assert "${COCOINDEX_CODE_DAEMON_CONTAINER:-cocoindex-code-local-daemon}" in content
+    assert ":/workspace" not in content
+    assert "ports:" not in content
     assert (
-        "COCOINDEX_CODE_RUNTIME_DIR: ${COCOINDEX_CODE_RUNTIME_DIR:-/var/run/cocoindex_code}"
-        in content
-    )
-    assert (
-        "COCOINDEX_CODE_DB_PATH_MAPPING: "
-        "${COCOINDEX_CODE_DB_PATH_MAPPING:-/workspace=/var/cocoindex/db}"
+        "${COCOINDEX_CODE_HOST_SETTINGS_DIR:-${HOME}/.cocoindex_code}"
+        ":/home/coco/.cocoindex_code"
     ) in content
-    assert (
-        "COCOINDEX_CODE_HOST_PATH_MAPPING: "
-        "${COCOINDEX_CODE_HOST_PATH_MAPPING:-/workspace=${COCOINDEX_HOST_WORKSPACE:-${HOME}}}"
-    ) in content
+    assert "COCOINDEX_CODE_DAEMON_TCP: 0.0.0.0:8765" in content
+    assert "COCOINDEX_CODE_DIR: /home/coco/.cocoindex_code" in content
+    assert "COCOINDEX_CODE_STATE_DIR: /var/cocoindex/state" in content
+    assert "COCOINDEX_CODE_RUNTIME_DIR: /var/run/cocoindex_code" in content
+    assert "COCOINDEX_CODE_DB_PATH_MAPPING: /workspace=/var/cocoindex/db" in content
+    assert "cocoindex-code-local-state:/var/cocoindex" in content
+    assert "cocoindex-code-local-runtime:/var/run/cocoindex_code" in content
     assert "ccc daemon status" in content
     assert "daemon.sock" in content
 
@@ -92,6 +91,11 @@ def test_sample_compose_uses_daemon_without_source_mount() -> None:
     assert ":/workspace" not in content
     assert "ports:" not in content
     assert "COCOINDEX_CODE_DAEMON_TCP: 0.0.0.0:8765" in content
+    assert (
+        "${COCOINDEX_CODE_HOST_SETTINGS_DIR:-${HOME}/.cocoindex_code}"
+        ":/home/coco/.cocoindex_code"
+    ) in content
+    assert "COCOINDEX_CODE_DIR: /home/coco/.cocoindex_code" in content
     assert "cocoindex-code-local-state:/var/cocoindex" in content
     assert "cocoindex-code-local-runtime:/var/run/cocoindex_code" in content
 
@@ -100,12 +104,40 @@ def test_sample_wrapper_mounts_only_authorized_repo_sidecar() -> None:
     content = (REPO_ROOT / "sample" / "bin" / "ccc").read_text()
 
     assert 'record_authorization "$root" "$common_dir"' in content
-    assert '--volume "$root:/workspace"' in content
+    assert '--volume "$root:$workspace_dir"' in content
+    assert '--volume "$host_settings_dir:$container_settings_dir"' in content
+    assert '--volume "$state_volume:$container_state_root"' in content
+    assert '--volume "$runtime_volume:$container_runtime_dir"' in content
     assert '--network "$network"' in content
     assert "COCOINDEX_CODE_SIDECAR=1" in content
     assert "COCOINDEX_CODE_DAEMON_SUPERVISED=1" in content
-    assert 'COCOINDEX_CODE_DAEMON_TCP=$central_container:8765' in content
+    assert 'COCOINDEX_CODE_DAEMON_TCP=$daemon_connect_addr' in content
+    assert "COCOINDEX_CODE_DIR=$container_settings_dir" in content
+    assert "COCOINDEX_CODE_STATE_DIR=$container_state_dir" in content
+    assert "COCOINDEX_CODE_RUNTIME_DIR=$container_runtime_dir" in content
+    assert "COCOINDEX_CODE_DB_PATH_MAPPING=$container_db_path_mapping" in content
+    assert 'COCOINDEX_CODE_HOST_PATH_MAPPING=$workspace_dir=$root' in content
     assert 'exec docker "${run_args[@]}"' in content
+
+
+def test_sample_wrapper_defaults_settings_dir_to_host_home() -> None:
+    content = (REPO_ROOT / "sample" / "bin" / "ccc").read_text()
+
+    assert (
+        'host_settings_dir="${COCOINDEX_CODE_HOST_SETTINGS_DIR:-$HOME/.cocoindex_code}"'
+        in content
+    )
+    assert 'workspace_dir="${COCOINDEX_CODE_WORKSPACE_DIR:-/workspace}"' in content
+    assert (
+        'container_settings_dir="${COCOINDEX_CODE_CONTAINER_SETTINGS_DIR:-'
+        '/home/coco/.cocoindex_code}"' in content
+    )
+    assert 'daemon_port="${COCOINDEX_CODE_DAEMON_PORT:-8765}"' in content
+    assert (
+        'daemon_connect_addr="${COCOINDEX_CODE_DAEMON_CONNECT:-'
+        '$central_container:$daemon_port}"' in content
+    )
+    assert 'mkdir -p "$host_settings_dir"' in content
 
 
 def test_sample_wrapper_authorization_handles_nested_repos_and_worktrees() -> None:
@@ -136,6 +168,11 @@ def test_sample_makefile_has_default_image_and_reset_target() -> None:
     content = (REPO_ROOT / "sample" / "Makefile").read_text()
 
     assert "IMAGE ?= cocoindex-code:local-layered" in content
+    assert "CCC_VARIANT ?= slim" in content
+    assert "build: build-local" in content
+    assert "build-local:" in content
+    assert "--build-arg CCC_INSTALL_SPEC=/ccc-src" in content
+    assert "build-pypi:" in content
     assert "reset: down" in content
     assert "docker volume rm" in content
 
@@ -158,4 +195,4 @@ def test_docker_compose_config_is_valid(tmp_path: Path) -> None:
     if result.returncode != 0 and "docker daemon" in result.stderr.lower():
         pytest.skip("Docker daemon not available")
     assert result.returncode == 0, result.stderr
-    assert "cocoindex-code" in result.stdout
+    assert "cocoindex-code-daemon" in result.stdout

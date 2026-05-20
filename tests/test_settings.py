@@ -144,9 +144,11 @@ def test_save_default_settings_writes_explicit_embedding() -> None:
     assert "Snowflake/snowflake-arctic-embed-xs" in content
 
 
-def test_load_project_settings_missing_file_raises(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError):
-        load_project_settings(tmp_path)
+def test_load_project_settings_missing_file_returns_defaults(tmp_path: Path) -> None:
+    loaded = load_project_settings(tmp_path)
+    defaults = default_project_settings()
+    assert loaded.include_patterns == defaults.include_patterns
+    assert loaded.exclude_patterns == defaults.exclude_patterns
 
 
 def test_find_project_root_from_subdirectory(tmp_path: Path) -> None:
@@ -169,6 +171,14 @@ def test_find_project_root_returns_none_when_not_initialized(tmp_path: Path) -> 
     standalone = tmp_path / "standalone"
     standalone.mkdir()
     assert find_project_root(standalone) is None
+
+
+def test_find_project_root_from_git_root_without_local_settings(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    (project / ".git").mkdir(parents=True)
+    subdir = project / "src"
+    subdir.mkdir()
+    assert find_project_root(subdir) == project
 
 
 def test_find_parent_with_marker_finds_git(tmp_path: Path) -> None:

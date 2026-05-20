@@ -9,11 +9,12 @@ services:
     image: ${COCOINDEX_CODE_IMAGE:-cocoindex-code:local-layered}
     container_name: ${COCOINDEX_CODE_DAEMON_CONTAINER:-cocoindex-code-local-daemon}
     volumes:
+      - ${COCOINDEX_CODE_HOST_SETTINGS_DIR:-${HOME}/.cocoindex_code}:/home/coco/.cocoindex_code
       - cocoindex-code-local-state:/var/cocoindex
       - cocoindex-code-local-runtime:/var/run/cocoindex_code
     environment:
       COCOINDEX_CODE_DAEMON_TCP: 0.0.0.0:8765
-      COCOINDEX_CODE_DIR: /var/cocoindex/config
+      COCOINDEX_CODE_DIR: /home/coco/.cocoindex_code
       COCOINDEX_CODE_STATE_DIR: /var/cocoindex/state
       COCOINDEX_CODE_RUNTIME_DIR: /var/run/cocoindex_code
       COCOINDEX_CODE_DB_PATH_MAPPING: /workspace=/var/cocoindex/db

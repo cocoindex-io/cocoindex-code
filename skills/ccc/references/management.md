@@ -29,7 +29,7 @@ ccc init
 
 **First run (global settings don't exist yet)** — `ccc init` prompts interactively for the embedding provider (sentence-transformers / litellm) and model, then runs a one-off test embed via the daemon to confirm the model works. Accept the defaults for the sentence-transformers path, or pick litellm and enter a model identifier.
 
-**Subsequent runs** (global settings already exist) — prompts are skipped; only project settings and `.gitignore` are set up.
+**Subsequent runs** (global settings already exist) — prompts are skipped; optional Git overlay metadata is registered when `--base` is provided.
 
 To skip the interactive prompts on the first run (e.g. in a script or container), pass `--litellm-model MODEL`:
 
@@ -41,9 +41,9 @@ This is also the only way to pick a LiteLLM model when stdin isn't a TTY and you
 
 `ccc init` creates:
 - `~/.cocoindex_code/global_settings.yml` (user-level, embedding config + env vars).
-- `.cocoindex_code/settings.yml` (project-level, include/exclude patterns).
+- `.cocoindex_code/settings.yml` (optional project-level include/exclude overrides; create with `ccc init --project-settings`).
 
-If `.git` exists in the directory, `.cocoindex_code/` is automatically added to `.gitignore`.
+`ccc init` does not edit `.gitignore` by default. Pass `--gitignore` if you want it to add `/.cocoindex_code/` for you.
 
 Use `-f` to skip the confirmation prompt if `ccc init` detects a potential parent project root.
 

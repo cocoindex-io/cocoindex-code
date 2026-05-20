@@ -157,14 +157,16 @@ Returns matching code chunks with file path, language, code content, line number
 You can also use the CLI directly — useful for manual control, running indexing after changing settings, checking status, or searching outside an agent.
 
 ```bash
-ccc init                                # initialize project (creates settings)
+ccc init                                # initialize daemon/global settings
 ccc index                               # build the index
 ccc search "authentication logic"       # search!
 ```
 
 The background daemon starts automatically on first use.
 
-> **Tip:** `ccc index` auto-initializes if you haven't run `ccc init` yet, so you can skip straight to indexing.
+> **Tip:** once global daemon settings exist, Git repositories can be indexed
+> without repo-local `.cocoindex_code/settings.yml`; built-in project defaults
+> are used unless you create overrides with `ccc init --project-settings`.
 
 For Git repositories, you can configure layered indexing once from the root clone:
 
@@ -180,7 +182,7 @@ Linked worktrees reuse the same daemon-owned base layer and only index branch an
 
 | Command | Description |
 |---------|-------------|
-| `ccc init` | Initialize a project — creates settings files, adds `.cocoindex_code/` to `.gitignore` |
+| `ccc init` | Initialize daemon/global settings and optional Git overlay metadata |
 | `ccc index` | Build or update the index (auto-inits if needed). Shows streaming progress. |
 | `ccc search <query>` | Semantic search across the codebase |
 | `ccc status` | Show index stats (chunk count, file count, language breakdown) |
@@ -547,7 +549,9 @@ docker build -t cocoindex-code:local -f docker/Dockerfile .
 
 ## Configuration
 
-Configuration lives in two YAML files, both created automatically by `ccc init`.
+Configuration is daemon-first. `ccc init` creates global daemon settings when
+needed and does not write repo-local files by default. Repo-local settings are
+optional overrides.
 
 ### User Settings (`~/.cocoindex_code/global_settings.yml`)
 
@@ -602,7 +606,9 @@ OpenAI embeddings (`text-embedding-3-*`, `text-embedding-ada-002`) are intention
 
 ### Project Settings (`<project>/.cocoindex_code/settings.yml`)
 
-Per-project. Controls which files to index.
+Optional per-project overrides. Controls which files to index when present.
+If this file does not exist, `ccc` uses the built-in defaults without creating
+anything in the repository.
 
 ```yaml
 include_patterns:
@@ -629,7 +635,14 @@ chunkers:
     module: example_toml_chunker:toml_chunker
 ```
 
-> `.cocoindex_code/` is automatically added to `.gitignore` during init.
+Create repo-local overrides explicitly:
+
+```bash
+ccc init --project-settings
+```
+
+`ccc init` also does not edit `.gitignore` by default. Use
+`ccc init --gitignore` if you want it to add `/.cocoindex_code/` for you.
 
 Use `chunkers` when you want to control how a file type is split into chunks before indexing.
 

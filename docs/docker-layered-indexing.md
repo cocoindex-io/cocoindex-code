@@ -54,6 +54,7 @@ Central daemon container:
 
 ```text
 mounts:
+  $HOME/.cocoindex_code          -> /home/coco/.cocoindex_code
   cocoindex-code-local-state   -> /var/cocoindex
   cocoindex-code-local-runtime -> /var/run/cocoindex_code
 network:
@@ -69,6 +70,7 @@ Sidecar container:
 ```text
 mounts:
   /authorized/repo             -> /workspace
+  $HOME/.cocoindex_code        -> /home/coco/.cocoindex_code
   cocoindex-code-local-state   -> /var/cocoindex
   cocoindex-code-local-runtime -> /var/run/cocoindex_code
 network:
@@ -96,6 +98,12 @@ Docker named volumes:
 | `cocoindex-code-local-state` | `/var/cocoindex` | Global settings, daemon DB, layer metadata, layer DBs, caches |
 | `cocoindex-code-local-runtime` | `/var/run/cocoindex_code` | PID/log runtime files |
 
+Host user settings:
+
+| Host Path | Mounted As | Purpose |
+|---|---|---|
+| `${COCOINDEX_CODE_HOST_SETTINGS_DIR:-$HOME/.cocoindex_code}` | `/home/coco/.cocoindex_code` | Global `ccc` settings shared with the Docker daemon and sidecars |
+
 Reset sample Docker state:
 
 ```bash
@@ -112,6 +120,7 @@ make reset
 | `COCOINDEX_CODE_DOCKER_NETWORK` | Private Docker network. Default: `cocoindex-code-local`. |
 | `COCOINDEX_CODE_STATE_VOLUME` | Shared daemon state named volume. Default: `cocoindex-code-local-state`. |
 | `COCOINDEX_CODE_RUNTIME_VOLUME` | Shared runtime named volume. Default: `cocoindex-code-local-runtime`. |
+| `COCOINDEX_CODE_HOST_SETTINGS_DIR` | Host user settings directory mounted into daemon and sidecars. Default: `$HOME/.cocoindex_code`. |
 | `COCOINDEX_CODE_SAMPLE_DATA_DIR` | Host-side allowlist directory. Default: `sample/data`. |
 | `PUID`, `PGID` | Linux-only ownership mapping. |
 
@@ -121,7 +130,7 @@ Internal sidecar/daemon variables:
 |---|---|
 | `COCOINDEX_CODE_SIDECAR=1` | Tells CLI to run repo-mounted indexing locally in the sidecar. |
 | `COCOINDEX_CODE_DAEMON_TCP` | TCP daemon address. Central listens on `0.0.0.0:8765`; sidecars connect to the daemon container name. |
-| `COCOINDEX_CODE_DIR=/var/cocoindex/config` | Shared global settings location. |
+| `COCOINDEX_CODE_DIR=/home/coco/.cocoindex_code` | Container path for the host-mounted global settings directory. |
 | `COCOINDEX_CODE_STATE_DIR=/var/cocoindex/state` | Durable daemon layer state. |
 | `COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/var/cocoindex/db` | Keeps layer/project databases on Docker native storage. |
 

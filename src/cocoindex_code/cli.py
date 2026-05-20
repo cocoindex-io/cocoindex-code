@@ -587,6 +587,16 @@ def init(
     ),
     force: bool = _typer.Option(False, "-f", "--force", help="Skip parent directory warning"),
     base_ref: str | None = _typer.Option(None, "--base", help="Git base ref for overlays"),
+    project_settings: bool = _typer.Option(
+        False,
+        "--project-settings",
+        help="Create repo-local .cocoindex_code/settings.yml overrides.",
+    ),
+    gitignore: bool = _typer.Option(
+        False,
+        "--gitignore",
+        help="Add /.cocoindex_code/ to .gitignore. Not done by default.",
+    ),
 ) -> None:
     """Initialize a project for cocoindex-code."""
     cwd = Path.cwd().resolve()
@@ -610,6 +620,8 @@ def init(
         _typer.echo("Project already initialized.")
         if base_ref is not None:
             _register_overlay_policy(cwd, base_ref)
+        if gitignore:
+            add_to_gitignore(cwd)
         return
 
     # Check parent directories for markers
@@ -624,15 +636,17 @@ def init(
             )
             raise _typer.Exit(code=1)
 
-    # Create project settings
-    save_project_settings(cwd, default_project_settings())
-    _typer.echo(f"Created project settings: {format_path_for_display(settings_file)}")
+    if project_settings:
+        save_project_settings(cwd, default_project_settings())
+        _typer.echo(f"Created project settings: {format_path_for_display(settings_file)}")
+    else:
+        _typer.echo("Using default project settings. Pass --project-settings to create overrides.")
 
     if base_ref is not None:
         _register_overlay_policy(cwd, base_ref)
 
-    # Add to .gitignore
-    add_to_gitignore(cwd)
+    if gitignore:
+        add_to_gitignore(cwd)
 
     _typer.echo("You can edit the settings files to customize indexing behavior.")
     _typer.echo("Run `ccc index` to build the index.")

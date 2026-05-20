@@ -7,17 +7,22 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sample_dir="$(cd "$script_dir/.." && pwd)"
 data_dir="${COCOINDEX_CODE_SAMPLE_DATA_DIR:-$sample_dir/data}"
 registry="$data_dir/authorized-repos.tsv"
-state_dir="$data_dir/state"
-runtime_dir="$data_dir/runtime"
+host_settings_dir="${COCOINDEX_CODE_HOST_SETTINGS_DIR:-$HOME/.cocoindex_code}"
 state_volume="${COCOINDEX_CODE_STATE_VOLUME:-cocoindex-code-local-state}"
 runtime_volume="${COCOINDEX_CODE_RUNTIME_VOLUME:-cocoindex-code-local-runtime}"
 network="${COCOINDEX_CODE_DOCKER_NETWORK:-cocoindex-code-local}"
+workspace_dir="${COCOINDEX_CODE_WORKSPACE_DIR:-/workspace}"
+container_settings_dir="${COCOINDEX_CODE_CONTAINER_SETTINGS_DIR:-/home/coco/.cocoindex_code}"
+container_state_root="${COCOINDEX_CODE_CONTAINER_STATE_ROOT:-/var/cocoindex}"
+container_state_dir="${COCOINDEX_CODE_STATE_DIR:-$container_state_root/state}"
+container_runtime_dir="${COCOINDEX_CODE_RUNTIME_DIR:-/var/run/cocoindex_code}"
+container_db_path_mapping="${COCOINDEX_CODE_DB_PATH_MAPPING:-$workspace_dir=$container_state_root/db}"
+daemon_port="${COCOINDEX_CODE_DAEMON_PORT:-8765}"
+daemon_listen_addr="${COCOINDEX_CODE_DAEMON_LISTEN:-0.0.0.0:$daemon_port}"
+daemon_connect_addr="${COCOINDEX_CODE_DAEMON_CONNECT:-$central_container:$daemon_port}"
 
 mkdir -p "$data_dir"
-
-sha_12() {
-	printf '%s' "$1" | shasum -a 256 | awk '{print substr($1, 1, 12)}'
-}
+mkdir -p "$host_settings_dir"
 
 canonical_path() {
 	python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "$1"
@@ -96,13 +101,14 @@ ensure_central_daemon() {
 		run -d
 		--name "$central_container"
 		--network "$network"
-		--volume "$state_volume:/var/cocoindex"
-		--volume "$runtime_volume:/var/run/cocoindex_code"
-		-e COCOINDEX_CODE_DAEMON_TCP=0.0.0.0:8765
-		-e COCOINDEX_CODE_DIR=/var/cocoindex/config
-		-e COCOINDEX_CODE_STATE_DIR=/var/cocoindex/state
-		-e COCOINDEX_CODE_RUNTIME_DIR=/var/run/cocoindex_code
-		-e COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/var/cocoindex/db
+		--volume "$host_settings_dir:$container_settings_dir"
+		--volume "$state_volume:$container_state_root"
+		--volume "$runtime_volume:$container_runtime_dir"
+		-e "COCOINDEX_CODE_DAEMON_TCP=$daemon_listen_addr"
+		-e "COCOINDEX_CODE_DIR=$container_settings_dir"
+		-e "COCOINDEX_CODE_STATE_DIR=$container_state_dir"
+		-e "COCOINDEX_CODE_RUNTIME_DIR=$container_runtime_dir"
+		-e "COCOINDEX_CODE_DB_PATH_MAPPING=$container_db_path_mapping"
 		-e COCOINDEX_CODE_DAEMON_SUPERVISED=1
 	)
 	if [[ -n "${PUID:-}" ]]; then
@@ -124,17 +130,18 @@ run_sidecar() {
 	local run_args=(
 		run --rm -i
 		--network "$network"
-		--volume "$root:/workspace"
-		--volume "$state_volume:/var/cocoindex"
-		--volume "$runtime_volume:/var/run/cocoindex_code"
-		-e "COCOINDEX_CODE_DAEMON_TCP=$central_container:8765"
+		--volume "$root:$workspace_dir"
+		--volume "$host_settings_dir:$container_settings_dir"
+		--volume "$state_volume:$container_state_root"
+		--volume "$runtime_volume:$container_runtime_dir"
+		-e "COCOINDEX_CODE_DAEMON_TCP=$daemon_connect_addr"
 		-e COCOINDEX_CODE_SIDECAR=1
 		-e COCOINDEX_CODE_DAEMON_SUPERVISED=1
-		-e COCOINDEX_CODE_DIR=/var/cocoindex/config
-		-e COCOINDEX_CODE_STATE_DIR=/var/cocoindex/state
-		-e COCOINDEX_CODE_RUNTIME_DIR=/var/run/cocoindex_code
-		-e COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/var/cocoindex/db
-		-e "COCOINDEX_CODE_HOST_PATH_MAPPING=/workspace=$root"
+		-e "COCOINDEX_CODE_DIR=$container_settings_dir"
+		-e "COCOINDEX_CODE_STATE_DIR=$container_state_dir"
+		-e "COCOINDEX_CODE_RUNTIME_DIR=$container_runtime_dir"
+		-e "COCOINDEX_CODE_DB_PATH_MAPPING=$container_db_path_mapping"
+		-e "COCOINDEX_CODE_HOST_PATH_MAPPING=$workspace_dir=$root"
 		-e "COCOINDEX_CODE_HOST_CWD=$host_cwd"
 	)
 

@@ -1,6 +1,6 @@
 # ccc Settings
 
-Configuration lives in two YAML files, both created automatically by `ccc init`.
+Configuration is daemon-first. `ccc init` creates global daemon settings when needed. Repo-local settings are optional overrides created with `ccc init --project-settings`.
 
 ## User-Level Settings (`~/.cocoindex_code/global_settings.yml`)
 
@@ -90,7 +90,7 @@ ccc reset && ccc index
 
 ## Project-Level Settings (`<project>/.cocoindex_code/settings.yml`)
 
-Per-project. Controls which files to index. Created by `ccc init` and automatically added to `.gitignore`.
+Optional per-project overrides. Controls which files to index when present. `ccc init` does not create this file by default; use `ccc init --project-settings` to create it. Use `ccc init --gitignore` if you want the CLI to add `/.cocoindex_code/` to `.gitignore`.
 
 ```yaml
 include_patterns:

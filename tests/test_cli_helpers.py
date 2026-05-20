@@ -33,6 +33,23 @@ def test_require_project_root_success(tmp_path: Path, monkeypatch: pytest.Monkey
     assert require_project_root() == project
 
 
+def test_require_project_root_success_for_git_repo_without_local_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    (project / ".git").mkdir(parents=True)
+    subdir = project / "src"
+    subdir.mkdir()
+    monkeypatch.chdir(subdir)
+    settings_dir = tmp_path / "ccc_home"
+    settings_dir.mkdir()
+    (settings_dir / "global_settings.yml").write_text(
+        "embedding:\n  model: test\n  provider: litellm\n"
+    )
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(settings_dir))
+    assert require_project_root() == project
+
+
 def test_require_project_root_exits_when_not_initialized(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

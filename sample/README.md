@@ -17,6 +17,14 @@ cd sample
 make build
 ```
 
+`make build` is the local-source build and is equivalent to `make build-local`.
+Use `make build-pypi` to build the image using the package install path instead.
+Set `CCC_VARIANT=full` if you want the full image with local embedding support:
+
+```bash
+CCC_VARIANT=full make build-local
+```
+
 Initialize and authorize one repo:
 
 ```bash
@@ -63,6 +71,28 @@ Shared Docker state uses named volumes:
 
 - `cocoindex-code-local-state`: central daemon layer/index/config state mounted at `/var/cocoindex`
 - `cocoindex-code-local-runtime`: daemon PID/log runtime files mounted at `/var/run/cocoindex_code`
+
+User settings are shared from your host account:
+
+- `${COCOINDEX_CODE_HOST_SETTINGS_DIR:-$HOME/.cocoindex_code}` is mounted into both the daemon and sidecars
+- inside containers it is read as `COCOINDEX_CODE_DIR=/home/coco/.cocoindex_code`
+- `ccc init` therefore writes global settings to your normal host path, for example `/Users/you/.cocoindex_code/global_settings.yml`
+
+Useful overrides:
+
+| Variable | Default |
+|---|---|
+| `COCOINDEX_CODE_IMAGE` | `cocoindex-code:local-layered` |
+| `COCOINDEX_CODE_DAEMON_CONTAINER` | `cocoindex-code-local-daemon` |
+| `COCOINDEX_CODE_DOCKER_NETWORK` | `cocoindex-code-local` |
+| `COCOINDEX_CODE_HOST_SETTINGS_DIR` | `$HOME/.cocoindex_code` |
+| `COCOINDEX_CODE_WORKSPACE_DIR` | `/workspace` |
+| `COCOINDEX_CODE_CONTAINER_SETTINGS_DIR` | `/home/coco/.cocoindex_code` |
+| `COCOINDEX_CODE_CONTAINER_STATE_ROOT` | `/var/cocoindex` |
+| `COCOINDEX_CODE_RUNTIME_DIR` | `/var/run/cocoindex_code` |
+| `COCOINDEX_CODE_DAEMON_PORT` | `8765` |
+| `COCOINDEX_CODE_DAEMON_LISTEN` | `0.0.0.0:$COCOINDEX_CODE_DAEMON_PORT` |
+| `COCOINDEX_CODE_DAEMON_CONNECT` | `$COCOINDEX_CODE_DAEMON_CONTAINER:$COCOINDEX_CODE_DAEMON_PORT` |
 
 Sidecars talk to the central daemon over the private Docker network `cocoindex-code-local`. The daemon listens on `COCOINDEX_CODE_DAEMON_TCP=0.0.0.0:8765` inside that network; no host port is published.
 

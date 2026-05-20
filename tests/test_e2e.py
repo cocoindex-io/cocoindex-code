@@ -152,13 +152,15 @@ def test_session_happy_path(e2e_project: Path) -> None:
     # Init
     result = runner.invoke(app, ["init"], catch_exceptions=False)
     assert result.exit_code == 0, result.output
-    assert (e2e_project / ".cocoindex_code" / "settings.yml").exists()
-    assert "Created project settings" in result.output or "settings" in result.output
+    assert not (e2e_project / ".cocoindex_code" / "settings.yml").exists()
+    assert "Using default project settings" in result.output
+    assert not (e2e_project / ".gitignore").exists()
 
-    # Init again — already initialized
+    # Init again remains non-mutating when repo-local settings are not requested.
     result = runner.invoke(app, ["init"], catch_exceptions=False)
     assert result.exit_code == 0
-    assert "already initialized" in result.output
+    assert "Using default project settings" in result.output
+    assert not (e2e_project / ".cocoindex_code" / "settings.yml").exists()
 
     # Index
     result = runner.invoke(app, ["index"], catch_exceptions=False)
@@ -237,8 +239,8 @@ def test_session_reset_databases(e2e_project: Path) -> None:
     assert result.exit_code == 0
     assert "Databases deleted" in result.output
 
-    # Settings should still exist
-    assert (e2e_project / ".cocoindex_code" / "settings.yml").exists()
+    # Repo-local settings were not created by default.
+    assert not (e2e_project / ".cocoindex_code" / "settings.yml").exists()
 
     # DB files should be gone
     assert not (e2e_project / ".cocoindex_code" / "cocoindex.db").exists()
@@ -262,10 +264,10 @@ def test_session_reset_databases(e2e_project: Path) -> None:
 
 def test_session_reset_all(e2e_project: Path) -> None:
     """Init → index → reset --all → verify full cleanup → search errors."""
-    runner.invoke(app, ["init"], catch_exceptions=False)
+    runner.invoke(app, ["init", "--gitignore"], catch_exceptions=False)
     runner.invoke(app, ["index"], catch_exceptions=False)
 
-    # .gitignore should have the entry (project has .git dir)
+    # .gitignore should have the entry only when explicitly requested.
     gitignore = e2e_project / ".gitignore"
     assert gitignore.is_file()
     assert "/.cocoindex_code/" in gitignore.read_text()
@@ -281,10 +283,47 @@ def test_session_reset_all(e2e_project: Path) -> None:
     # .gitignore entry should be removed
     assert "/.cocoindex_code/" not in gitignore.read_text()
 
-    # Search should fail — not initialized
-    result = runner.invoke(app, ["search", "fibonacci"])
-    assert result.exit_code != 0
-    assert "ccc init" in result.output
+    # The Git repo still works with daemon/global defaults; reset only removes
+    # local databases/settings, not the ability to use default project settings.
+    result = runner.invoke(app, ["search", "fibonacci"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+
+def test_init_gitignore_is_opt_in_for_new_project(e2e_project: Path) -> None:
+    result = runner.invoke(app, ["init"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert not (e2e_project / ".cocoindex_code" / "settings.yml").exists()
+    assert not (e2e_project / ".gitignore").exists()
+
+
+def test_init_gitignore_flag_adds_entry_for_new_project(e2e_project: Path) -> None:
+    result = runner.invoke(app, ["init", "--gitignore"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert not (e2e_project / ".cocoindex_code" / "settings.yml").exists()
+
+    gitignore = e2e_project / ".gitignore"
+    assert gitignore.is_file()
+    assert "/.cocoindex_code/" in gitignore.read_text()
+
+
+def test_init_gitignore_flag_adds_entry_for_existing_project(e2e_project: Path) -> None:
+    result = runner.invoke(app, ["init"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert not (e2e_project / ".cocoindex_code" / "settings.yml").exists()
+    assert not (e2e_project / ".gitignore").exists()
+
+    result = runner.invoke(app, ["init", "--gitignore"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+    gitignore = e2e_project / ".gitignore"
+    assert gitignore.is_file()
+    assert "/.cocoindex_code/" in gitignore.read_text()
+
+
+def test_init_project_settings_flag_creates_repo_local_overrides(e2e_project: Path) -> None:
+    result = runner.invoke(app, ["init", "--project-settings"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert (e2e_project / ".cocoindex_code" / "settings.yml").exists()
 
 
 def test_session_reset_then_full_reinit(e2e_project: Path) -> None:
@@ -301,7 +340,7 @@ def test_session_reset_then_full_reinit(e2e_project: Path) -> None:
     # Re-init from scratch
     result = runner.invoke(app, ["init"], catch_exceptions=False)
     assert result.exit_code == 0
-    assert (e2e_project / ".cocoindex_code" / "settings.yml").exists()
+    assert not (e2e_project / ".cocoindex_code" / "settings.yml").exists()
 
     # Re-index
     result = runner.invoke(app, ["index"], catch_exceptions=False)
@@ -396,11 +435,11 @@ def test_session_search_refresh() -> None:
 
 
 @pytest.mark.usefixtures("e2e_project")
-def test_session_index_not_initialized_errors() -> None:
-    """Running ``ccc index`` from uninitialized dir should error."""
-    result = runner.invoke(app, ["index"])
-    assert result.exit_code != 0
-    assert "ccc init" in result.output
+def test_session_index_uses_git_repo_defaults_without_init() -> None:
+    """Git repos use default project settings without repo-local init files."""
+    result = runner.invoke(app, ["index"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert "Chunks:" in result.output
 
 
 def test_session_subdirectory_path_default(e2e_project: Path) -> None:
@@ -799,9 +838,10 @@ def test_init_model_test_failure_is_non_fatal(
     assert "ccc doctor" in combined
     assert "envs:" in combined
 
-    # Settings file was written (not rolled back) and project was initialized.
+    # Global settings were written (not rolled back). Repo-local settings are
+    # opt-in and are not created by default.
     assert user_settings_path().is_file()
-    assert (e2e_fresh_env / ".cocoindex_code" / "settings.yml").exists()
+    assert not (e2e_fresh_env / ".cocoindex_code" / "settings.yml").exists()
 
 
 def test_init_rejects_litellm_model_when_settings_exist(e2e_project: Path) -> None:
@@ -925,8 +965,8 @@ def test_session_db_path_mapping(
     result = runner.invoke(app, ["init"], catch_exceptions=False)
     assert result.exit_code == 0, result.output
 
-    # Settings should be in the project dir, NOT the mapped dir
-    assert (project_dir / ".cocoindex_code" / "settings.yml").exists()
+    # Repo-local settings are not created by default.
+    assert not (project_dir / ".cocoindex_code" / "settings.yml").exists()
 
     # Index
     result = runner.invoke(app, ["index"], catch_exceptions=False)
@@ -946,8 +986,7 @@ def test_session_db_path_mapping(
     result = runner.invoke(app, ["reset", "-f"], catch_exceptions=False)
     assert result.exit_code == 0
     assert not (mapped_db_dir / "target_sqlite.db").exists()
-    # Settings still in place
-    assert (project_dir / ".cocoindex_code" / "settings.yml").exists()
+    assert not (project_dir / ".cocoindex_code" / "settings.yml").exists()
 
 
 # ---------------------------------------------------------------------------
