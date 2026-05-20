@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import tarfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -328,6 +329,31 @@ def branch_changes(repo_root: Path, base: str, head: str) -> ChangeSet:
         affected_paths=tuple(sorted(set(affected))),
         tombstoned_paths=tuple(sorted(set(tombstoned))),
     )
+
+
+def ancestor_distances(
+    repo_root: Path,
+    *,
+    head: str,
+    candidate_commits: Iterable[str],
+) -> dict[str, int]:
+    """Return candidate commits that are ancestors of *head*, mapped to distance."""
+    repo = _open_repo(repo_root)
+    try:
+        head_id = repo.revparse_single(head).id
+    except (KeyError, ValueError, pygit2.GitError) as e:
+        raise GitContextError(f"Cannot resolve head commit {head}") from e
+
+    distances: dict[str, int] = {}
+    for candidate in dict.fromkeys(candidate_commits):
+        try:
+            candidate_id = repo.revparse_single(candidate).id
+            ahead, behind = repo.ahead_behind(head_id, candidate_id)
+        except (KeyError, ValueError, pygit2.GitError):
+            continue
+        if behind == 0:
+            distances[candidate] = ahead
+    return distances
 
 
 def materialize_commit(repo_root: Path, commit: str, source_dir: Path) -> None:

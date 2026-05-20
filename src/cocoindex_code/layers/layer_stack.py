@@ -13,6 +13,7 @@ from cocoindex_code.protocol import IndexingProgress, SearchResult
 from cocoindex_code.shared import Embedder
 from cocoindex_code.version_control import Worktree
 from cocoindex_code.version_control.git import (
+    ancestor_distances,
     branch_changes,
     materialize_commit,
     materialize_paths_from_commit,
@@ -98,11 +99,17 @@ class LayerStack:
             last_seen_path=worktree.path,
         )
         base = await self._ensure_base(worktree, config_hash, on_progress)
-        layers: list[LayerBuildResult] = [base]
-        branch = await self._ensure_branch(worktree, base.layer.id, config_hash, on_progress)
+        parent_layers = await self._nearest_indexed_ancestor_chain(
+            worktree=worktree,
+            config_hash=config_hash,
+        )
+        if parent_layers is None:
+            parent_layers = [base]
+        branch = await self._ensure_branch(worktree, parent_layers[0], config_hash, on_progress)
+        layers = parent_layers
         if branch is not None:
-            layers.insert(0, branch)
-        dirty = await self._ensure_dirty(worktree, base.layer.id, config_hash, on_progress)
+            layers = [branch, *parent_layers]
+        dirty = await self._ensure_dirty(worktree, layers[0], config_hash, on_progress)
         if dirty is not None:
             layers.insert(0, dirty)
         for layer in layers:
@@ -149,12 +156,15 @@ class LayerStack:
     async def _ensure_branch(
         self,
         worktree: Worktree,
-        base_layer_id: str,
+        parent: LayerBuildResult,
         config_hash: str,
         on_progress: Callable[[IndexingProgress], None] | None,
     ) -> LayerBuildResult | None:
+        parent_commit = parent.layer.commit_hash
+        if parent_commit is None:
+            raise RuntimeError(f"Parent layer has no commit: {parent.layer.id}")
         changes = branch_changes(
-            worktree.repository.root, worktree.branch.merge_base, worktree.branch.head_commit
+            worktree.repository.root, parent_commit, worktree.branch.head_commit
         )
         if changes.is_empty:
             return None
@@ -165,8 +175,8 @@ class LayerStack:
                     worktree.repository.id,
                     worktree.branch.name,
                     worktree.branch.head_commit,
-                    worktree.branch.merge_base,
-                    base_layer_id,
+                    parent_commit,
+                    parent.layer.id,
                     config_hash,
                 ]
             )
@@ -177,9 +187,9 @@ class LayerStack:
             kind=LayerKind.BRANCH,
             ref_name=worktree.branch.name,
             commit=worktree.branch.head_commit,
-            base_commit=worktree.branch.merge_base,
+            base_commit=parent_commit,
             merge_base=worktree.branch.merge_base,
-            base_layer_id=base_layer_id,
+            base_layer_id=parent.layer.id,
             worktree_id=None,
             config_hash=config_hash,
             expires_at=time.time() + _BRANCH_TTL_SECONDS,
@@ -194,15 +204,96 @@ class LayerStack:
             on_progress=on_progress,
         )
 
+    async def _nearest_indexed_ancestor_chain(
+        self,
+        *,
+        worktree: Worktree,
+        config_hash: str,
+    ) -> list[LayerBuildResult] | None:
+        candidates = [
+            layer
+            for layer in self.store.list_layers(repo_id=worktree.repository.id)
+            if self._is_reusable_commit_layer(layer, config_hash=config_hash)
+        ]
+        distances = ancestor_distances(
+            worktree.repository.root,
+            head=worktree.branch.head_commit,
+            candidate_commits=(layer.commit_hash for layer in candidates if layer.commit_hash),
+        )
+        candidates.sort(
+            key=lambda layer: (
+                distances.get(layer.commit_hash or "", 1_000_000_000),
+                self._layer_change_count(layer),
+                -layer.last_accessed_at,
+                layer.id,
+            )
+        )
+        for layer in candidates:
+            if layer.commit_hash not in distances:
+                continue
+            chain = await self._existing_layer_chain(layer, config_hash=config_hash)
+            if chain is not None:
+                return chain
+        return None
+
+    def _is_reusable_commit_layer(self, layer: Layer, *, config_hash: str) -> bool:
+        return (
+            layer.kind in {LayerKind.BASE, LayerKind.BRANCH}
+            and layer.status == "ready"
+            and layer.commit_hash is not None
+            and layer.config_hash == config_hash
+            and layer.paths.target_sqlite.exists()
+            and self.store.get_manifest(layer.id) is not None
+        )
+
+    def _layer_change_count(self, layer: Layer) -> int:
+        manifest = self.store.get_manifest(layer.id)
+        if manifest is None:
+            return 1_000_000_000
+        return len(manifest.affected_paths) + len(manifest.tombstoned_paths)
+
+    async def _existing_layer_chain(
+        self, layer: Layer, *, config_hash: str
+    ) -> list[LayerBuildResult] | None:
+        chain: list[LayerBuildResult] = []
+        seen: set[str] = set()
+        current: Layer | None = layer
+        while current is not None:
+            if current.id in seen or not self._is_reusable_commit_layer(
+                current, config_hash=config_hash
+            ):
+                return None
+            seen.add(current.id)
+            manifest = self.store.get_manifest(current.id)
+            if manifest is None:
+                return None
+            chain.append(
+                LayerBuildResult(
+                    layer=current,
+                    manifest=manifest,
+                    runtime=await self._runtime(current),
+                )
+            )
+            if current.base_layer_id is None:
+                break
+            parent = self.store.get_layer(current.base_layer_id)
+            if parent is None or current.base_commit_hash != parent.commit_hash:
+                return None
+            current = parent
+        return chain if chain and chain[-1].layer.kind == LayerKind.BASE else None
+
     async def _ensure_dirty(
         self,
         worktree: Worktree,
-        base_layer_id: str,
+        parent: LayerBuildResult,
         config_hash: str,
         on_progress: Callable[[IndexingProgress], None] | None,
     ) -> LayerBuildResult | None:
         if worktree.dirty.snapshot_hash is None:
             return None
+        parent_commit = parent.layer.commit_hash
+        if parent_commit is None:
+            raise RuntimeError(f"Parent layer has no commit: {parent.layer.id}")
         layer_id = _sha_short(
             "\0".join(
                 [
@@ -222,9 +313,9 @@ class LayerStack:
             kind=LayerKind.DIRTY,
             ref_name=worktree.branch.name,
             commit=worktree.branch.head_commit,
-            base_commit=worktree.branch.merge_base,
+            base_commit=parent_commit,
             merge_base=worktree.branch.merge_base,
-            base_layer_id=base_layer_id,
+            base_layer_id=parent.layer.id,
             worktree_id=worktree.id,
             config_hash=config_hash,
             expires_at=time.time() + _DIRTY_TTL_SECONDS,

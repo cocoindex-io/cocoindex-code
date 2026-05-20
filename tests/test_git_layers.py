@@ -206,3 +206,94 @@ async def test_layered_project_creates_base_and_branch_manifests(
     manifest = project.store.get_manifest(branch_layer.layer_id)
     assert manifest is not None
     assert manifest.affected_paths == frozenset({"extra.py", "main.py"})
+
+
+@pytest.mark.asyncio
+async def test_layered_project_builds_from_nearest_indexed_ancestor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typing import Any
+
+    import cocoindex_code.layers.layer_stack as layer_stack
+    from cocoindex_code.protocol import IndexingProgress
+
+    class FakeRuntime:
+        def __init__(self, layer: Any) -> None:
+            self.layer = layer
+            self.project = object()
+
+        async def run_index(self, on_progress: object = None) -> None:
+            self.layer.paths.target_sqlite.parent.mkdir(parents=True, exist_ok=True)
+            self.layer.paths.target_sqlite.touch()
+            if on_progress is not None:
+                on_progress(IndexingProgress(1, 0, 1, 0, 0, 0))
+
+    async def fake_runtime_create(**kwargs: Any) -> FakeRuntime:
+        return FakeRuntime(kwargs["layer"])
+
+    monkeypatch.setattr(
+        layer_stack.LayerRuntime,
+        "create",
+        staticmethod(fake_runtime_create),
+    )
+
+    monkeypatch.setenv("COCOINDEX_CODE_STATE_DIR", str(tmp_path / "state"))
+    repo = _init_repo(tmp_path / "repo")
+    base_commit = _git(repo, "rev-parse", "HEAD")
+    (repo / "main.py").write_text("def base_function() -> str:\n    return 'master'\n")
+    (repo / "master.py").write_text("def master_only() -> str:\n    return 'master'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "master")
+    master_head = _git(repo, "rev-parse", "HEAD")
+
+    state_dir = daemon_state_dir()
+    store = LayerStore(state_dir / "daemon.db")
+
+    def make_project() -> LayeredProject:
+        return LayeredProject(
+            project_root=repo,
+            cwd=repo,
+            base_ref=base_commit,
+            state_dir=state_dir,
+            store=store,
+            embedder=object(),
+            indexing_params={},
+            query_params={},
+            chunker_registry={},
+            project_cache={},
+        )
+
+    master_project = make_project()
+    try:
+        master_layers = await master_project.ensure_layer_results()
+    finally:
+        master_project.close()
+    master_layer = next(layer for layer in master_layers if layer.layer.kind == LayerKind.BRANCH)
+    assert master_layer.layer.commit_hash == master_head
+
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "feature.py").write_text("def feature_only() -> str:\n    return 'feature'\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feature")
+    feature_head = _git(repo, "rev-parse", "HEAD")
+
+    feature_project = make_project()
+    try:
+        feature_layers = await feature_project.ensure_layer_results()
+    finally:
+        feature_project.close()
+
+    assert [layer.layer.kind for layer in feature_layers] == [
+        LayerKind.BRANCH,
+        LayerKind.BRANCH,
+        LayerKind.BASE,
+    ]
+    feature_layer, reused_master_layer, _base_layer = feature_layers
+    assert feature_layer.built is True
+    assert reused_master_layer.built is False
+    assert reused_master_layer.layer.id == master_layer.layer.id
+    assert feature_layer.layer.commit_hash == feature_head
+    assert feature_layer.layer.base_commit_hash == master_head
+    assert feature_layer.layer.base_layer_id == master_layer.layer.id
+    assert feature_layer.manifest.affected_paths == frozenset({"feature.py"})
+    assert feature_layer.manifest.tombstoned_paths == frozenset()
