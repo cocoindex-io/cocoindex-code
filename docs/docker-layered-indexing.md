@@ -12,28 +12,36 @@ The intended Docker architecture is:
 
 Do not mount `$HOME` or a broad source tree just to make indexing work.
 
-## Repo-Scoped Sample
+## Repo-Scoped Wrapper
 
 Build the branch-local image:
 
 ```bash
-cd sample
+cd /path/to/cocoindex-code
 make build
 ```
+
+Install the wrapper as `ccc`:
+
+```bash
+make install-ccc-wrapper
+```
+
+Or run it directly from the checkout with `/path/to/cocoindex-code/bin/ccc`.
 
 Authorize one repo and register its base ref:
 
 ```bash
 cd /path/to/repo
-/path/to/cocoindex-code/sample/bin/ccc init --base main
+ccc init --base main
 ```
 
 Then index and search:
 
 ```bash
-/path/to/cocoindex-code/sample/bin/ccc index
-/path/to/cocoindex-code/sample/bin/ccc search "query planner"
-/path/to/cocoindex-code/sample/bin/ccc overlay status
+ccc index
+ccc search "query planner"
+ccc overlay status
 ```
 
 The wrapper refuses to run outside an authorized repo. Running `ccc init` from another repo authorizes that repo separately. Source access is granted only to the short-lived sidecar for that repo.
@@ -42,8 +50,8 @@ Linked worktrees must also be authorized explicitly:
 
 ```bash
 cd /path/to/repo.worktrees/feature-1
-/path/to/cocoindex-code/sample/bin/ccc init --base main
-/path/to/cocoindex-code/sample/bin/ccc index
+ccc init --base main
+ccc index
 ```
 
 When linked worktrees share the same Git common directory, they can share daemon layer state while each sidecar still mounts only the initialized checkout.
@@ -85,10 +93,10 @@ Indexing runs in the sidecar because it is the process with Git/source access. T
 
 ## State
 
-Host-side sample metadata:
+Host-side wrapper metadata:
 
 ```text
-sample/data/authorized-repos.tsv
+$HOME/.cocoindex_code/docker-sidecar/authorized-repos.tsv
 ```
 
 Docker named volumes:
@@ -104,10 +112,10 @@ Host user settings:
 |---|---|---|
 | `${COCOINDEX_CODE_HOST_SETTINGS_DIR:-$HOME/.cocoindex_code}` | `/home/coco/.cocoindex_code` | Global `ccc` settings shared with the Docker daemon and sidecars |
 
-Reset sample Docker state:
+Reset Docker state:
 
 ```bash
-cd sample
+cd /path/to/cocoindex-code
 make reset
 ```
 
@@ -121,7 +129,7 @@ make reset
 | `COCOINDEX_CODE_STATE_VOLUME` | Shared daemon state named volume. Default: `cocoindex-code-local-state`. |
 | `COCOINDEX_CODE_RUNTIME_VOLUME` | Shared runtime named volume. Default: `cocoindex-code-local-runtime`. |
 | `COCOINDEX_CODE_HOST_SETTINGS_DIR` | Host user settings directory mounted into daemon and sidecars. Default: `$HOME/.cocoindex_code`. |
-| `COCOINDEX_CODE_SAMPLE_DATA_DIR` | Host-side allowlist directory. Default: `sample/data`. |
+| `COCOINDEX_CODE_WRAPPER_DATA_DIR` | Host-side allowlist directory. Default: `$HOME/.cocoindex_code/docker-sidecar`. |
 | `PUID`, `PGID` | Linux-only ownership mapping. |
 
 Internal sidecar/daemon variables:
@@ -139,7 +147,7 @@ Internal sidecar/daemon variables:
 Check the central daemon:
 
 ```bash
-cd sample
+cd /path/to/cocoindex-code
 make ps
 make logs
 ```
@@ -148,8 +156,8 @@ Check through a repo-authorized sidecar:
 
 ```bash
 cd /path/to/repo
-/path/to/cocoindex-code/sample/bin/ccc daemon status
-/path/to/cocoindex-code/sample/bin/ccc overlay status
+ccc daemon status
+ccc overlay status
 ```
 
 Inspect named volume contents:

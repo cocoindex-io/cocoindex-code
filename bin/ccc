@@ -3,11 +3,9 @@ set -euo pipefail
 
 image="${COCOINDEX_CODE_IMAGE:-cocoindex-code:local-layered}"
 central_container="${COCOINDEX_CODE_DAEMON_CONTAINER:-cocoindex-code-local-daemon}"
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-sample_dir="$(cd "$script_dir/.." && pwd)"
-data_dir="${COCOINDEX_CODE_SAMPLE_DATA_DIR:-$sample_dir/data}"
-registry="$data_dir/authorized-repos.tsv"
 host_settings_dir="${COCOINDEX_CODE_HOST_SETTINGS_DIR:-$HOME/.cocoindex_code}"
+data_dir="${COCOINDEX_CODE_WRAPPER_DATA_DIR:-$host_settings_dir/docker-sidecar}"
+registry="$data_dir/authorized-repos.tsv"
 state_volume="${COCOINDEX_CODE_STATE_VOLUME:-cocoindex-code-local-state}"
 runtime_volume="${COCOINDEX_CODE_RUNTIME_VOLUME:-cocoindex-code-local-runtime}"
 network="${COCOINDEX_CODE_DOCKER_NETWORK:-cocoindex-code-local}"
@@ -84,7 +82,7 @@ common_dir_for_authorized_root() {
 ensure_image_exists() {
 	if ! docker image inspect "$image" >/dev/null 2>&1; then
 		echo "Docker image '$image' does not exist." >&2
-		echo "Build it with: cd '$sample_dir' && make build" >&2
+		echo "Build it from the cocoindex-code checkout with: make build-local" >&2
 		exit 1
 	fi
 }

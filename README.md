@@ -247,9 +247,9 @@ The rest of this section uses `:latest` — substitute `:full` in the `image:` /
 Build the branch-local image and install/use the sidecar wrapper:
 
 ```bash
-cd sample
+cd /path/to/cocoindex-code
 make build
-make install-ccc-wrapper   # optional; otherwise call sample/bin/ccc directly
+make install-ccc-wrapper   # optional; otherwise call bin/ccc directly
 ```
 
 Authorize and index exactly one repo:
