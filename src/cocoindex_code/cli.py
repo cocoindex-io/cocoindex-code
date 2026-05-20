@@ -19,7 +19,7 @@ if TYPE_CHECKING:
         ProjectStatusResponse,
         SearchResponse,
     )
-    from .sidecar import SidecarIndexReport
+    from .sidecar import SidecarIndexReport, SidecarLayerSummary
 
 from .settings import (
     DEFAULT_ST_MODEL,
@@ -197,45 +197,83 @@ def _short_hash(value: str | None) -> str:
     return value[:12]
 
 
+def _format_number(value: int | None) -> str:
+    if value is None:
+        return "unknown"
+    return f"{value:,}"
+
+
+def _format_file_chunk_counts(file_count: int | None, chunk_count: int | None) -> str:
+    if file_count is None or chunk_count is None:
+        return "unknown"
+    return f"{_format_number(file_count)} files, {_format_number(chunk_count)} chunks"
+
+
+def _format_layer_scope(layer: SidecarLayerSummary) -> str:
+    previous = layer.previous_commit or layer.merge_base
+    if layer.kind == "base":
+        return f"full snapshot of {layer.ref_name or 'base'} at {_short_hash(layer.commit)}"
+    if layer.kind == "branch":
+        return (
+            f"{layer.ref_name or 'branch'} changes from {_short_hash(previous)} "
+            f"to {_short_hash(layer.commit)}"
+        )
+    if layer.kind == "dirty":
+        return f"uncommitted worktree changes on {_short_hash(layer.commit)}"
+    return f"{layer.ref_name or layer.kind} at {_short_hash(layer.commit)}"
+
+
+def _format_layer_changes(layer: SidecarLayerSummary) -> str:
+    if layer.kind == "base":
+        return "full base snapshot"
+    message = f"{_format_number(layer.affected_count)} changed paths"
+    if layer.tombstoned_count:
+        message += f", {_format_number(layer.tombstoned_count)} deleted"
+    return message
+
+
+def _format_layer_build_work(layer: SidecarLayerSummary) -> str:
+    if layer.progress is None:
+        return "skipped, reused existing ready layer"
+    progress = layer.progress
+    return (
+        f"{_format_number(progress.num_execution_starts)} files listed; "
+        f"{_format_number(progress.num_adds)} added, "
+        f"{_format_number(progress.num_unchanged)} unchanged, "
+        f"{_format_number(progress.num_reprocesses)} reprocessed, "
+        f"{_format_number(progress.num_deletes)} deleted, "
+        f"{_format_number(progress.num_errors)} errors"
+    )
+
+
 def print_layered_index_report(report: SidecarIndexReport) -> None:
-    _typer.echo("\nLayered index:")
+    _typer.echo("\nLayered index updated:")
+    _typer.echo(
+        "  Mode: Git layered index "
+        "(base snapshot + branch delta + dirty changes if present)"
+    )
     _typer.echo(f"  Repo ID: {report.repo_id or '-'}")
-    _typer.echo(f"  Project: {format_path_for_display(report.project_root)}")
+    _typer.echo(f"  Source: {format_path_for_display(report.project_root)}")
     _typer.echo(f"  Worktree: {format_path_for_display(report.cwd)}")
     _typer.echo(f"  Branch: {report.branch or '-'}")
-    _typer.echo(f"  Base: {report.base_ref or '-'} @ {_short_hash(report.base_commit)}")
-    _typer.echo(f"  Head: {_short_hash(report.head_commit)}")
-    _typer.echo("  Layers:")
+    _typer.echo(f"  Base snapshot: {report.base_ref or '-'} @ {_short_hash(report.base_commit)}")
+    _typer.echo(f"  Head commit: {_short_hash(report.head_commit)}")
+    _typer.echo(
+        "  Total searchable content: "
+        f"{_format_file_chunk_counts(report.effective_file_count, report.effective_chunk_count)}"
+    )
+    _typer.echo("  Search layers, top to bottom:")
     for layer in report.layers:
-        action = "built" if layer.built else "reused"
-        diff = f"diff={layer.affected_count} paths"
-        if layer.tombstoned_count:
-            diff += f", tombstones={layer.tombstoned_count}"
-        index = ""
-        if layer.indexed_file_count is not None and layer.indexed_chunk_count is not None:
-            index = f" index={layer.indexed_file_count} files, {layer.indexed_chunk_count} chunks"
-        progress = ""
-        if layer.progress is not None:
-            progress = (
-                f" progress={layer.progress.num_execution_starts} listed,"
-                f" {layer.progress.num_adds} added,"
-                f" {layer.progress.num_unchanged} unchanged,"
-                f" {layer.progress.num_reprocesses} reprocessed,"
-                f" {layer.progress.num_deletes} deleted,"
-                f" {layer.progress.num_errors} errors"
-            )
-        previous = layer.previous_commit or layer.merge_base
+        action = "built now" if layer.built else "reused"
+        _typer.echo(f"    {layer.kind:<6} {action}")
+        _typer.echo(f"      Layer ID: {layer.layer_id}")
+        _typer.echo(f"      Covers: {_format_layer_scope(layer)}")
+        _typer.echo(f"      Source changes: {_format_layer_changes(layer)}")
         _typer.echo(
-            "    "
-            f"{layer.kind:<6} {action:<6} "
-            f"id={layer.layer_id} "
-            f"ref={layer.ref_name or '-'} "
-            f"prev={_short_hash(previous)} "
-            f"commit={_short_hash(layer.commit)} "
-            f"{diff}"
-            f"{index}"
-            f"{progress}"
+            "      Searchable in this layer: "
+            f"{_format_file_chunk_counts(layer.indexed_file_count, layer.indexed_chunk_count)}"
         )
+        _typer.echo(f"      Build work: {_format_layer_build_work(layer)}")
 
 
 def print_search_results(response: SearchResponse) -> None:

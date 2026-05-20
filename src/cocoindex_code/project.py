@@ -266,6 +266,18 @@ class Project:
             index_exists=index_exists,
         )
 
+    def get_indexed_file_chunk_counts(self) -> dict[str, int]:
+        """Return indexed chunk counts by file path."""
+        db = self._env.get_context(SQLITE_DB)
+        try:
+            with db.readonly() as conn:
+                rows = conn.execute(
+                    "SELECT file_path, COUNT(*) FROM code_chunks_vec GROUP BY file_path"
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        return {str(file_path): int(count) for file_path, count in rows}
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------

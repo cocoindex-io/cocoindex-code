@@ -129,3 +129,36 @@ def test_sidecar_enabled_requires_exact_one(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setenv("COCOINDEX_CODE_SIDECAR", "1")
     assert sidecar.sidecar_enabled() is True
+
+
+def test_effective_index_counts_apply_layer_shadowing() -> None:
+    def fake_layer(
+        *,
+        affected_paths: set[str],
+        tombstoned_paths: set[str],
+        file_chunks: dict[str, int],
+    ) -> Any:
+        return SimpleNamespace(
+            manifest=SimpleNamespace(
+                affected_paths=frozenset(affected_paths),
+                tombstoned_paths=frozenset(tombstoned_paths),
+            ),
+            runtime=SimpleNamespace(
+                project=SimpleNamespace(
+                    get_indexed_file_chunk_counts=lambda: file_chunks,
+                )
+            ),
+        )
+
+    branch = fake_layer(
+        affected_paths={"a.py", "d.py", "e.py"},
+        tombstoned_paths={"b.py"},
+        file_chunks={"a.py": 4, "d.py": 1},
+    )
+    base = fake_layer(
+        affected_paths=set(),
+        tombstoned_paths=set(),
+        file_chunks={"a.py": 2, "b.py": 3, "c.py": 1, "e.py": 7},
+    )
+
+    assert sidecar._effective_index_counts([branch, base]) == (3, 6)

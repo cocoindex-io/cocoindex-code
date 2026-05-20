@@ -48,15 +48,15 @@ class SidecarIndexReport:
     base_commit: str | None
     head_commit: str | None
     layers: tuple[SidecarLayerSummary, ...]
+    effective_file_count: int | None = None
+    effective_chunk_count: int | None = None
 
 
 def _summarize_layers(
     *, project_root: Path, cwd: Path, layers: list[LayerBuildResult]
 ) -> SidecarIndexReport:
-    summaries = tuple(
-        _summarize_layer(layer)
-        for layer in layers
-    )
+    summaries = tuple(_summarize_layer(layer) for layer in layers)
+    effective_file_count, effective_chunk_count = _effective_index_counts(layers)
     base = next((layer for layer in summaries if layer.kind == "base"), None)
     top = summaries[0] if summaries else None
     branch = next((layer.ref_name for layer in summaries if layer.kind != "base"), None)
@@ -69,6 +69,8 @@ def _summarize_layers(
         base_commit=base.commit if base is not None else None,
         head_commit=top.commit if top is not None else None,
         layers=summaries,
+        effective_file_count=effective_file_count,
+        effective_chunk_count=effective_chunk_count,
     )
 
 
@@ -90,6 +92,25 @@ def _summarize_layer(layer: LayerBuildResult) -> SidecarLayerSummary:
         indexed_chunk_count=status.total_chunks if status.index_exists else None,
         progress=layer.progress,
     )
+
+
+def _effective_index_counts(layers: list[LayerBuildResult]) -> tuple[int | None, int | None]:
+    if not layers:
+        return None, None
+
+    lower_layer_shadowed_paths: set[str] = set()
+    file_count = 0
+    chunk_count = 0
+    for layer in layers:
+        file_chunks = layer.runtime.project.get_indexed_file_chunk_counts()
+        for file_path, chunks in file_chunks.items():
+            if file_path in lower_layer_shadowed_paths:
+                continue
+            file_count += 1
+            chunk_count += chunks
+        lower_layer_shadowed_paths.update(layer.manifest.affected_paths)
+        lower_layer_shadowed_paths.update(layer.manifest.tombstoned_paths)
+    return file_count, chunk_count
 
 
 async def ensure_sidecar_layer_ids(

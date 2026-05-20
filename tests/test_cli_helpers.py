@@ -26,6 +26,8 @@ def _sample_sidecar_report(project_root: Path) -> SidecarIndexReport:
         base_ref="origin/main",
         base_commit="abcdef1234567890",
         head_commit="fedcba9876543210",
+        effective_file_count=123,
+        effective_chunk_count=620,
         layers=(
             SidecarLayerSummary(
                 layer_id="branch-layer",
@@ -414,14 +416,21 @@ def test_index_command_skips_daemon_project_status_in_sidecar_mode(
 
     out = capsys.readouterr().out
     assert f"Project: {project_root}" in out
-    assert "Layered index:" in out
+    assert "Layered index updated:" in out
+    assert "Mode: Git layered index" in out
     assert "Repo ID: repo-123" in out
-    assert "branch built" in out
-    assert "diff=12 paths, tombstones=1" in out
-    assert "index=8 files, 34 chunks" in out
-    assert "8 listed, 5 added, 2 unchanged, 0 reprocessed, 1 deleted, 0 errors" in out
+    assert "Source:" in out
+    assert "Total searchable content: 123 files, 620 chunks" in out
+    assert "Search layers, top to bottom:" in out
+    assert "branch built now" in out
+    assert "Covers: feature changes from abcdef123456 to fedcba987654" in out
+    assert "Source changes: 12 changed paths, 1 deleted" in out
+    assert "Searchable in this layer: 8 files, 34 chunks" in out
+    assert "8 files listed; 5 added, 2 unchanged, 0 reprocessed, 1 deleted, 0 errors" in out
     assert "base   reused" in out
-    assert "index=120 files, 610 chunks" in out
+    assert "Covers: full snapshot of origin/main at abcdef123456" in out
+    assert "Searchable in this layer: 120 files, 610 chunks" in out
+    assert "Build work: skipped, reused existing ready layer" in out
     assert "Index stats:" not in out
 
 
