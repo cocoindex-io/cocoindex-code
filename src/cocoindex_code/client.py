@@ -471,14 +471,17 @@ def start_daemon() -> subprocess.Popen[bytes]:
     ccc_path = _find_ccc_executable()
     if ccc_path:
         cmd = [ccc_path, "run-daemon"]
+        env = os.environ.copy()
     else:
         cmd = [sys.executable, "-m", "cocoindex_code.cli", "run-daemon"]
+        env = _daemon_subprocess_env()
 
     log_fd = open(log_path, "w")
     if sys.platform == "win32":
         _create_no_window = 0x08000000
         proc = subprocess.Popen(
             cmd,
+            env=env,
             stdout=log_fd,
             stderr=log_fd,
             stdin=subprocess.DEVNULL,
@@ -487,6 +490,7 @@ def start_daemon() -> subprocess.Popen[bytes]:
     else:
         proc = subprocess.Popen(
             cmd,
+            env=env,
             start_new_session=True,
             stdout=log_fd,
             stderr=log_fd,
@@ -496,15 +500,54 @@ def start_daemon() -> subprocess.Popen[bytes]:
     return proc
 
 
+def _daemon_subprocess_env() -> dict[str, str]:
+    """Environment for launching the daemon through ``python -m``."""
+    env = os.environ.copy()
+    source_root = str(Path(__file__).resolve().parents[1])
+    pythonpath = env.get("PYTHONPATH")
+    if pythonpath:
+        paths = pythonpath.split(os.pathsep)
+        if source_root not in paths:
+            env["PYTHONPATH"] = os.pathsep.join([source_root, *paths])
+    else:
+        env["PYTHONPATH"] = source_root
+    return env
+
+
 def _find_ccc_executable() -> str | None:
     """Find the ccc executable in PATH or the same directory as python."""
     python_dir = Path(sys.executable).parent
     names = ["ccc.exe", "ccc"] if sys.platform == "win32" else ["ccc"]
     for name in names:
         ccc = python_dir / name
-        if ccc.exists():
+        if _is_usable_ccc_executable(ccc):
             return str(ccc)
     return None
+
+
+def _is_usable_ccc_executable(path: Path) -> bool:
+    """Return whether a local ccc launcher is executable in this environment."""
+    if not path.exists():
+        return False
+    if sys.platform == "win32":
+        return True
+
+    try:
+        with path.open("rb") as f:
+            first_line = f.readline(256)
+    except OSError:
+        return False
+
+    if not first_line.startswith(b"#!"):
+        return True
+
+    shebang = first_line[2:].strip().decode("utf-8", errors="ignore")
+    if not shebang:
+        return False
+    interpreter = shebang.split(maxsplit=1)[0]
+    if interpreter.startswith("/") and not Path(interpreter).exists():
+        return False
+    return True
 
 
 def _pid_alive(pid: int) -> bool:

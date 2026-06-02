@@ -214,8 +214,15 @@ class OverlayStatusResponse(_msgspec.Struct, tag="overlay_status"):
     layers: list[OverlayLayerInfo]
 
 
+class OverlayPruneFailure(_msgspec.Struct):
+    layer_id: str
+    path: str
+    message: str
+
+
 class OverlayPruneResponse(_msgspec.Struct, tag="overlay_prune"):
     pruned_layer_ids: list[str]
+    failures: list[OverlayPruneFailure] = []
 
 
 class ErrorResponse(_msgspec.Struct, tag="error"):

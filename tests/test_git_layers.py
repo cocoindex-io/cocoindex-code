@@ -130,9 +130,20 @@ def test_daemon_state_dir_defaults_to_xdg_data_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("COCOINDEX_CODE_STATE_DIR", raising=False)
+    monkeypatch.delenv("COCOINDEX_CODE_DIR", raising=False)
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
 
     assert daemon_state_dir() == tmp_path / "xdg" / "cocoindex-code"
+
+
+def test_daemon_state_dir_uses_isolated_code_dir_without_xdg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("COCOINDEX_CODE_STATE_DIR", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(tmp_path / "code"))
+
+    assert daemon_state_dir() == tmp_path / "code" / "state"
 
 
 def test_normalize_remote_url_equates_common_github_forms() -> None:
@@ -239,6 +250,90 @@ def test_ancestor_distances_only_returns_commits_reachable_from_head(tmp_path: P
         head=main_head,
         candidate_commits=[base_commit, other_head, main_head, "missing"],
     ) == {base_commit: 1, main_head: 0}
+
+
+def test_dirty_snapshot_hash_streams_content_without_reading_file_into_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cocoindex_code.version_control.change_set import GitStatusEntry
+    from cocoindex_code.version_control.git import _dirty_snapshot_hash
+
+    repo = _init_repo(tmp_path / "repo")
+    dirty_path = repo / "dirty.py"
+    dirty_path.write_text("def dirty() -> str:\n    return 'dirty'\n")
+
+    def _forbid_read_bytes(self: Path) -> bytes:
+        raise AssertionError(f"read_bytes should not be used for dirty hashing: {self}")
+
+    monkeypatch.setattr(Path, "read_bytes", _forbid_read_bytes)
+
+    digest = _dirty_snapshot_hash(
+        repo,
+        (
+            GitStatusEntry(
+                index_status=" ",
+                worktree_status="?",
+                path="dirty.py",
+            ),
+        ),
+    )
+
+    assert digest is not None
+    assert len(digest) == 24
+
+
+def test_resolve_worktree_context_excludes_gitignored_untracked_files(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    (repo / ".gitignore").write_text("ignored.py\n")
+    (repo / "ignored.py").write_text("IGNORED = True\n")
+    (repo / "visible.py").write_text("VISIBLE = True\n")
+
+    ctx = resolve_worktree_context(repo, base_ref="main", index_config_hash="cfg")
+
+    assert "visible.py" in ctx.dirty.affected_paths
+    assert "ignored.py" not in ctx.dirty.affected_paths
+
+
+def test_dirty_git_rename_tombstones_old_path_and_affects_new_path(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    _git(repo, "mv", "main.py", "renamed.py")
+
+    ctx = resolve_worktree_context(repo, base_ref="main", index_config_hash="cfg")
+
+    assert "renamed.py" in ctx.dirty.affected_paths
+    assert "main.py" in ctx.dirty.tombstoned_paths
+    assert "main.py" not in ctx.dirty.affected_paths
+    assert "renamed.py" not in ctx.dirty.tombstoned_paths
+
+
+def test_materialize_paths_from_worktree_rejects_symlinks(tmp_path: Path) -> None:
+    from cocoindex_code.version_control.git import materialize_paths_from_worktree
+
+    repo = _init_repo(tmp_path / "repo")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret\n")
+    (repo / "link.py").symlink_to(outside)
+    source_dir = tmp_path / "layer-src"
+
+    materialize_paths_from_worktree(repo, ("link.py",), source_dir)
+
+    assert not (source_dir / "link.py").exists()
+
+
+def test_materialize_commit_skips_git_symlinks(tmp_path: Path) -> None:
+    from cocoindex_code.version_control.git import materialize_commit
+
+    repo = _init_repo(tmp_path / "repo")
+    (repo / "link.py").symlink_to("main.py")
+    _git(repo, "add", "link.py")
+    _git(repo, "commit", "-m", "add symlink")
+    commit = _git(repo, "rev-parse", "HEAD")
+    source_dir = tmp_path / "layer-src"
+
+    materialize_commit(repo, commit, source_dir)
+
+    assert (source_dir / "main.py").is_file()
+    assert not (source_dir / "link.py").exists()
 
 
 def test_layer_store_persists_ready_layers_and_manifests(tmp_path: Path) -> None:
@@ -696,3 +791,59 @@ async def test_layered_project_prefers_smaller_layer_at_same_commit(
 
     assert layers[0].layer.id == small_layer.id
     assert layers[0].built is False
+
+
+@pytest.mark.asyncio
+async def test_overlay_prune_closes_cached_layer_projects_before_deleting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cocoindex_code.daemon import ProjectRegistry, _dispatch
+    from cocoindex_code.protocol import OverlayPruneRequest, OverlayPruneResponse
+
+    monkeypatch.setenv("COCOINDEX_CODE_STATE_DIR", str(tmp_path / "state"))
+    registry = ProjectRegistry(embedder=object())
+    layer_root = registry.state_dir / "repos" / "repo" / "layers" / "expired"
+    layer = registry.layer_store.upsert_layer(
+        layer_id="expired",
+        repo_id="repo",
+        kind=LayerKind.DIRTY,
+        ref_name="feature",
+        commit="abc",
+        base_commit="base",
+        base_layer_id="base-layer",
+        source_dir=layer_root / "src",
+        db_dir=layer_root / "db",
+        status="ready",
+    )
+    layer.paths.source.mkdir(parents=True)
+    layer.paths.db_dir.mkdir(parents=True)
+    registry.layer_store.replace_manifest(
+        "expired",
+        affected_paths=["dirty.py"],
+        tombstoned_paths=[],
+        expires_at=0.0,
+    )
+
+    class _CachedProject:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    cached_project = _CachedProject()
+    registry._layer_project_cache["expired"] = cached_project  # noqa: SLF001
+
+    resp = await _dispatch(
+        OverlayPruneRequest(),
+        registry,
+        start_time=0.0,
+        on_shutdown=lambda: None,
+        settings_env_names=[],
+    )
+
+    assert isinstance(resp, OverlayPruneResponse)
+    assert resp.pruned_layer_ids == ["expired"]
+    assert resp.failures == []
+    assert cached_project.closed is True
+    assert "expired" not in registry._layer_project_cache  # noqa: SLF001
+    assert not layer_root.exists()

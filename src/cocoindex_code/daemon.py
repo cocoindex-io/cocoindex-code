@@ -49,6 +49,7 @@ from .protocol import (
     IndexStreamResponse,
     IndexWaitingNotice,
     OverlayLayerInfo,
+    OverlayPruneFailure,
     OverlayPruneRequest,
     OverlayPruneResponse,
     OverlayStatusRequest,
@@ -237,6 +238,12 @@ class ProjectRegistry:
         self._projects.clear()
         self._layer_project_cache.clear()
         gc.collect()
+
+    def close_layer_projects(self, layer_ids: list[str] | tuple[str, ...]) -> None:
+        for layer_id in layer_ids:
+            project = self._layer_project_cache.pop(layer_id, None)
+            if project is not None:
+                project.close()
 
     def list_projects(self) -> list[DaemonProjectInfo]:
         """List all loaded projects with their indexing state."""
@@ -709,12 +716,33 @@ async def _dispatch(
             )
 
         if isinstance(req, OverlayPruneRequest):
-            pruned = registry.layer_store.prune_expired()
-            for layer in pruned:
-                import shutil
+            import shutil
 
-                shutil.rmtree(layer.source_dir.parent, ignore_errors=True)
-            return OverlayPruneResponse(pruned_layer_ids=[layer.layer_id for layer in pruned])
+            expired = registry.layer_store.list_expired_layers()
+            successful_layer_ids: list[str] = []
+            failures: list[OverlayPruneFailure] = []
+            registry.close_layer_projects(tuple(layer.id for layer in expired))
+            for layer in expired:
+                layer_root = layer.source_dir.parent
+                try:
+                    shutil.rmtree(layer_root)
+                except FileNotFoundError:
+                    successful_layer_ids.append(layer.id)
+                except OSError as e:
+                    failures.append(
+                        OverlayPruneFailure(
+                            layer_id=layer.id,
+                            path=str(layer_root),
+                            message=str(e),
+                        )
+                    )
+                else:
+                    successful_layer_ids.append(layer.id)
+            registry.layer_store.delete_layers(tuple(successful_layer_ids))
+            return OverlayPruneResponse(
+                pruned_layer_ids=successful_layer_ids,
+                failures=failures,
+            )
 
         if isinstance(req, DoctorRequest):
             return _handle_doctor(req, registry)

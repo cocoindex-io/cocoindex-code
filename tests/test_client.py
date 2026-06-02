@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -91,6 +93,46 @@ def test_print_warning_prefixes_message(capsys: pytest.CaptureFixture[str]) -> N
     client.print_warning("something happened")
     err = capsys.readouterr().err
     assert err.startswith("Warning: something happened")
+
+
+def test_find_ccc_executable_ignores_stale_script_shebang(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python = bin_dir / "python"
+    python.write_text("")
+    stale_ccc = bin_dir / "ccc"
+    stale_ccc.write_text("#!/missing/python\n")
+    stale_ccc.chmod(0o755)
+    monkeypatch.setattr(sys, "executable", str(python))
+
+    assert client._find_ccc_executable() is None
+
+
+def test_start_daemon_fallback_preserves_source_import_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakePopen:
+        def __init__(self, cmd: list[str], **kwargs: object) -> None:
+            captured["cmd"] = cmd
+            captured["env"] = kwargs["env"]
+
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(tmp_path))
+    monkeypatch.setattr(client, "_find_ccc_executable", lambda: None)
+    monkeypatch.setattr(client.subprocess, "Popen", _FakePopen)
+
+    client.start_daemon()
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    pythonpath = env.get("PYTHONPATH")
+    assert isinstance(pythonpath, str)
+    assert str(Path(client.__file__).resolve().parents[1]) in pythonpath.split(os.pathsep)
 
 
 def test_print_handshake_warnings_no_warnings_prints_nothing(

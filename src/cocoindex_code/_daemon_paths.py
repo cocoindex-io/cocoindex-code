@@ -46,6 +46,8 @@ def daemon_state_dir() -> Path:
     xdg_data_home = os.environ.get("XDG_DATA_HOME")
     if xdg_data_home:
         return Path(xdg_data_home) / "cocoindex-code"
+    if os.environ.get("COCOINDEX_CODE_DIR"):
+        return user_settings_dir() / "state"
     return Path.home() / ".local" / "share" / "cocoindex-code"
 
 

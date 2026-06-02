@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import os
-import tarfile
 from collections.abc import Iterable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -22,6 +21,24 @@ class GitContextError(RuntimeError):
 
 def _sha_short(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:24]
+
+
+def _safe_repo_path(path: str) -> PurePosixPath | None:
+    parsed = PurePosixPath(path)
+    if parsed.is_absolute() or not parsed.parts or any(part == ".." for part in parsed.parts):
+        return None
+    return parsed
+
+
+def _safe_destination(source_dir: Path, repo_path: str) -> Path | None:
+    safe_path = _safe_repo_path(repo_path)
+    if safe_path is None:
+        return None
+    root = source_dir.resolve()
+    destination = (root / Path(*safe_path.parts)).resolve()
+    if destination != root and not destination.is_relative_to(root):
+        return None
+    return destination
 
 
 def _open_repo(cwd: Path) -> pygit2.Repository:
@@ -108,6 +125,7 @@ def _status_entries(repo: pygit2.Repository) -> tuple[GitStatusEntry, ...]:
 def _dirty_snapshot_hash(repo_root: Path, entries: tuple[GitStatusEntry, ...]) -> str | None:
     if not entries:
         return None
+    repo = _open_repo(repo_root)
     digest = hashlib.sha256()
     for entry in sorted(entries, key=lambda e: (e.path, e.original_path or "")):
         digest.update(entry.index_status.encode())
@@ -115,9 +133,21 @@ def _dirty_snapshot_hash(repo_root: Path, entries: tuple[GitStatusEntry, ...]) -
         digest.update(entry.path.encode())
         if entry.original_path is not None:
             digest.update(entry.original_path.encode())
-        path = repo_root / entry.path
-        if path.is_file():
-            digest.update(hashlib.sha256(path.read_bytes()).digest())
+        safe_path = _safe_repo_path(entry.path)
+        if safe_path is None:
+            continue
+        path = repo_root / Path(*safe_path.parts)
+        try:
+            stat = path.lstat()
+        except OSError:
+            continue
+        digest.update(str(stat.st_mode).encode())
+        digest.update(str(stat.st_size).encode())
+        if not path.is_symlink() and path.is_file():
+            try:
+                digest.update(str(repo.hashfile(str(path))).encode())
+            except (OSError, ValueError, pygit2.GitError):
+                continue
     return digest.hexdigest()[:24]
 
 
@@ -359,11 +389,31 @@ def ancestor_distances(
 def materialize_commit(repo_root: Path, commit: str, source_dir: Path) -> None:
     repo = _open_repo(repo_root)
     obj = repo.revparse_single(commit)
-    with tarfile.open(source_dir / ".archive.tar", mode="w") as archive:
-        repo.write_archive(obj, archive)
-    with tarfile.open(source_dir / ".archive.tar", mode="r:") as archive:
-        archive.extractall(source_dir)
-    (source_dir / ".archive.tar").unlink(missing_ok=True)
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    def _walk_tree(tree: pygit2.Tree, prefix: PurePosixPath) -> None:
+        for entry in tree:
+            if entry.name is None:
+                continue
+            entry_path = prefix / entry.name
+            if entry.filemode == pygit2.enums.FileMode.TREE:
+                child = repo[entry.id]
+                if isinstance(child, pygit2.Tree):
+                    _walk_tree(child, entry_path)
+                continue
+            if entry.filemode not in {
+                pygit2.enums.FileMode.BLOB,
+                pygit2.enums.FileMode.BLOB_EXECUTABLE,
+            }:
+                continue
+            blob = repo[entry.id]
+            destination = _safe_destination(source_dir, entry_path.as_posix())
+            if destination is None:
+                continue
+            _write_file(destination, cast(Any, blob).data)
+
+    commit_obj = cast(Any, obj)
+    _walk_tree(commit_obj.tree, PurePosixPath())
 
 
 def _write_file(path: Path, data: bytes) -> None:
@@ -377,19 +427,43 @@ def materialize_paths_from_commit(
     repo = _open_repo(repo_root)
     commit_obj = repo.revparse_single(commit)
     for path in paths:
+        destination = _safe_destination(source_dir, path)
+        if destination is None:
+            continue
         try:
             entry = commit_obj.tree[path]
+            if entry.filemode not in {
+                pygit2.enums.FileMode.BLOB,
+                pygit2.enums.FileMode.BLOB_EXECUTABLE,
+            }:
+                continue
             blob = repo[entry.id]
             data = cast(Any, blob).data
         except (KeyError, ValueError, pygit2.GitError):
             continue
-        _write_file(source_dir / path, data)
+        _write_file(destination, data)
 
 
 def materialize_paths_from_worktree(
     repo_root: Path, paths: tuple[str, ...], source_dir: Path
 ) -> None:
+    root = repo_root.resolve()
     for path in paths:
-        source = repo_root / path
-        if source.is_file():
-            _write_file(source_dir / path, source.read_bytes())
+        safe_path = _safe_repo_path(path)
+        destination = _safe_destination(source_dir, path)
+        if safe_path is None or destination is None:
+            continue
+        source = repo_root / Path(*safe_path.parts)
+        try:
+            source.lstat()
+        except OSError:
+            continue
+        if source.is_symlink() or not source.is_file():
+            continue
+        resolved_source = source.resolve()
+        if resolved_source != root and not resolved_source.is_relative_to(root):
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with source.open("rb") as src, destination.open("wb") as dst:
+            while chunk := src.read(1024 * 1024):
+                dst.write(chunk)

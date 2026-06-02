@@ -373,7 +373,7 @@ class LayerStore:
                 ).fetchall()
         return [self._row_to_layer(row) for row in rows]
 
-    def prune_expired(self, now: float | None = None) -> list[Layer]:
+    def list_expired_layers(self, now: float | None = None) -> list[Layer]:
         cutoff = time.time() if now is None else now
         with self._connect() as conn:
             rows = conn.execute(
@@ -386,12 +386,21 @@ class LayerStore:
                 """,
                 (cutoff,),
             ).fetchall()
-            layer_ids = [row["layer_id"] for row in rows]
+        return [self._row_to_layer(row) for row in rows]
+
+    def delete_layers(self, layer_ids: list[str] | tuple[str, ...]) -> None:
+        if not layer_ids:
+            return
+        with self._connect() as conn:
             conn.executemany(
                 "DELETE FROM overlay_manifests WHERE layer_id = ?", [(i,) for i in layer_ids]
             )
             conn.executemany("DELETE FROM layers WHERE layer_id = ?", [(i,) for i in layer_ids])
-        return [self._row_to_layer(row) for row in rows]
+
+    def prune_expired(self, now: float | None = None) -> list[Layer]:
+        layers = self.list_expired_layers(now)
+        self.delete_layers(tuple(layer.id for layer in layers))
+        return layers
 
 
 LayerRecord = Layer

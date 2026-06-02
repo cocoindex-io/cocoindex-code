@@ -1110,8 +1110,15 @@ def overlay_prune() -> None:
     resp = _client.overlay_prune()
     if not resp.pruned_layer_ids:
         _typer.echo("No expired layers pruned.")
-        return
-    _typer.echo(f"Pruned {len(resp.pruned_layer_ids)} layer(s).")
+    else:
+        _typer.echo(f"Pruned {len(resp.pruned_layer_ids)} layer(s).")
+    if resp.failures:
+        for failure in resp.failures:
+            _typer.echo(
+                f"Failed to prune {failure.layer_id} at {failure.path}: {failure.message}",
+                err=True,
+            )
+        raise _typer.Exit(code=1)
 
 
 # --- Daemon subcommands ---

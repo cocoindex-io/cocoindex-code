@@ -18,6 +18,8 @@ from cocoindex_code.protocol import (
     IndexRequest,
     IndexResponse,
     IndexWaitingNotice,
+    OverlayPruneFailure,
+    OverlayPruneResponse,
     ProjectStatusRequest,
     ProjectStatusResponse,
     RemoveProjectRequest,
@@ -208,6 +210,27 @@ def test_encode_decode_daemon_env_response() -> None:
     assert decoded.settings_env_names == ["GEMINI_API_KEY"]
 
 
+def test_encode_decode_overlay_prune_response_with_failures() -> None:
+    resp = OverlayPruneResponse(
+        pruned_layer_ids=["old-dirty"],
+        failures=[
+            OverlayPruneFailure(
+                layer_id="locked-branch",
+                path="/tmp/layer",
+                message="permission denied",
+            ),
+        ],
+    )
+    data = encode_response(resp)
+    decoded = decode_response(data)
+    assert isinstance(decoded, OverlayPruneResponse)
+    assert decoded.pruned_layer_ids == ["old-dirty"]
+    assert len(decoded.failures) == 1
+    assert decoded.failures[0].layer_id == "locked-branch"
+    assert decoded.failures[0].path == "/tmp/layer"
+    assert decoded.failures[0].message == "permission denied"
+
+
 def test_all_request_types_round_trip() -> None:
     requests: list[Request] = [
         HandshakeRequest(version="1.0.0"),
@@ -314,6 +337,7 @@ def test_all_response_types_round_trip() -> None:
             result=DoctorCheckResult(name="test", ok=True, details=[], errors=[]),
         ),
         DaemonEnvResponse(env_names=["HOME"], settings_env_names=[]),
+        OverlayPruneResponse(pruned_layer_ids=[]),
         ErrorResponse(message="err"),
     ]
     for resp in responses:
