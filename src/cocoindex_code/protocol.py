@@ -154,6 +154,9 @@ class DoctorCheckResult(_msgspec.Struct):
     ok: bool
     details: list[str]
     errors: list[str]
+    # Full formatted traceback for a failed check, shown by `ccc doctor` to aid
+    # debugging of daemon-side exceptions (e.g. a failing model check).
+    traceback: str | None = None
 
 
 class DoctorResponse(_msgspec.Struct, tag="doctor"):
@@ -175,6 +178,9 @@ class DaemonEnvResponse(_msgspec.Struct, tag="daemon_env"):
 
 class ErrorResponse(_msgspec.Struct, tag="error"):
     message: str
+    # Full formatted traceback from the daemon, when the error originates from an
+    # unhandled exception. Surfaced by the CLI so daemon-side failures are debuggable.
+    traceback: str | None = None
 
 
 Response = (

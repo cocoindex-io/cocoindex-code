@@ -363,7 +363,10 @@ def doctor(
                 raise RuntimeError("Connection to daemon lost during doctor checks")
             resp = decode_response(data)
             if isinstance(resp, ErrorResponse):
-                raise RuntimeError(f"Daemon error: {resp.message}")
+                detail = f"Daemon error: {resp.message}"
+                if resp.traceback:
+                    detail += f"\n{resp.traceback}"
+                raise RuntimeError(detail)
             if isinstance(resp, DoctorResponse):
                 results.append(resp.result)
                 if on_result is not None:

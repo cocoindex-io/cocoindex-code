@@ -703,6 +703,9 @@ def _print_doctor_result(result: DoctorCheckResult) -> None:
         _typer.echo(f"    {line}")
     for err in result.errors:
         _typer.echo(_click.style(f"    ERROR: {err}", fg="red"), err=True)
+    if result.traceback:
+        for line in result.traceback.splitlines():
+            _typer.echo(_click.style(f"    {line}", fg="bright_black"), err=True)
 
 
 @app.command()
