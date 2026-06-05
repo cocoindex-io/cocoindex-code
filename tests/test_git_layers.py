@@ -847,3 +847,140 @@ async def test_overlay_prune_closes_cached_layer_projects_before_deleting(
     assert cached_project.closed is True
     assert "expired" not in registry._layer_project_cache  # noqa: SLF001
     assert not layer_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_layer_rebuild_closes_cached_project_before_deleting_layer_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cocoindex_code.layered_project import build_index_config_hash
+    from cocoindex_code.layers.layer_paths import LayerPaths
+    from cocoindex_code.layers.layer_stack import LayerStack
+    from cocoindex_code.version_control import resolve_worktree
+
+    _install_fake_layer_runtime(monkeypatch)
+    repo = _init_repo(tmp_path / "repo")
+    state_dir = tmp_path / "state"
+    store = LayerStore(state_dir / "daemon.db")
+    config_hash = build_index_config_hash(repo, indexing_params={}, query_params={})
+    worktree = resolve_worktree(repo, base_ref="main", index_config_hash=config_hash)
+    layer_id = "stale-layer"
+    paths = LayerPaths.for_layer(state_dir, worktree.repository.id, layer_id)
+    store.upsert_layer(
+        layer_id=layer_id,
+        repo_id=worktree.repository.id,
+        kind=LayerKind.DIRTY,
+        ref_name="main",
+        commit=worktree.branch.head_commit,
+        base_commit=worktree.branch.base_commit,
+        base_layer_id="base-layer",
+        source_dir=paths.source,
+        db_dir=paths.db_dir,
+        status="ready",
+        config_hash=config_hash,
+    )
+    paths.root.mkdir(parents=True)
+    stale_file = paths.root / "stale.txt"
+    stale_file.write_text("stale\n")
+
+    class _CachedProject:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    cached_project = _CachedProject()
+    project_cache: dict[str, Any] = {layer_id: cached_project}
+    stack = LayerStack(
+        project_root=repo,
+        state_dir=state_dir,
+        store=store,
+        embedder=object(),
+        indexing_params={},
+        query_params={},
+        chunker_registry={},
+        project_cache=project_cache,
+    )
+
+    await stack._ensure_layer(  # noqa: SLF001
+        worktree=worktree,
+        layer_id=layer_id,
+        kind=LayerKind.DIRTY,
+        ref_name="main",
+        commit=worktree.branch.head_commit,
+        base_commit=worktree.branch.base_commit,
+        merge_base=worktree.branch.merge_base,
+        base_layer_id="base-layer",
+        worktree_id=worktree.id,
+        config_hash=config_hash,
+        expires_at=0.0,
+        materialize=lambda source_dir: (source_dir / "fresh.txt").write_text("fresh\n"),
+        affected_paths=("fresh.txt",),
+        tombstoned_paths=(),
+        on_progress=None,
+    )
+
+    assert cached_project.closed is True
+    assert layer_id not in project_cache
+    assert not stale_file.exists()
+    assert (paths.source / "fresh.txt").exists()
+
+
+def test_layered_project_close_preserves_registry_owned_project_cache(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+
+    class _CachedProject:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    cached_project = _CachedProject()
+    project_cache: dict[str, Any] = {"layer": cached_project}
+    project = LayeredProject(
+        project_root=repo,
+        cwd=repo,
+        base_ref="main",
+        state_dir=tmp_path / "state",
+        store=LayerStore(tmp_path / "state" / "daemon.db"),
+        embedder=object(),
+        indexing_params={},
+        query_params={},
+        chunker_registry={},
+        project_cache=project_cache,
+        owns_project_cache=False,
+    )
+
+    project.close()
+
+    assert cached_project.closed is False
+    assert project_cache == {"layer": cached_project}
+
+
+def test_project_registry_remove_project_closes_all_matching_project_variants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cocoindex_code.daemon import ProjectRegistry
+
+    monkeypatch.setenv("COCOINDEX_CODE_STATE_DIR", str(tmp_path / "state"))
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    class _CachedProject:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    first = _CachedProject()
+    second = _CachedProject()
+    registry = ProjectRegistry(embedder=object())
+    registry._projects[f"{root.resolve()}\0{root.resolve()}\0"] = first  # noqa: SLF001
+    registry._projects[f"{root.resolve()}\0{root.resolve() / 'subdir'}\0main"] = second  # noqa: SLF001
+
+    assert registry.remove_project(str(root)) is True
+
+    assert first.closed is True
+    assert second.closed is True
+    assert registry._projects == {}  # noqa: SLF001

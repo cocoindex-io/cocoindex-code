@@ -358,7 +358,11 @@ class LayerStack:
             or not paths.target_sqlite.exists()
         ):
             built = True
-            shutil.rmtree(paths.root, ignore_errors=True)
+            cached_project = self.project_cache.pop(layer_id, None)
+            if cached_project is not None:
+                cached_project.close()
+            if paths.root.exists():
+                shutil.rmtree(paths.root)
             paths.source.mkdir(parents=True, exist_ok=True)
             paths.db_dir.mkdir(parents=True, exist_ok=True)
             self.store.upsert_layer(

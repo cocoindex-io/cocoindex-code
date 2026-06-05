@@ -61,6 +61,7 @@ class LayeredProject:
         query_params: dict[str, Any],
         chunker_registry: dict[str, Any],
         project_cache: dict[str, Project],
+        owns_project_cache: bool = True,
     ) -> None:
         self.project_root = project_root
         self.cwd = cwd
@@ -72,6 +73,7 @@ class LayeredProject:
         self.query_params = query_params
         self.chunker_registry = chunker_registry
         self.project_cache = project_cache
+        self.owns_project_cache = owns_project_cache
         self._stack = LayerStack(
             project_root=project_root,
             state_dir=state_dir,
@@ -96,8 +98,11 @@ class LayeredProject:
         return self._indexing_stats
 
     def close(self) -> None:
+        if not self.owns_project_cache:
+            return
         for project in self.project_cache.values():
             project.close()
+        self.project_cache.clear()
 
     async def ensure_indexing_started(self) -> None:
         if self._initial_index_done.is_set() or self._index_lock.locked():

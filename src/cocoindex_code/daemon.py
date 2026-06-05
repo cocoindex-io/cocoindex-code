@@ -207,6 +207,7 @@ class ProjectRegistry:
                     query_params=self.query_params,
                     chunker_registry=chunker_registry,
                     project_cache=self._layer_project_cache,
+                    owns_project_cache=False,
                 )
             self._projects[cache_key] = project
         return self._projects[cache_key]
@@ -217,12 +218,15 @@ class ProjectRegistry:
 
         prefix = f"{Path(project_root).resolve()}\0"
         keys = [key for key in self._projects if key.startswith(prefix) or key == project_root]
-        project = None
+        removed_projects: list[Project | LayeredProject] = []
         for key in keys:
             project = self._projects.pop(key, None)
-        if project is not None:
-            project.close()
-            del project
+            if project is not None:
+                removed_projects.append(project)
+        if removed_projects:
+            for project in removed_projects:
+                project.close()
+            del removed_projects
             gc.collect()
             return True
         return False
