@@ -275,3 +275,50 @@ def test_init_writes_comment_template_for_unknown_model(
     loaded = load_user_settings()
     assert loaded.embedding.indexing_params is None
     assert loaded.embedding.query_params is None
+
+
+# ---------------------------------------------------------------------------
+# Backend resolution (_resolve_backend) — U6
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_backend_flag_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Even on a TTY, an explicit flag skips the prompt.
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    backend, bits = cli._resolve_backend("turbo-quant", 2)
+    assert backend == "turbo-quant"
+    assert bits == 2
+
+
+def test_resolve_backend_non_tty_defaults_sqlite_vec(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    backend, bits = cli._resolve_backend(None, None)
+    assert backend == "sqlite-vec"
+    assert bits == 4  # DEFAULT_TQ_BITS
+
+
+def test_resolve_backend_flag_turbo_default_bits(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    backend, bits = cli._resolve_backend("turbo-quant", None)
+    assert backend == "turbo-quant"
+    assert bits == 4
+
+
+def test_init_rejects_invalid_backend() -> None:
+    from typer.testing import CliRunner
+
+    from cocoindex_code.cli import app
+
+    result = CliRunner().invoke(app, ["init", "--backend", "faiss"])
+    assert result.exit_code == 1
+    assert "unknown backend" in result.output
+
+
+def test_init_rejects_invalid_tq_bits() -> None:
+    from typer.testing import CliRunner
+
+    from cocoindex_code.cli import app
+
+    result = CliRunner().invoke(app, ["init", "--backend", "turbo-quant", "--tq-bits", "9"])
+    assert result.exit_code == 1
+    assert "tq_bits" in result.output

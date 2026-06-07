@@ -437,14 +437,22 @@ async def _check_index_status(project_root_str: str) -> DoctorCheckResult:
         return DoctorCheckResult(name="Index Status", ok=True, details=details, errors=[])
 
     try:
+        from .tq_store import index_table_name
+
         conn = coco_sqlite.connect(str(db_path), load_vec=True)
         try:
             with conn.readonly() as db:
-                total_chunks = db.execute("SELECT COUNT(*) FROM code_chunks_vec").fetchone()[0]
-                file_rows = db.execute("SELECT DISTINCT file_path FROM code_chunks_vec").fetchall()
+                table = index_table_name(db)
+                if table is None:
+                    details.append("Index not created yet.")
+                    return DoctorCheckResult(
+                        name="Index Status", ok=True, details=details, errors=[]
+                    )
+                total_chunks = db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                file_rows = db.execute(f"SELECT DISTINCT file_path FROM {table}").fetchall()
                 total_files = len(file_rows)
                 lang_rows = db.execute(
-                    "SELECT language, COUNT(*) FROM code_chunks_vec GROUP BY language"
+                    f"SELECT language, COUNT(*) FROM {table} GROUP BY language"
                 ).fetchall()
                 languages = {row[0]: row[1] for row in lang_rows}
         finally:

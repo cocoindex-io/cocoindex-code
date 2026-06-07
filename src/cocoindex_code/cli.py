@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 
 from .settings import (
     DEFAULT_ST_MODEL,
+    DEFAULT_TQ_BITS,
+    SUPPORTED_TQ_BITS,
+    Backend,
     EmbeddingSettings,
     cocoindex_db_path,
     default_project_settings,
@@ -34,6 +37,8 @@ from .settings import (
     save_project_settings,
     target_sqlite_db_path,
     user_settings_path,
+    validate_backend,
+    validate_tq_bits,
 )
 
 app = _typer.Typer(
@@ -383,6 +388,53 @@ def _resolve_embedding_choice(
     return EmbeddingSettings(provider=provider, model=model.strip())
 
 
+def _resolve_backend(backend_flag: str | None, tq_bits_flag: int | None) -> tuple[Backend, int]:
+    """Resolve (backend, tq_bits) from flags, an interactive prompt, or defaults.
+
+    Explicit ``--backend`` wins. Otherwise prompt when stdin is a TTY; when not
+    interactive, fall back to the default backend (sqlite-vec).
+    """
+    bits = validate_tq_bits(tq_bits_flag) if tq_bits_flag is not None else DEFAULT_TQ_BITS
+
+    if backend_flag is not None:
+        return validate_backend(backend_flag), bits
+
+    if not sys.stdin.isatty():
+        return "sqlite-vec", bits
+
+    import questionary
+
+    backend = questionary.select(
+        "Vector backend",
+        choices=[
+            questionary.Choice(
+                title="sqlite-vec (default, exact nearest-neighbor)",
+                value="sqlite-vec",
+            ),
+            questionary.Choice(
+                title="turbo-quant (compressed, ~4-8x smaller index)",
+                value="turbo-quant",
+            ),
+        ],
+    ).ask()
+    if backend is None:  # cancelled
+        raise _typer.Exit(code=1)
+
+    if backend == "turbo-quant" and tq_bits_flag is None:
+        answer = questionary.select(
+            "TurboQuant bit-width (higher = better recall, larger index)",
+            # Choice titles are strings; values are ints. The default must match a
+            # choice *value* (int), not its title (str).
+            choices=[questionary.Choice(title=str(b), value=b) for b in SUPPORTED_TQ_BITS],
+            default=DEFAULT_TQ_BITS,  # type: ignore[arg-type]
+        ).ask()
+        if answer is None:
+            raise _typer.Exit(code=1)
+        bits = validate_tq_bits(answer)
+
+    return validate_backend(backend), bits
+
+
 def _ok_fail_tag(ok: bool) -> str:
     """Return a colored `[OK]` or `[FAIL]` tag string."""
     import click as _click
@@ -484,9 +536,33 @@ def init(
         "--litellm-model",
         help="Use the given LiteLLM model and skip provider/model prompts.",
     ),
+    backend: str | None = _typer.Option(
+        None,
+        "--backend",
+        help="Vector backend: 'sqlite-vec' (default, exact) or 'turbo-quant' (compressed).",
+    ),
+    tq_bits: int | None = _typer.Option(
+        None,
+        "--tq-bits",
+        help=f"TurboQuant bit-width {list(SUPPORTED_TQ_BITS)} (only for --backend turbo-quant).",
+    ),
     force: bool = _typer.Option(False, "-f", "--force", help="Skip parent directory warning"),
 ) -> None:
     """Initialize a project for cocoindex-code."""
+    # Validate backend flags early so bad input fails before any side effects.
+    if backend is not None:
+        try:
+            validate_backend(backend)
+        except ValueError as e:
+            _typer.echo(f"Error: {e}", err=True)
+            raise _typer.Exit(code=1) from e
+    if tq_bits is not None:
+        try:
+            validate_tq_bits(tq_bits)
+        except ValueError as e:
+            _typer.echo(f"Error: {e}", err=True)
+            raise _typer.Exit(code=1) from e
+
     cwd = Path.cwd().resolve()
     settings_file = project_settings_path(cwd)
 
@@ -520,9 +596,19 @@ def init(
             )
             raise _typer.Exit(code=1)
 
+    # Resolve the vector backend: explicit flag wins; otherwise prompt when
+    # interactive; otherwise fall back to the default (sqlite-vec).
+    resolved_backend, resolved_bits = _resolve_backend(backend, tq_bits)
+
     # Create project settings
-    save_project_settings(cwd, default_project_settings())
+    project_settings = default_project_settings()
+    project_settings.backend = resolved_backend
+    project_settings.tq_bits = resolved_bits
+    save_project_settings(cwd, project_settings)
     _typer.echo(f"Created project settings: {format_path_for_display(settings_file)}")
+    _typer.echo(f"Vector backend: {resolved_backend}")
+    if resolved_backend == "turbo-quant":
+        _typer.echo(f"TurboQuant bit-width: {resolved_bits}")
 
     # Add to .gitignore
     add_to_gitignore(cwd)

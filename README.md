@@ -166,7 +166,7 @@ The background daemon starts automatically on first use.
 
 | Command | Description |
 |---------|-------------|
-| `ccc init` | Initialize a project — creates settings files, adds `.cocoindex_code/` to `.gitignore` |
+| `ccc init` | Initialize a project — creates settings files, adds `.cocoindex_code/` to `.gitignore`. Use `--backend turbo-quant` (with `--tq-bits`) to pick the compressed backend; see [Vector Backends](#vector-backends) |
 | `ccc index` | Build or update the index (auto-inits if needed). Shows streaming progress. |
 | `ccc search <query>` | Semantic search across the codebase |
 | `ccc status` | Show index stats (chunk count, file count, language breakdown) |
@@ -188,6 +188,34 @@ ccc search --refresh database schema                 # update index first, then 
 ```
 
 By default, `ccc search` scopes results to your current working directory (relative to the project root). Use `--path` to override.
+
+## Vector Backends
+
+`ccc` supports two vector-search backends, chosen at `ccc init` and baked into the index:
+
+| Backend | Index size | Search | Best for |
+|---------|-----------|--------|----------|
+| `sqlite-vec` (default) | full `float32` | exact KNN ([sqlite-vec](https://github.com/asg017/sqlite-vec)) | most projects — fastest, exact results |
+| `turbo-quant` | ~4–8× smaller | approximate, unbiased inner-product | large codebases where index size matters |
+
+**TurboQuant** is a data-oblivious vector quantizer ([Zandieh et al., 2025](https://arxiv.org/abs/2504.19874)): it randomly rotates each embedding, quantizes per coordinate with optimal scalar codebooks, and adds a 1-bit QJL residual for an unbiased inner-product estimate. At 4-bit it compresses the index ~8× on disk with recall@10 ≈ 0.9, with no training or calibration.
+
+```bash
+ccc init                                  # interactive — prompts for backend
+ccc init --backend turbo-quant            # 4-bit (default bit-width)
+ccc init --backend turbo-quant --tq-bits 2  # 2-bit — ~16× smaller, lower recall
+ccc init --backend sqlite-vec             # explicit default
+```
+
+Switching backends requires re-initializing and re-indexing:
+
+```bash
+ccc reset --all -f
+ccc init --backend turbo-quant
+ccc index
+```
+
+> Higher `--tq-bits` (1–4) means better recall and a larger index. `sqlite-vec` stays the default for exact, low-latency search.
 
 ## Docker
 
@@ -438,6 +466,9 @@ OpenAI embeddings (`text-embedding-3-*`, `text-embedding-ada-002`) are intention
 Per-project. Controls which files to index.
 
 ```yaml
+backend: sqlite-vec        # or "turbo-quant" — see Vector Backends
+tq_bits: 4                 # TurboQuant bit-width (1–4); only used when backend is turbo-quant
+
 include_patterns:
   - "**/*.py"
   - "**/*.js"
@@ -461,6 +492,8 @@ chunkers:
   - ext: toml              # use a custom chunker for .toml files
     module: example_toml_chunker:toml_chunker
 ```
+
+> `backend` is set at `ccc init` and baked into the index — changing it requires re-indexing (see [Vector Backends](#vector-backends)).
 
 > `.cocoindex_code/` is automatically added to `.gitignore` during init.
 

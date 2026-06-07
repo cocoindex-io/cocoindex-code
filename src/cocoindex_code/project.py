@@ -27,6 +27,7 @@ from .settings import (
     cocoindex_db_path as _cocoindex_db_path,
 )
 from .settings import (
+    load_project_settings,
     resolve_db_dir,
 )
 from .settings import (
@@ -38,6 +39,7 @@ from .shared import (
     INDEXING_EMBED_PARAMS,
     QUERY_EMBED_PARAMS,
     SQLITE_DB,
+    TURBO_QUANT,
     Embedder,
 )
 
@@ -211,16 +213,21 @@ class Project:
 
     def get_status(self) -> ProjectStatusResponse:
         """Get index stats by querying the SQLite database."""
+        from .tq_store import index_table_name
+
         db = self._env.get_context(SQLITE_DB)
         index_exists = True
         try:
             with db.readonly() as conn:
-                total_chunks = conn.execute("SELECT COUNT(*) FROM code_chunks_vec").fetchone()[0]
+                table = index_table_name(conn)
+                if table is None:
+                    raise sqlite3.OperationalError("no index table")
+                total_chunks = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 total_files = conn.execute(
-                    "SELECT COUNT(DISTINCT file_path) FROM code_chunks_vec"
+                    f"SELECT COUNT(DISTINCT file_path) FROM {table}"
                 ).fetchone()[0]
                 lang_rows = conn.execute(
-                    "SELECT language, COUNT(*) as cnt FROM code_chunks_vec"
+                    f"SELECT language, COUNT(*) as cnt FROM {table}"
                     " GROUP BY language ORDER BY cnt DESC"
                 ).fetchall()
         except sqlite3.OperationalError:
@@ -300,6 +307,20 @@ class Project:
         context.provide(INDEXING_EMBED_PARAMS, dict(indexing_params))
         context.provide(QUERY_EMBED_PARAMS, dict(query_params))
         context.provide(CHUNKER_REGISTRY, dict(chunker_registry) if chunker_registry else {})
+
+        # TurboQuant backend: build the quantizer once (dimension probed from the
+        # embedder) and make it available to the indexer and query paths. The
+        # seed is fixed so the rotation/QJL matrices are reproducible across the
+        # daemon's lifetime and recorded in tq_metadata at index time.
+        backend = load_project_settings(project_root).backend
+        if backend == "turbo-quant":
+            from .turbo_quant import TurboQuant
+
+            ps = load_project_settings(project_root)
+            probe = await embedder.embed("dimension probe", **dict(indexing_params))
+            dim = len(probe)
+            tq = TurboQuant(dim=dim, bits=ps.tq_bits, seed=0)
+            context.provide(TURBO_QUANT, tq)
 
         env = coco.Environment(settings, context_provider=context)
         app = coco.App(

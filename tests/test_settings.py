@@ -99,6 +99,62 @@ def test_save_and_load_project_settings(tmp_path: Path) -> None:
     assert loaded.language_overrides[0].lang == "php"
 
 
+def test_backend_defaults_to_sqlite_vec(tmp_path: Path) -> None:
+    settings = ProjectSettings()
+    assert settings.backend == "sqlite-vec"
+    assert settings.tq_bits == 4
+    save_project_settings(tmp_path, settings)
+    loaded = load_project_settings(tmp_path)
+    assert loaded.backend == "sqlite-vec"
+
+
+def test_turbo_quant_backend_round_trip(tmp_path: Path) -> None:
+    settings = ProjectSettings(backend="turbo-quant", tq_bits=2)
+    save_project_settings(tmp_path, settings)
+    loaded = load_project_settings(tmp_path)
+    assert loaded.backend == "turbo-quant"
+    assert loaded.tq_bits == 2
+
+
+def test_missing_backend_key_loads_as_sqlite_vec() -> None:
+    """A pre-backend settings file (no backend key) defaults safely."""
+    from cocoindex_code.settings import _project_settings_from_dict
+
+    loaded = _project_settings_from_dict({"include_patterns": ["**/*.py"]})
+    assert loaded.backend == "sqlite-vec"
+    assert loaded.tq_bits == 4
+
+
+def test_invalid_backend_raises() -> None:
+    from cocoindex_code.settings import _project_settings_from_dict
+
+    with pytest.raises(ValueError, match="unknown backend"):
+        _project_settings_from_dict({"backend": "faiss"})
+
+
+@pytest.mark.parametrize("bad_bits", [0, 5, -1, 8])
+def test_invalid_tq_bits_raises(bad_bits: int) -> None:
+    from cocoindex_code.settings import _project_settings_from_dict
+
+    with pytest.raises(ValueError, match="tq_bits"):
+        _project_settings_from_dict({"backend": "turbo-quant", "tq_bits": bad_bits})
+
+
+def test_tq_bits_omitted_for_sqlite_vec(tmp_path: Path) -> None:
+    """tq_bits is not written to disk for the sqlite-vec backend."""
+    import yaml
+
+    from cocoindex_code.settings import (
+        _SETTINGS_DIR_NAME,
+        _SETTINGS_FILE_NAME,
+    )
+
+    save_project_settings(tmp_path, ProjectSettings(backend="sqlite-vec"))
+    raw = yaml.safe_load((tmp_path / _SETTINGS_DIR_NAME / _SETTINGS_FILE_NAME).read_text())
+    assert raw["backend"] == "sqlite-vec"
+    assert "tq_bits" not in raw
+
+
 @pytest.mark.usefixtures("_patch_user_dir")
 def test_load_user_settings_missing_file_raises() -> None:
     with pytest.raises(FileNotFoundError):

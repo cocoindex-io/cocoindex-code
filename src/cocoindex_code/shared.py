@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from cocoindex.ops.litellm import LiteLLMEmbedder
     from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
+    from .turbo_quant import TurboQuant  # noqa: F401  (used in ContextKey string annotation)
+
 from .settings import EmbeddingSettings
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,8 @@ SQLITE_DB = coco.ContextKey[sqlite.ManagedConnection]("index_db")
 CODEBASE_DIR = coco.ContextKey[pathlib.Path]("codebase")
 INDEXING_EMBED_PARAMS = coco.ContextKey[dict[str, Any]]("indexing_embed_params")
 QUERY_EMBED_PARAMS = coco.ContextKey[dict[str, Any]]("query_embed_params")
+# TurboQuant quantizer for the active index (only set when backend=turbo-quant).
+TURBO_QUANT = coco.ContextKey["TurboQuant"]("turbo_quant")
 
 
 def is_sentence_transformers_installed() -> bool:
