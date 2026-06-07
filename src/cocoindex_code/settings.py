@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 import yaml as _yaml
 
@@ -122,12 +122,27 @@ class ChunkerMapping:
     module: str  # "module.path:callable", e.g. "cocoindex_code.toml_chunker:toml_chunker"
 
 
+# Vector-search backend identifiers. ``sqlite-vec`` is the default (raw float32
+# in a vec0 virtual table, C KNN). ``turbo-quant`` uses the TurboQuant compressed
+# backend (see ``turbo_quant.py`` / ``tq_store.py``).
+Backend = Literal["sqlite-vec", "turbo-quant"]
+DEFAULT_BACKEND: Backend = "sqlite-vec"
+SUPPORTED_BACKENDS: tuple[Backend, ...] = get_args(Backend)
+# TurboQuant bit-widths we support end-to-end (mirrors turbo_quant.SUPPORTED_BITS).
+SUPPORTED_TQ_BITS: tuple[int, ...] = (1, 2, 3, 4)
+DEFAULT_TQ_BITS = 4
+
+
 @dataclass
 class ProjectSettings:
     include_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_INCLUDED_PATTERNS))
     exclude_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDED_PATTERNS))
     language_overrides: list[LanguageOverride] = field(default_factory=list)
     chunkers: list[ChunkerMapping] = field(default_factory=list)
+    # Vector-search backend baked into the index at ``ccc init``.
+    backend: Backend = DEFAULT_BACKEND
+    # TurboQuant target bit-width (only meaningful when backend == "turbo-quant").
+    tq_bits: int = DEFAULT_TQ_BITS
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +474,23 @@ def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
     return UserSettings(embedding=embedding, envs=envs)
 
 
+def validate_backend(backend: Any) -> Backend:
+    """Validate a backend identifier, raising ``ValueError`` if unknown."""
+    if backend not in SUPPORTED_BACKENDS:
+        raise ValueError(
+            f"unknown backend {backend!r}; expected one of {list(SUPPORTED_BACKENDS)}"
+        )
+    # Narrowed to the Literal by the membership check above.
+    return cast(Backend, backend)
+
+
+def validate_tq_bits(bits: Any) -> int:
+    """Validate a TurboQuant bit-width, raising ``ValueError`` if unsupported."""
+    if not isinstance(bits, int) or isinstance(bits, bool) or bits not in SUPPORTED_TQ_BITS:
+        raise ValueError(f"tq_bits must be one of {list(SUPPORTED_TQ_BITS)}, got {bits!r}")
+    return bits
+
+
 def _project_settings_to_dict(settings: ProjectSettings) -> dict[str, Any]:
     d: dict[str, Any] = {
         "include_patterns": settings.include_patterns,
@@ -470,6 +502,11 @@ def _project_settings_to_dict(settings: ProjectSettings) -> dict[str, Any]:
         ]
     if settings.chunkers:
         d["chunkers"] = [{"ext": cm.ext, "module": cm.module} for cm in settings.chunkers]
+    # Always persist the backend so an index records how it was built. tq_bits is
+    # only meaningful for turbo-quant, so omit it otherwise to keep files clean.
+    d["backend"] = settings.backend
+    if settings.backend == "turbo-quant":
+        d["tq_bits"] = settings.tq_bits
     return d
 
 
@@ -478,11 +515,16 @@ def _project_settings_from_dict(d: dict[str, Any]) -> ProjectSettings:
         LanguageOverride(ext=lo["ext"], lang=lo["lang"]) for lo in d.get("language_overrides", [])
     ]
     chunkers = [ChunkerMapping(ext=cm["ext"], module=cm["module"]) for cm in d.get("chunkers", [])]
+    # Missing backend -> sqlite-vec (backward compatible with pre-backend files).
+    backend = validate_backend(d.get("backend", DEFAULT_BACKEND))
+    tq_bits = validate_tq_bits(d.get("tq_bits", DEFAULT_TQ_BITS))
     return ProjectSettings(
         include_patterns=d.get("include_patterns", list(DEFAULT_INCLUDED_PATTERNS)),
         exclude_patterns=d.get("exclude_patterns", list(DEFAULT_EXCLUDED_PATTERNS)),
         language_overrides=overrides,
         chunkers=chunkers,
+        backend=backend,
+        tq_bits=tq_bits,
     )
 
 

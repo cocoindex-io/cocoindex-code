@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path, PurePath
+from typing import Any
 
 import cocoindex as coco
 from cocoindex.connectors import localfs, sqlite
@@ -15,14 +16,17 @@ from cocoindex.resources.id import IdGenerator
 from pathspec import GitIgnoreSpec
 
 from .chunking import CHUNKER_REGISTRY
+from .schema import TqChunkRow
 from .settings import load_gitignore_spec, load_project_settings
 from .shared import (
     CODEBASE_DIR,
     EMBEDDER,
     INDEXING_EMBED_PARAMS,
     SQLITE_DB,
+    TURBO_QUANT,
     CodeChunk,
 )
+from .tq_store import TQ_TABLE, quantize_row
 
 # Chunking configuration
 CHUNK_SIZE = 1000
@@ -137,9 +141,14 @@ class GitignoreAwareMatcher(FilePathMatcher):
 @coco.fn(memo=True)
 async def process_file(
     file: localfs.File,
-    table: sqlite.TableTarget[CodeChunk],
+    table: sqlite.TableTarget[Any],
 ) -> None:
-    """Process a single file: chunk, embed, and store."""
+    """Process a single file: chunk, embed, and store.
+
+    The stored row type depends on the project backend: ``CodeChunk`` (raw
+    float32 in vec0) for sqlite-vec, or ``TqChunkRow`` (quantized) for
+    turbo-quant. ``table`` is the matching target built by ``indexer_main``.
+    """
     embedder = coco.use_context(EMBEDDER)
     indexing_params = coco.use_context(INDEXING_EMBED_PARAMS)
 
@@ -177,19 +186,37 @@ async def process_file(
         )
 
     id_gen = IdGenerator()
+    backend = ps.backend
+    tq = coco.use_context(TURBO_QUANT) if backend == "turbo-quant" else None
 
     async def process(chunk: Chunk) -> None:
-        table.declare_row(
-            row=CodeChunk(
-                id=await id_gen.next_id(chunk.text),
-                file_path=file.file_path.path.as_posix(),
-                language=language,
-                content=chunk.text,
-                start_line=chunk.start.line,
-                end_line=chunk.end.line,
-                embedding=await embedder.embed(chunk.text, **indexing_params),
+        chunk_id = await id_gen.next_id(chunk.text)
+        embedding = await embedder.embed(chunk.text, **indexing_params)
+        if tq is not None:
+            table.declare_row(
+                row=quantize_row(
+                    tq,
+                    chunk_id=chunk_id,
+                    file_path=file.file_path.path.as_posix(),
+                    language=language,
+                    content=chunk.text,
+                    start_line=chunk.start.line,
+                    end_line=chunk.end.line,
+                    embedding=embedding,
+                )
             )
-        )
+        else:
+            table.declare_row(
+                row=CodeChunk(
+                    id=chunk_id,
+                    file_path=file.file_path.path.as_posix(),
+                    language=language,
+                    content=chunk.text,
+                    start_line=chunk.start.line,
+                    end_line=chunk.end.line,
+                    embedding=embedding,
+                )
+            )
 
     await coco.map(process, chunks)
 
@@ -201,18 +228,40 @@ async def indexer_main() -> None:
     ps = load_project_settings(project_root)
     gitignore_spec = load_gitignore_spec(project_root)
 
-    table = await sqlite.mount_table_target(
-        db=SQLITE_DB,
-        table_name="code_chunks_vec",
-        table_schema=await sqlite.TableSchema.from_class(
-            CodeChunk,
-            primary_key=["id"],
-        ),
-        virtual_table_def=Vec0TableDef(
-            partition_key_columns=["language"],
-            auxiliary_columns=["file_path", "content", "start_line", "end_line"],
-        ),
-    )
+    table: sqlite.TableTarget[Any]
+    if ps.backend == "turbo-quant":
+        tq = coco.use_context(TURBO_QUANT)
+        # Persist index metadata (bits/dim/seed) so the store can regenerate the
+        # rotation/QJL matrices at query time.
+        db = coco.use_context(SQLITE_DB)
+        from .tq_store import create_metadata_table, write_metadata
+
+        # The chunk table itself is created by mount_table_target below; here we
+        # only own the side metadata table.
+        with db.transaction() as conn:
+            create_metadata_table(conn)
+            write_metadata(conn, bits=tq.bits, dim=tq.dim, seed=tq.seed)
+        table = await sqlite.mount_table_target(
+            db=SQLITE_DB,
+            table_name=TQ_TABLE,
+            table_schema=await sqlite.TableSchema.from_class(
+                TqChunkRow,
+                primary_key=["id"],
+            ),
+        )
+    else:
+        table = await sqlite.mount_table_target(
+            db=SQLITE_DB,
+            table_name="code_chunks_vec",
+            table_schema=await sqlite.TableSchema.from_class(
+                CodeChunk,
+                primary_key=["id"],
+            ),
+            virtual_table_def=Vec0TableDef(
+                partition_key_columns=["language"],
+                auxiliary_columns=["file_path", "content", "start_line", "end_line"],
+            ),
+        )
 
     base_matcher = PatternFilePathMatcher(
         included_patterns=ps.include_patterns,

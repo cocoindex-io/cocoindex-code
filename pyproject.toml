@@ -107,10 +107,11 @@ files = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-python_files = ["test_*.py"]
+python_files = ["test_*.py", "benchmark_*.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short -m 'not docker_e2e'"
+addopts = "-v --tb=short -m 'not docker_e2e and not benchmark'"
 asyncio_mode = "auto"
 markers = [
     "docker_e2e: requires Docker; builds the image and runs containerized E2E tests. Run with: pytest -m docker_e2e",
+    "benchmark: TurboQuant vs sqlite-vec benchmark; prints a metrics table. Run with: pytest -m benchmark -s",
 ]

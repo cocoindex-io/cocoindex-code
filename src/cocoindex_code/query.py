@@ -5,10 +5,13 @@ from __future__ import annotations
 import heapq
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .schema import QueryResult
 from .shared import EMBEDDER, QUERY_EMBED_PARAMS, SQLITE_DB
+
+if TYPE_CHECKING:
+    from .tq_store import TqStore
 
 
 def _l2_to_score(distance: float) -> float:
@@ -82,6 +85,52 @@ def _full_scan_query(
     ).fetchall()
 
 
+# Process-lifetime cache of loaded TurboQuant stores, keyed by the DB connection
+# identity. Loading a store decodes every quantized row into NumPy arrays, which
+# is the dominant query cost at scale; the daemon is long-lived and the index
+# only changes on re-index, so we cache the loaded store and reuse it across
+# queries. The cache is invalidated when the chunk table's row count changes
+# (re-index replaces rows), which is a cheap COUNT(*) check per query.
+_STORE_CACHE: dict[int, tuple[int, TqStore]] = {}
+
+
+def _maybe_query_turbo_quant(
+    db: Any,
+    query_embedding: Any,
+    limit: int,
+    offset: int,
+    languages: list[str] | None,
+    paths: list[str] | None,
+) -> list[QueryResult] | None:
+    """Run a TurboQuant search if the DB is a turbo-quant index, else ``None``.
+
+    The loaded store is cached for the life of the daemon process and reused
+    across queries; it is reloaded only when the index's row count changes. The
+    store regenerates its rotation/QJL matrices from the persisted seed, so no
+    matrices are read from disk.
+    """
+    from .tq_store import TQ_TABLE, TqStore, read_metadata
+
+    cache_key = id(db)
+    with db.readonly() as conn:
+        if read_metadata(conn) is None:
+            return None
+        row_count = conn.execute(f"SELECT COUNT(*) FROM {TQ_TABLE}").fetchone()[0]
+        cached = _STORE_CACHE.get(cache_key)
+        if cached is not None and cached[0] == row_count:
+            store = cached[1]
+        else:
+            store = TqStore.load(conn)
+            _STORE_CACHE[cache_key] = (row_count, store)
+    return store.search(
+        query_embedding,
+        limit=limit,
+        offset=offset,
+        languages=languages,
+        paths=paths,
+    )
+
+
 async def query_codebase(
     query: str,
     target_sqlite_db_path: Path,
@@ -110,6 +159,15 @@ async def query_codebase(
 
     # Generate query embedding.
     query_embedding = await embedder.embed(query, **query_params)
+
+    # TurboQuant backend: search the compressed store with the unbiased
+    # inner-product estimator. Detected by the presence of tq_metadata, so the
+    # query path does not need the project settings at hand.
+    tq_results = _maybe_query_turbo_quant(
+        db, query_embedding, limit, offset, languages, paths
+    )
+    if tq_results is not None:
+        return tq_results
 
     embedding_bytes = query_embedding.astype("float32").tobytes()
 
