@@ -98,21 +98,25 @@ def test_benchmark_report() -> None:
 
     # Exact float32 ground truth (brute force).
     def exact_topk(q: np.ndarray, k: int) -> list[int]:
-        return np.argsort(-(embs @ q))[:k].tolist()
+        return [int(i) for i in np.argsort(-(embs @ q))[:k]]
 
     raw_float32_bytes = n * dim * 4  # sqlite-vec stores raw float32
 
     print(f"\n=== TurboQuant benchmark — n={n} chunks, dim={dim} ===")
-    print(f"{'backend':<16}{'size(MB)':>10}{'ratio':>8}{'mem(MB)':>10}"
-          f"{'q-lat(ms)':>11}{'recall@1':>10}{'recall@10':>11}")
+    print(
+        f"{'backend':<16}{'size(MB)':>10}{'ratio':>8}{'mem(MB)':>10}"
+        f"{'q-lat(ms)':>11}{'recall@1':>10}{'recall@10':>11}"
+    )
 
     # Float32 baseline latency (numpy brute force == exact).
     t0 = time.perf_counter()
     for qi in query_ids:
         exact_topk(embs[qi], 10)
     f32_lat = (time.perf_counter() - t0) / len(query_ids) * 1000
-    print(f"{'float32(exact)':<16}{raw_float32_bytes/1e6:>10.2f}{1.0:>8.1f}"
-          f"{raw_float32_bytes/1e6:>10.2f}{f32_lat:>11.3f}{1.0:>10.3f}{1.0:>11.3f}")
+    print(
+        f"{'float32(exact)':<16}{raw_float32_bytes / 1e6:>10.2f}{1.0:>8.1f}"
+        f"{raw_float32_bytes / 1e6:>10.2f}{f32_lat:>11.3f}{1.0:>10.3f}{1.0:>11.3f}"
+    )
 
     results = {}
     for bits in (2, 4):
@@ -139,12 +143,16 @@ def test_benchmark_report() -> None:
         recall10 = float(np.mean(r10))
         ratio = raw_float32_bytes / disk if disk else float("inf")
         results[bits] = (ratio, recall1, recall10)
-        print(f"{'turbo-quant b' + str(bits):<16}{disk/1e6:>10.2f}{ratio:>8.1f}"
-              f"{mem/1e6:>10.2f}{lat:>11.3f}{recall1:>10.3f}{recall10:>11.3f}")
+        print(
+            f"{'turbo-quant b' + str(bits):<16}{disk / 1e6:>10.2f}{ratio:>8.1f}"
+            f"{mem / 1e6:>10.2f}{lat:>11.3f}{recall1:>10.3f}{recall10:>11.3f}"
+        )
         conn.close()
 
-    print("\nTakeaway: TurboQuant wins on index size + memory; float32 wins on "
-          "query latency (numpy/C exact scan). Recall stays high at 4-bit.\n")
+    print(
+        "\nTakeaway: TurboQuant wins on index size + memory; float32 wins on "
+        "query latency (numpy/C exact scan). Recall stays high at 4-bit.\n"
+    )
 
     # Soft regression gates.
     ratio4, _, recall10_4 = results[4]

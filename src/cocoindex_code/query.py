@@ -163,9 +163,7 @@ async def query_codebase(
     # TurboQuant backend: search the compressed store with the unbiased
     # inner-product estimator. Detected by the presence of tq_metadata, so the
     # query path does not need the project settings at hand.
-    tq_results = _maybe_query_turbo_quant(
-        db, query_embedding, limit, offset, languages, paths
-    )
+    tq_results = _maybe_query_turbo_quant(db, query_embedding, limit, offset, languages, paths)
     if tq_results is not None:
         return tq_results
 

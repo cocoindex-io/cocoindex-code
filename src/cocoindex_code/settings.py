@@ -477,9 +477,7 @@ def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
 def validate_backend(backend: Any) -> Backend:
     """Validate a backend identifier, raising ``ValueError`` if unknown."""
     if backend not in SUPPORTED_BACKENDS:
-        raise ValueError(
-            f"unknown backend {backend!r}; expected one of {list(SUPPORTED_BACKENDS)}"
-        )
+        raise ValueError(f"unknown backend {backend!r}; expected one of {list(SUPPORTED_BACKENDS)}")
     # Narrowed to the Literal by the membership check above.
     return cast(Backend, backend)
 

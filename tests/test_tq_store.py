@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
+from collections.abc import Iterator
 
 import numpy as np
 import pytest
@@ -28,7 +29,15 @@ def _unit(rng: np.random.Generator, d: int) -> np.ndarray:
     return v / np.linalg.norm(v)
 
 
-def _build_index(conn, embeddings, *, languages=None, file_paths=None, seed=_SEED, bits=_BITS):
+def _build_index(
+    conn: sqlite3.Connection,
+    embeddings: list[np.ndarray],
+    *,
+    languages: list[str] | None = None,
+    file_paths: list[str] | None = None,
+    seed: int = _SEED,
+    bits: int = _BITS,
+) -> TurboQuant:
     """Quantize and persist a list of embeddings; return the TurboQuant used."""
     tq = TurboQuant(dim=_DIM, bits=bits, seed=seed)
     create_tables(conn)
@@ -54,13 +63,13 @@ def _build_index(conn, embeddings, *, languages=None, file_paths=None, seed=_SEE
 
 
 @pytest.fixture()
-def conn():
+def conn() -> Iterator[sqlite3.Connection]:
     c = sqlite3.connect(":memory:")
     yield c
     c.close()
 
 
-def test_persist_load_search_finds_nearest(conn) -> None:
+def test_persist_load_search_finds_nearest(conn: sqlite3.Connection) -> None:
     rng = np.random.default_rng(1)
     embs = [_unit(rng, _DIM) for _ in range(50)]
     _build_index(conn, embs)
@@ -75,7 +84,7 @@ def test_persist_load_search_finds_nearest(conn) -> None:
     assert results[0].content == f"chunk {target}"
 
 
-def test_scores_descending(conn) -> None:
+def test_scores_descending(conn: sqlite3.Connection) -> None:
     rng = np.random.default_rng(2)
     embs = [_unit(rng, _DIM) for _ in range(30)]
     _build_index(conn, embs)
@@ -85,7 +94,7 @@ def test_scores_descending(conn) -> None:
     assert scores == sorted(scores, reverse=True)
 
 
-def test_language_filter(conn) -> None:
+def test_language_filter(conn: sqlite3.Connection) -> None:
     rng = np.random.default_rng(3)
     embs = [_unit(rng, _DIM) for _ in range(30)]
     langs = ["python" if i % 2 == 0 else "go" for i in range(30)]
@@ -96,7 +105,7 @@ def test_language_filter(conn) -> None:
     assert len(results) == 15
 
 
-def test_multi_language_filter(conn) -> None:
+def test_multi_language_filter(conn: sqlite3.Connection) -> None:
     rng = np.random.default_rng(4)
     embs = [_unit(rng, _DIM) for _ in range(30)]
     langs = ["python", "go", "rust"] * 10
@@ -107,7 +116,7 @@ def test_multi_language_filter(conn) -> None:
     assert len(results) == 20
 
 
-def test_path_filter(conn) -> None:
+def test_path_filter(conn: sqlite3.Connection) -> None:
     rng = np.random.default_rng(5)
     embs = [_unit(rng, _DIM) for _ in range(20)]
     fps = [f"src/{i}.py" if i < 10 else f"tests/{i}.py" for i in range(20)]
@@ -118,7 +127,7 @@ def test_path_filter(conn) -> None:
     assert len(results) == 10
 
 
-def test_combined_language_and_path_filter(conn) -> None:
+def test_combined_language_and_path_filter(conn: sqlite3.Connection) -> None:
     rng = np.random.default_rng(6)
     embs = [_unit(rng, _DIM) for _ in range(20)]
     langs = ["python" if i % 2 == 0 else "go" for i in range(20)]
@@ -131,7 +140,7 @@ def test_combined_language_and_path_filter(conn) -> None:
         assert r.file_path.startswith("src/")
 
 
-def test_offset_and_limit(conn) -> None:
+def test_offset_and_limit(conn: sqlite3.Connection) -> None:
     rng = np.random.default_rng(7)
     embs = [_unit(rng, _DIM) for _ in range(40)]
     _build_index(conn, embs)
@@ -142,7 +151,7 @@ def test_offset_and_limit(conn) -> None:
     assert [r.content for r in full[5:10]] == [r.content for r in paged]
 
 
-def test_empty_candidate_set_returns_empty(conn) -> None:
+def test_empty_candidate_set_returns_empty(conn: sqlite3.Connection) -> None:
     rng = np.random.default_rng(8)
     embs = [_unit(rng, _DIM) for _ in range(10)]
     _build_index(conn, embs, languages=["python"] * 10)
@@ -150,7 +159,7 @@ def test_empty_candidate_set_returns_empty(conn) -> None:
     assert store.search(embs[0], limit=10, languages=["haskell"]) == []
 
 
-def test_empty_store_returns_empty(conn) -> None:
+def test_empty_store_returns_empty(conn: sqlite3.Connection) -> None:
     create_tables(conn)
     write_metadata(conn, bits=_BITS, dim=_DIM, seed=_SEED)
     store = TqStore.load(conn)
@@ -158,7 +167,7 @@ def test_empty_store_returns_empty(conn) -> None:
     assert store.search(np.ones(_DIM, dtype=np.float32), limit=5) == []
 
 
-def test_reload_matches_in_memory_search(conn) -> None:
+def test_reload_matches_in_memory_search(conn: sqlite3.Connection) -> None:
     """Search after reload (matrices regenerated from seed) matches first load."""
     rng = np.random.default_rng(9)
     embs = [_unit(rng, _DIM) for _ in range(25)]
@@ -171,7 +180,7 @@ def test_reload_matches_in_memory_search(conn) -> None:
     assert [round(x.score, 5) for x in r1] == [round(x.score, 5) for x in r2]
 
 
-def test_store_size_reflects_bits(conn) -> None:
+def test_store_size_reflects_bits(conn: sqlite3.Connection) -> None:
     rng = np.random.default_rng(10)
     embs = [_unit(rng, _DIM) for _ in range(100)]
     _build_index(conn, embs, bits=4)
@@ -181,7 +190,7 @@ def test_store_size_reflects_bits(conn) -> None:
     assert size == expected_per_row * 100
 
 
-def test_recall_at_10_reasonable(conn) -> None:
+def test_recall_at_10_reasonable(conn: sqlite3.Connection) -> None:
     """Sanity: 4-bit prod search recovers most exact top-10 neighbors."""
     rng = np.random.default_rng(11)
     embs = np.array([_unit(rng, _DIM) for _ in range(300)])

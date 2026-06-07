@@ -388,9 +388,7 @@ def _resolve_embedding_choice(
     return EmbeddingSettings(provider=provider, model=model.strip())
 
 
-def _resolve_backend(
-    backend_flag: str | None, tq_bits_flag: int | None
-) -> tuple[Backend, int]:
+def _resolve_backend(backend_flag: str | None, tq_bits_flag: int | None) -> tuple[Backend, int]:
     """Resolve (backend, tq_bits) from flags, an interactive prompt, or defaults.
 
     Explicit ``--backend`` wins. Otherwise prompt when stdin is a TTY; when not

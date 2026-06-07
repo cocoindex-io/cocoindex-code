@@ -77,14 +77,14 @@ def test_prod_estimator_is_unbiased() -> None:
     xs = _random_unit_vectors(_N, _DIM, seed=21)
     ys = _random_unit_vectors(_N, _DIM, seed=22)
 
-    errors = []
+    err_list: list[float] = []
     for x, y in zip(xs, ys):
         mse_idx, qjl, rnorm, norm = tq.quantize_prod(x)
         est = tq.inner_product_prod(y, mse_idx, qjl, rnorm, norm)
         true_ip = float(y @ x)
-        errors.append(est - true_ip)
+        err_list.append(est - true_ip)
 
-    errors = np.array(errors)
+    errors = np.array(err_list)
     mean_err = float(errors.mean())
     stderr = float(errors.std(ddof=1) / math.sqrt(len(errors)))
     # Mean signed error within ~3 standard errors of zero -> unbiased.

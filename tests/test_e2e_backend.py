@@ -116,15 +116,11 @@ def test_reinit_switches_backend(e2e_project: Path) -> None:
     runner.invoke(app, ["index"], catch_exceptions=False)
 
     # Force re-init to turbo-quant.
-    result = runner.invoke(
-        app, ["init", "-f", "--backend", "turbo-quant"], catch_exceptions=False
-    )
+    result = runner.invoke(app, ["init", "-f", "--backend", "turbo-quant"], catch_exceptions=False)
     # `init` returns early ("already initialized") if settings exist; reset first.
     if "already initialized" in result.output:
         runner.invoke(app, ["reset", "--all", "-f"], catch_exceptions=False)
-        result = runner.invoke(
-            app, ["init", "--backend", "turbo-quant"], catch_exceptions=False
-        )
+        result = runner.invoke(app, ["init", "--backend", "turbo-quant"], catch_exceptions=False)
     assert result.exit_code == 0, result.output
 
     result = runner.invoke(app, ["index"], catch_exceptions=False)
