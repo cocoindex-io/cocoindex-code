@@ -748,6 +748,33 @@ Using uv (install or upgrade):
 uv tool install --upgrade cocoindex-code
 ```
 
+### `MDB_MAP_FULL: Environment mapsize limit reached`
+
+The index is stored in an LMDB database whose maximum size is fixed when the daemon starts. The default ceiling is **4 GiB**, which is plenty for most projects but can be exhausted by very large codebases (tens of thousands of files), especially with high-dimensional embedding models like `nomic-ai/CodeRankEmbed`.
+
+Raise the ceiling with the `COCOINDEX_LMDB_MAP_SIZE` environment variable (value in **bytes**). LMDB only grows the file as data is written, so a high limit doesn't pre-allocate disk — it's safe to set it generously:
+
+```yaml
+# ~/.cocoindex_code/global_settings.yml
+envs:
+  COCOINDEX_LMDB_MAP_SIZE: "34359738368"   # 32 GiB (= 32 * 1024^3)
+```
+
+Or, if you prefer to set it in your shell environment (the daemon inherits it):
+
+```bash
+export COCOINDEX_LMDB_MAP_SIZE=$((32 * 1024 * 1024 * 1024))   # 32 GiB
+```
+
+The map size is read when the daemon starts, so restart it to pick up the change, then re-index:
+
+```bash
+ccc daemon restart
+ccc index
+```
+
+> This manual step is temporary. Once [cocoindex#2108](https://github.com/cocoindex-io/cocoindex/issues/2108) lands, the map size grows automatically when needed and `COCOINDEX_LMDB_MAP_SIZE` won't be necessary.
+
 ## Legacy: Environment Variables
 
 If you previously configured `cocoindex-code` via environment variables, the `cocoindex-code` MCP command still reads them and auto-migrates to YAML settings on first run. We recommend switching to the YAML settings for new setups.
@@ -774,6 +801,8 @@ export COCOINDEX_DISABLE_USAGE_TRACKING=1
 
 ## Large codebase / Enterprise
 [CocoIndex](https://github.com/cocoindex-io/cocoindex) is an ultra efficient indexing engine that also works on large codebases at scale for enterprises. In enterprise scenarios it is a lot more efficient to share indexes with teammates when there are large or many repos. We also have advanced features like branch dedupe etc designed for enterprise users.
+
+> Indexing a very large codebase and hitting `MDB_MAP_FULL`? Raise the LMDB map size — see [`MDB_MAP_FULL: Environment mapsize limit reached`](#mdb_map_full-environment-mapsize-limit-reached) under Troubleshooting.
 
 If you need help with remote setup, please email our maintainer linghua@cocoindex.io, happy to help!
 
