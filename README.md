@@ -779,14 +779,33 @@ If you need help with remote setup, please email our maintainer linghua@cocoinde
 
 ## Contributing
 
-We welcome contributions! Before you start, please install the [pre-commit](https://pre-commit.com/) hooks so that linting, formatting, type checking, and tests run automatically before each commit:
+We welcome contributions! This project uses [uv](https://docs.astral.sh/uv/getting-started/installation/) for development, and every PR is gated on the same lint, format, type-check, and test suite in CI. **Please run these checks locally before opening a PR** — failing pre-commit checks are the most common cause of red CI on incoming PRs.
+
+### 1. Install the dev dependencies
+
+After installing [uv](https://docs.astral.sh/uv/getting-started/installation/), sync the project. This installs everything the checks need — including [prek](https://github.com/j178/prek), a fast pre-commit runner, plus Ruff, mypy, and pytest:
 
 ```bash
-pip install pre-commit
-pre-commit install
+uv sync
 ```
 
-This catches common issues — trailing whitespace, lint errors (Ruff), type errors (mypy), and test failures — before they reach CI.
+### 2. Run all checks before every PR
+
+Run the full hook suite across all files — this is exactly what CI runs:
+
+```bash
+uv run prek run --all-files
+```
+
+It runs trailing-whitespace/end-of-file fixes, Ruff lint (`--fix`) and format, `uv.lock` validation, mypy type checking, and the pytest suite. Fix anything it reports (Ruff auto-fixes most lint/format issues for you), re-run until it passes, then push.
+
+### 3. (Optional) Run automatically on each commit
+
+To have the same checks run on every `git commit`, install the git hook once:
+
+```bash
+uv run prek install
+```
 
 For more details, see our [contributing guide](https://cocoindex.io/docs/contributing/guide).
 
