@@ -111,25 +111,33 @@ def _connect_and_handshake() -> Connection:
 
     Returns the open connection for the caller to send exactly one request.
 
-    On the first call, automatically starts or
-    restarts the daemon if needed.  Subsequent calls fail fast with
-    ``DaemonVersionError`` on mismatch (indicating the daemon was replaced
-    mid-session, e.g. after a tool upgrade).
+    Automatically starts or restarts the daemon when it is absent or running
+    with stale global settings (e.g. a ``ccc init`` retry rewrote
+    ``global_settings.yml`` after the daemon loaded it). A genuine *version*
+    mismatch after we have already reached a matching daemon means the binary
+    was replaced under us mid-session — that fails fast instead of looping on
+    restarts.
     """
     global _daemon_ensured  # noqa: PLW0603
 
-    if _daemon_ensured:
-        return _raw_connect_and_handshake()
-
-    # First connection — auto-start/restart as needed.
     try:
         conn = _raw_connect_and_handshake()
         _daemon_ensured = True
         return conn
-    except DaemonVersionError:
+    except DaemonVersionError as e:
+        # `resp.ok` is False only for a real version mismatch. Once we have
+        # ensured a matching daemon, a fresh version mismatch means the binary
+        # was swapped under us — fail fast. A settings-only restart request
+        # (resp.ok True, but the loaded settings mtime moved) is expected;
+        # restart the daemon below so it reloads them.
+        if _daemon_ensured and not e.resp.ok:
+            raise
         stop_daemon()
     except (ConnectionRefusedError, OSError):
-        pass
+        # No daemon answered. Normal on the first call (start one below); if we
+        # had already ensured one it vanished mid-session — surface that.
+        if _daemon_ensured:
+            raise
 
     if _is_daemon_supervised():
         # Supervisor is responsible for (re)starting the daemon — just wait
@@ -192,10 +200,16 @@ class DaemonVersionError(RuntimeError):
 
     def __init__(self, resp: HandshakeResponse) -> None:
         self.resp = resp
-        super().__init__(
-            f"Daemon version mismatch (daemon={resp.daemon_version}, "
-            f"client={__version__}). Please retry — the daemon may need a restart."
-        )
+        if not resp.ok:
+            message = (
+                f"Daemon version mismatch (daemon={resp.daemon_version}, "
+                f"client={__version__}). Please retry — the daemon may need a restart."
+            )
+        else:
+            message = (
+                "Daemon is running with stale global settings and needs a restart. Please retry."
+            )
+        super().__init__(message)
 
 
 class DaemonStartError(RuntimeError):
@@ -363,7 +377,10 @@ def doctor(
                 raise RuntimeError("Connection to daemon lost during doctor checks")
             resp = decode_response(data)
             if isinstance(resp, ErrorResponse):
-                raise RuntimeError(f"Daemon error: {resp.message}")
+                detail = f"Daemon error: {resp.message}"
+                if resp.traceback:
+                    detail += f"\n{resp.traceback}"
+                raise RuntimeError(detail)
             if isinstance(resp, DoctorResponse):
                 results.append(resp.result)
                 if on_result is not None:

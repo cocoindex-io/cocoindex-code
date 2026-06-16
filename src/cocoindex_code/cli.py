@@ -7,12 +7,18 @@ import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import typer as _typer
 
-from .client import DaemonStartError
-from .protocol import DoctorCheckResult, IndexingProgress, ProjectStatusResponse, SearchResponse
+if TYPE_CHECKING:
+    from .protocol import (
+        DoctorCheckResult,
+        IndexingProgress,
+        ProjectStatusResponse,
+        SearchResponse,
+    )
+
 from .settings import (
     DEFAULT_ST_MODEL,
     EmbeddingSettings,
@@ -104,6 +110,8 @@ def _catch_daemon_start_error(func: _F) -> _F:
 
     @functools.wraps(func)
     def wrapper(*args: object, **kwargs: object) -> object:
+        from .client import DaemonStartError
+
         try:
             return func(*args, **kwargs)
         except DaemonStartError as e:
@@ -204,7 +212,7 @@ def _run_index_with_progress(project_root: str) -> None:
         except RuntimeError as e:
             live.stop()
             # Let DaemonStartError propagate to the decorator for consistent handling.
-            if isinstance(e, DaemonStartError):
+            if isinstance(e, _client.DaemonStartError):
                 raise
             _typer.echo(f"Indexing failed: {e}", err=True)
             raise _typer.Exit(code=1)
@@ -313,12 +321,35 @@ def remove_from_gitignore(project_root: Path) -> None:
 _LITELLM_MODELS_URL = "https://docs.litellm.ai/docs/embedding/supported_embedding"
 
 
+def _st_model_rejection_reason(model: str) -> str | None:
+    """Why ``model`` can't be a sentence-transformers model, or None if it's fine.
+
+    sentence-transformers loads HuggingFace model ids. An ``ollama/`` prefix is a
+    LiteLLM/Ollama route that ST tries (and fails) to resolve as a HuggingFace
+    repo — the user wants the litellm provider instead (issue #181). Real
+    HuggingFace ids that contain an ``org/`` slash (``Snowflake/...``,
+    ``openai/...``) are left alone.
+    """
+    if model.strip().lower().startswith("ollama/"):
+        return (
+            "ollama/… models run via litellm, not sentence-transformers — "
+            "go back and pick the litellm provider instead."
+        )
+    return None
+
+
 def _resolve_embedding_choice(
     litellm_model_flag: str | None,
     st_installed: bool,
     tty: bool,
+    previous: EmbeddingSettings | None = None,
 ) -> EmbeddingSettings:
-    """Resolve the embedding settings per the init control-flow diagram."""
+    """Resolve the embedding settings per the init control-flow diagram.
+
+    On a retry, ``previous`` holds the choice from the last attempt; its
+    provider and model become the prompt defaults so the user only edits
+    what was wrong instead of retyping everything.
+    """
     if litellm_model_flag is not None:
         return EmbeddingSettings(provider="litellm", model=litellm_model_flag)
 
@@ -341,14 +372,15 @@ def _resolve_embedding_choice(
             "Embedding provider",
             choices=[
                 questionary.Choice(
-                    title="sentence-transformers (local, free)",
+                    title="sentence-transformers (local, free — built-in HuggingFace models)",
                     value="sentence-transformers",
                 ),
                 questionary.Choice(
-                    title="litellm (cloud, 100+ providers)",
+                    title="litellm (100+ providers — cloud APIs & local Ollama)",
                     value="litellm",
                 ),
             ],
+            default=previous.provider if previous is not None else None,
         ).ask()
     else:
         _typer.echo(
@@ -361,10 +393,16 @@ def _resolve_embedding_choice(
         raise _typer.Exit(code=1)
 
     if provider == "sentence-transformers":
-        model = questionary.text("Model name", default=DEFAULT_ST_MODEL).ask()
+        default_model = previous.model if previous is not None else DEFAULT_ST_MODEL
+        model = questionary.text(
+            "Model name",
+            default=default_model,
+            validate=lambda m: _st_model_rejection_reason(m) or True,
+        ).ask()
     elif provider == "litellm":
         _typer.echo(f"See supported LiteLLM embedding models: {_LITELLM_MODELS_URL}")
-        model = questionary.text("Model name").ask()
+        default_model = previous.model if previous is not None else ""
+        model = questionary.text("Model name", default=default_model).ask()
     else:
         _typer.echo(f"Error: unknown provider {provider!r}", err=True)
         raise _typer.Exit(code=1)
@@ -384,19 +422,21 @@ def _ok_fail_tag(ok: bool) -> str:
     return _click.style("[FAIL]", fg="red", bold=True)
 
 
-def _run_init_model_check(settings_path: Path) -> None:
-    """Ask the daemon to test the embedding model; print results and a hint on failure.
+def _run_init_model_check() -> bool:
+    """Ask the daemon to test the embedding model; print results. Return True if all pass.
 
     Drives the check via `DoctorRequest(project_root=None)`. The daemon loads
     the model once and stays running, so the user's next `ccc index` starts
     warm. Both DaemonStartError and generic exceptions are rendered as a
-    synthetic failed DoctorCheckResult — uniform failure-output shape.
+    synthetic failed DoctorCheckResult — uniform failure-output shape. The
+    caller decides what to show on failure (retry prompt / next-steps block).
     """
     from rich.console import Console as _Console
     from rich.live import Live as _Live
     from rich.spinner import Spinner as _Spinner
 
     from . import client as _client
+    from .protocol import DoctorCheckResult
 
     err_console = _Console(stderr=True)
     results: list[DoctorCheckResult] = []
@@ -417,55 +457,101 @@ def _run_init_model_check(settings_path: Path) -> None:
             )
         ]
 
-    failed = False
+    ok = True
     for r in results:
         if r.name == "done":
             continue
-        _print_doctor_result(r)
+        _print_doctor_result(r, verbose=False)
         if not r.ok:
-            failed = True
+            ok = False
+    return ok
 
-    if failed:
-        display_path = format_path_for_display(settings_path)
-        _typer.echo(
-            f"You can edit {display_path} to change the model or add API keys\n"
-            "under `envs:`. Then run `ccc doctor` to verify.",
-            err=True,
-        )
+
+def _print_init_next_steps(settings_path: Path) -> None:
+    """Prominent recovery block shown after a failed init model check."""
+    import click as _click
+
+    display_path = format_path_for_display(settings_path)
+    _typer.echo(err=True)
+    _typer.echo(_click.style("  Next steps", bold=True), err=True)
+    _typer.echo(_click.style(f"  {'─' * 38}", fg="bright_black"), err=True)
+    _typer.echo(
+        f"  1. Edit  {_click.style(display_path, fg='cyan', bold=True)}\n"
+        "     to change the model or add API keys under `envs:`.",
+        err=True,
+    )
+    _typer.echo("  2. Run  `ccc doctor`  to verify.", err=True)
+    _typer.echo()  # trailing blank before whatever init prints next
 
 
 def _setup_user_settings_interactive(litellm_model_flag: str | None) -> None:
-    """Interactive global-settings setup — only runs when settings are missing."""
+    """Interactive global-settings setup — only runs when settings are missing.
+
+    Loops until the configured model passes its check or the user chooses to
+    keep the current settings. On failure we offer a retry, but only when we
+    can actually re-prompt for a different model — i.e. interactive and not
+    pinned by ``--litellm-model``; otherwise we just print the next steps.
+    """
     from .embedder_defaults import lookup_defaults
     from .shared import is_sentence_transformers_installed
 
-    embedding = _resolve_embedding_choice(
-        litellm_model_flag=litellm_model_flag,
-        st_installed=is_sentence_transformers_installed(),
-        tty=sys.stdin.isatty(),
-    )
+    st_installed = is_sentence_transformers_installed()
+    interactive = sys.stdin.isatty()
+    previous: EmbeddingSettings | None = None
 
-    # Apply curated defaults if the model is in our table.
-    indexing_defaults, query_defaults = lookup_defaults(embedding.provider, embedding.model)
-    defaults_applied = indexing_defaults is not None or query_defaults is not None
-    if defaults_applied:
-        embedding.indexing_params = indexing_defaults or {}
-        embedding.query_params = query_defaults or {}
+    while True:
+        embedding = _resolve_embedding_choice(
+            litellm_model_flag=litellm_model_flag,
+            st_installed=st_installed,
+            tty=interactive,
+            previous=previous,
+        )
+        previous = embedding  # remembered as the defaults for a potential retry
 
-    path = save_initial_user_settings(embedding, defaults_applied=defaults_applied)
-    _typer.echo()
-    _typer.echo(f"Created user settings: {format_path_for_display(path)}")
+        # Apply curated defaults if the model is in our table.
+        indexing_defaults, query_defaults = lookup_defaults(embedding.provider, embedding.model)
+        defaults_applied = indexing_defaults is not None or query_defaults is not None
+        if defaults_applied:
+            embedding.indexing_params = indexing_defaults or {}
+            embedding.query_params = query_defaults or {}
 
-    if defaults_applied:
+        path = save_initial_user_settings(embedding, defaults_applied=defaults_applied)
         _typer.echo()
-        _typer.echo(f"Applied recommended defaults for {embedding.model}:")
-        _typer.echo(f"  indexing_params: {embedding.indexing_params}")
-        _typer.echo(f"  query_params:    {embedding.query_params}")
+        _typer.echo(f"Created user settings: {format_path_for_display(path)}")
 
-    _typer.echo()
-    _typer.echo(f"Testing embedding model: {embedding.provider} / {embedding.model}")
-    _run_init_model_check(path)
-    _typer.echo()
+        if defaults_applied:
+            _typer.echo()
+            _typer.echo(f"Applied recommended defaults for {embedding.model}:")
+            _typer.echo(f"  indexing_params: {embedding.indexing_params}")
+            _typer.echo(f"  query_params:    {embedding.query_params}")
+
+        _typer.echo()
+        _typer.echo(f"Testing embedding model: {embedding.provider} / {embedding.model}")
+        if _run_init_model_check():
+            _typer.echo()
+            return
+
+        # Model check failed. Retry only makes sense if we can re-prompt.
+        if interactive and litellm_model_flag is None:
+            import questionary
+
+            _typer.echo()  # separate the failure output from the prompt below
+            choice = questionary.select(
+                "The embedding model couldn't be loaded. What would you like to do?",
+                choices=[
+                    questionary.Choice(title="Try a different provider/model", value="retry"),
+                    questionary.Choice(
+                        title="Keep these settings and finish — I'll edit the file myself",
+                        value="keep",
+                    ),
+                ],
+            ).ask()
+            if choice == "retry":
+                continue
+            # "keep" or None (cancelled) falls through to the next-steps block.
+
+        _print_init_next_steps(path)
+        return
 
 
 @app.command()
@@ -683,7 +769,7 @@ def _print_error(msg: str) -> None:
     _typer.echo(_click.style(f"  ERROR: {msg}", fg="red"), err=True)
 
 
-def _print_doctor_result(result: DoctorCheckResult) -> None:
+def _print_doctor_result(result: DoctorCheckResult, *, verbose: bool = False) -> None:
     import click as _click
 
     if result.name == "done":
@@ -694,11 +780,27 @@ def _print_doctor_result(result: DoctorCheckResult) -> None:
         _typer.echo(f"    {line}")
     for err in result.errors:
         _typer.echo(_click.style(f"    ERROR: {err}", fg="red"), err=True)
+    if result.traceback:
+        if verbose:
+            for line in result.traceback.splitlines():
+                _typer.echo(_click.style(f"    {line}", fg="bright_black"), err=True)
+        else:
+            _typer.echo(
+                _click.style("    Run `ccc doctor -v` for the full traceback.", fg="bright_black"),
+                err=True,
+            )
 
 
 @app.command()
 @_catch_daemon_start_error
-def doctor() -> None:
+def doctor(
+    verbose: bool = _typer.Option(
+        False,
+        "-v",
+        "--verbose",
+        help="Show full exception tracebacks for failed checks.",
+    ),
+) -> None:
     """Check system health and report issues."""
     from . import client as _client
     from .settings import (
@@ -707,6 +809,9 @@ def doctor() -> None:
     from .settings import (
         load_user_settings as _load_user_settings,
     )
+
+    def _on_result(result: DoctorCheckResult) -> None:
+        _print_doctor_result(result, verbose=verbose)
 
     # --- 1. Global settings (local, no daemon needed) ---
     _print_section("Global Settings")
@@ -761,7 +866,7 @@ def doctor() -> None:
         try:
             _client.doctor(
                 project_root=None,
-                on_result=_print_doctor_result,
+                on_result=_on_result,
             )
         except Exception as e:
             _print_error(f"Model check failed: {e}")
@@ -792,7 +897,7 @@ def doctor() -> None:
         try:
             _client.doctor(
                 project_root=str(project_root),
-                on_result=_print_doctor_result,
+                on_result=_on_result,
             )
         except Exception as e:
             _print_error(f"Project checks failed: {e}")

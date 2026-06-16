@@ -32,25 +32,14 @@ We distinguish between **internal modules** (under packages with `_` prefix, e.g
 * Standard library and internal imports don't need underscore prefix
 * Only prefix symbols that are truly private to the module itself (e.g. `_context_var` for a module-private ContextVar)
 
-### Imports
+### General principles (also covered by `/review-changes`)
 
-Prefer top-level imports. Only use local (in-function) imports when truly necessary — e.g. to break circular dependencies or to defer a heavy import that isn't always needed.
-
-### Type Annotations
-
-Avoid `Any` whenever feasible. Use specific types — including concrete types from third-party libraries. Only use `Any` when the type is truly generic and no downstream code needs to downcast it.
-
-### Multi-Value Returns
-
-For functions returning multiple values, use `NamedTuple` instead of plain tuples. At call sites, access fields by name (`result.can_reuse`) rather than positional unpacking — this prevents misreading fields in the wrong order.
-
-### Single Source of Truth
-
-When the same value or logic appears in multiple places, consolidate it into one canonical definition. Don't scatter literals, constants, or path construction across files.
-
-### Dead Code
-
-When changes make code unreachable or unused, delete it along with its tests. Don't leave orphaned modules around.
+- **Top-level imports.** Defer to in-function only for a real circular dependency or a heavy import that isn't always needed.
+- **Specific types over `Any`.** When a value enters as a weaker form (`str`, `Any`), convert to the strong type at the earliest point. Don't propagate the weak form.
+- **`NamedTuple`/small dataclass for multi-value returns.** Access fields by name at call sites.
+- **Single source of truth.** When the same value or logic appears in multiple places, consolidate it.
+- **Delete dead code and dead config.** When a change makes something unreachable, the code, the tests, and the knobs all go.
+- **Honest names.** The name describes what the code does today.
 
 ### Testing Guidelines
 

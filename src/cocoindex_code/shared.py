@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import pathlib
+import traceback as _tb
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Union
 
@@ -47,11 +48,14 @@ def is_sentence_transformers_installed() -> bool:
 class EmbeddingCheckResult(NamedTuple):
     """Outcome of a single embed-test call. See `check_embedding`.
 
-    Exactly one of ``dim`` / ``error`` is set: ``error is None`` means success.
+    On success ``error is None`` and ``dim`` holds the embedding dimension. On
+    failure ``error`` holds a one-line summary and ``traceback`` the full
+    formatted traceback (for surfacing daemon-side stack traces in `ccc doctor`).
     """
 
     dim: int | None
     error: str | None
+    traceback: str | None = None
 
 
 async def check_embedding(
@@ -73,7 +77,7 @@ async def check_embedding(
         msg = " ".join(f"{type(e).__name__}: {e}".splitlines())
         if len(msg) > 500:
             msg = msg[:500] + "…"
-        return EmbeddingCheckResult(dim=None, error=msg)
+        return EmbeddingCheckResult(dim=None, error=msg, traceback=_tb.format_exc())
 
 
 def create_embedder(

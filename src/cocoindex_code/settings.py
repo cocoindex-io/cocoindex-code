@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml as _yaml
-from pathspec import GitIgnoreSpec
+
+if TYPE_CHECKING:
+    from pathspec import GitIgnoreSpec
 
 # ---------------------------------------------------------------------------
 # Default file patterns (moved from indexer.py)
@@ -53,6 +55,8 @@ DEFAULT_INCLUDED_PATTERNS: list[str] = [
     "**/*.r",  # R
     "**/*.html",  # HTML
     "**/*.htm",  # HTML
+    "**/*.svelte",  # Svelte
+    "**/*.vue",  # Vue
     "**/*.css",  # CSS
     "**/*.scss",  # SCSS
     "**/*.json",  # JSON
@@ -389,6 +393,8 @@ def global_settings_mtime_us() -> int | None:
 
 def load_gitignore_spec(project_root: Path) -> GitIgnoreSpec | None:
     """Load a GitIgnoreSpec for the project's ``.gitignore`` if present."""
+    from pathspec import GitIgnoreSpec
+
     gitignore = project_root / ".gitignore"
     if not gitignore.is_file():
         return None

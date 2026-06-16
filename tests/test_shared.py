@@ -98,6 +98,7 @@ async def test_check_embedding_ok() -> None:
     result = await check_embedding(_StubOkEmbedder())
     assert result.error is None
     assert result.dim == 384
+    assert result.traceback is None
 
 
 async def test_check_embedding_error() -> None:
@@ -106,6 +107,10 @@ async def test_check_embedding_error() -> None:
     assert result.error is not None
     assert result.error.startswith("RuntimeError:")
     assert "boom" in result.error
+    # The full traceback is captured so `ccc doctor` can surface it for debugging.
+    assert result.traceback is not None
+    assert "Traceback (most recent call last):" in result.traceback
+    assert "boom" in result.traceback
 
 
 async def test_check_embedding_forwards_params() -> None:

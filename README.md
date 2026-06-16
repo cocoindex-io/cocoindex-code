@@ -77,6 +77,17 @@ The agent uses semantic search automatically when it would be helpful. You can a
 
 Works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and other skill-compatible agents.
 
+#### Claude Code plugin marketplace
+
+For Claude Code users, this repository is also a [plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). Install the skill from inside Claude Code with:
+
+```text
+/plugin marketplace add Roxabi/cocoindex-code
+/plugin install cocoindex-code@cocoindex-code
+```
+
+This bundles the same `ccc` skill, with version pinning and `/plugin marketplace update` for updates.
+
 ### MCP Server
 
 Alternatively, use `ccc mcp` to run as an MCP server:
@@ -380,6 +391,8 @@ docker build -t cocoindex-code:local -f docker/Dockerfile .
 
 ## Configuration
 
+For a detailed guide on choosing and configuring embedding models, see [EMBEDDINGS.md](EMBEDDINGS.md).
+
 Configuration lives in two YAML files, both created automatically by `ccc init`.
 
 ### User Settings (`~/.cocoindex_code/global_settings.yml`)
@@ -525,6 +538,23 @@ envs:
 </details>
 
 <details>
+<summary>OpenAI-compatible (custom endpoint)</summary>
+
+Many providers (vLLM, LM Studio, LocalAI, Together, Fireworks, DeepInfra, …) expose an OpenAI-compatible embedding API. Use the `openai/` prefix and point `OPENAI_BASE_URL` at your endpoint:
+
+```yaml
+embedding:
+  model: openai/your-model-name
+envs:
+  OPENAI_BASE_URL: https://your-endpoint/v1
+  OPENAI_API_KEY: your-api-key
+```
+
+Don't append `/embeddings` to the base URL — LiteLLM handles that.
+
+</details>
+
+<details>
 <summary>Azure OpenAI</summary>
 
 ```yaml
@@ -612,7 +642,7 @@ envs:
 
 </details>
 
-Any [LiteLLM-supported model](https://docs.litellm.ai/docs/embedding/supported_embedding) works. When using a LiteLLM model, set `provider: litellm` (or omit `provider` — LiteLLM is the default for non-`sentence-transformers` models).
+Any [LiteLLM-supported model](https://docs.litellm.ai/docs/embedding/supported_embedding) works. When using a LiteLLM model, set `provider: litellm` (or omit `provider` — LiteLLM is the default for non-`sentence-transformers` models). For the full list of env vars each provider reads (API keys, base URLs, regions, …), see LiteLLM's [Setting API Keys](https://docs.litellm.ai/docs/set_keys).
 
 ### Local SentenceTransformers Models
 
@@ -664,10 +694,12 @@ embedding:
 | scala | | `.scala` |
 | solidity | | `.sol` |
 | sql | | `.sql` |
+| svelte | | `.svelte` |
 | swift | | `.swift` |
 | toml | | `.toml` |
 | tsx | | `.tsx` |
 | typescript | ts | `.ts` |
+| vue | | `.vue` |
 | xml | | `.xml` |
 | yaml | | `.yaml`, `.yml` |
 
@@ -718,6 +750,33 @@ Using uv (install or upgrade):
 uv tool install --upgrade cocoindex-code
 ```
 
+### `MDB_MAP_FULL: Environment mapsize limit reached`
+
+The index is stored in an LMDB database whose maximum size is fixed when the daemon starts. The default ceiling is **4 GiB**, which is plenty for most projects but can be exhausted by very large codebases (tens of thousands of files), especially with high-dimensional embedding models like `nomic-ai/CodeRankEmbed`.
+
+Raise the ceiling with the `COCOINDEX_LMDB_MAP_SIZE` environment variable (value in **bytes**). LMDB only grows the file as data is written, so a high limit doesn't pre-allocate disk — it's safe to set it generously:
+
+```yaml
+# ~/.cocoindex_code/global_settings.yml
+envs:
+  COCOINDEX_LMDB_MAP_SIZE: "34359738368"   # 32 GiB (= 32 * 1024^3)
+```
+
+Or, if you prefer to set it in your shell environment (the daemon inherits it):
+
+```bash
+export COCOINDEX_LMDB_MAP_SIZE=$((32 * 1024 * 1024 * 1024))   # 32 GiB
+```
+
+The map size is read when the daemon starts, so restart it to pick up the change, then re-index:
+
+```bash
+ccc daemon restart
+ccc index
+```
+
+> This manual step is temporary. Once [cocoindex#2108](https://github.com/cocoindex-io/cocoindex/issues/2108) lands, the map size grows automatically when needed and `COCOINDEX_LMDB_MAP_SIZE` won't be necessary.
+
 ## Legacy: Environment Variables
 
 If you previously configured `cocoindex-code` via environment variables, the `cocoindex-code` MCP command still reads them and auto-migrates to YAML settings on first run. We recommend switching to the YAML settings for new setups.
@@ -730,21 +789,54 @@ If you previously configured `cocoindex-code` via environment variables, the `co
 | `COCOINDEX_CODE_EXCLUDED_PATTERNS` | `exclude_patterns` in project `settings.yml` |
 | `COCOINDEX_CODE_EXTRA_EXTENSIONS` | `include_patterns` + `language_overrides` in project `settings.yml` |
 
+## Telemetry
+
+`cocoindex-code` sends anonymous usage telemetry through CocoIndex so we can see how the tool is used in aggregate and prioritize improvements. The events identify themselves as `application: cocoindex-code`.
+
+We **do not** collect your source code, file paths, queries, search results, embeddings, settings, or any other content from your codebase or environment.
+
+To opt out, set:
+
+```bash
+export COCOINDEX_DISABLE_USAGE_TRACKING=1
+```
+
 ## Large codebase / Enterprise
 [CocoIndex](https://github.com/cocoindex-io/cocoindex) is an ultra efficient indexing engine that also works on large codebases at scale for enterprises. In enterprise scenarios it is a lot more efficient to share indexes with teammates when there are large or many repos. We also have advanced features like branch dedupe etc designed for enterprise users.
+
+> Indexing a very large codebase and hitting `MDB_MAP_FULL`? Raise the LMDB map size — see [`MDB_MAP_FULL: Environment mapsize limit reached`](#mdb_map_full-environment-mapsize-limit-reached) under Troubleshooting.
 
 If you need help with remote setup, please email our maintainer linghua@cocoindex.io, happy to help!
 
 ## Contributing
 
-We welcome contributions! Before you start, please install the [pre-commit](https://pre-commit.com/) hooks so that linting, formatting, type checking, and tests run automatically before each commit:
+We welcome contributions! This project uses [uv](https://docs.astral.sh/uv/getting-started/installation/) for development, and every PR is gated on the same lint, format, type-check, and test suite in CI. **Please run these checks locally before opening a PR** — failing pre-commit checks are the most common cause of red CI on incoming PRs.
+
+### 1. Install the dev dependencies
+
+After installing [uv](https://docs.astral.sh/uv/getting-started/installation/), sync the project. This installs everything the checks need — including [prek](https://github.com/j178/prek), a fast pre-commit runner, plus Ruff, mypy, and pytest:
 
 ```bash
-pip install pre-commit
-pre-commit install
+uv sync
 ```
 
-This catches common issues — trailing whitespace, lint errors (Ruff), type errors (mypy), and test failures — before they reach CI.
+### 2. Run all checks before every PR
+
+Run the full hook suite across all files — this is exactly what CI runs:
+
+```bash
+uv run prek run --all-files
+```
+
+It runs trailing-whitespace/end-of-file fixes, Ruff lint (`--fix`) and format, `uv.lock` validation, mypy type checking, and the pytest suite. Fix anything it reports (Ruff auto-fixes most lint/format issues for you), re-run until it passes, then push.
+
+### 3. (Optional) Run automatically on each commit
+
+To have the same checks run on every `git commit`, install the git hook once:
+
+```bash
+uv run prek install
+```
 
 For more details, see our [contributing guide](https://cocoindex.io/docs/contributing/guide).
 

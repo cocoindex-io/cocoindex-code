@@ -10,6 +10,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 from collections.abc import AsyncIterator, Callable
 from multiprocessing.connection import Connection, Listener
 from pathlib import Path
@@ -250,7 +251,11 @@ async def handle_connection(
                     conn.send_bytes(encode_response(resp))
             except Exception as exc:
                 logger.exception("Error during streaming response")
-                conn.send_bytes(encode_response(ErrorResponse(message=str(exc))))
+                conn.send_bytes(
+                    encode_response(
+                        ErrorResponse(message=str(exc), traceback=traceback.format_exc())
+                    )
+                )
         else:
             conn.send_bytes(encode_response(result))
     except (EOFError, OSError, asyncio.CancelledError):
@@ -359,6 +364,7 @@ async def _check_model(
         ok=False,
         details=[params_detail],
         errors=[result.error],
+        traceback=result.traceback,
     )
 
 

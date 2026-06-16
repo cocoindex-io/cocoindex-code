@@ -846,6 +846,10 @@ async def test_daemon_check_model_maps_failure_to_doctor_result() -> None:
     assert len(result.errors) == 1
     assert result.errors[0].startswith("RuntimeError:")
     assert "boom" in result.errors[0]
+    # The full traceback is carried through so `ccc doctor` can display it.
+    assert result.traceback is not None
+    assert "Traceback (most recent call last):" in result.traceback
+    assert "boom" in result.traceback
 
 
 # ---------------------------------------------------------------------------
