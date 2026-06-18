@@ -48,11 +48,19 @@ def _normalize_gitignore_lines(lines: Iterable[str], directory: PurePath) -> lis
         stripped = line.lstrip()
         if not stripped or stripped.startswith("#"):
             continue
-        if line.startswith("\\#") or line.startswith("\\!"):
+        # A leading "\#" or "\!" escapes a literal '#'/'!' — such a line is
+        # neither a comment nor a negation. Detect the escape *before* the
+        # negation check, otherwise an escaped "\!foo" is unescaped to "!foo"
+        # and then misread as a negation that wrongly re-includes unrelated
+        # "foo" matches.
+        escaped = line.startswith("\\#") or line.startswith("\\!")
+        if escaped:
             line = line[1:]
-        negated = line.startswith("!")
-        if negated:
-            line = line[1:]
+            negated = False
+        else:
+            negated = line.startswith("!")
+            if negated:
+                line = line[1:]
         body = line.strip()
         if not body:
             continue
