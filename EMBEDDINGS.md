@@ -68,14 +68,15 @@ This option runs embedding models directly on your machine using the library.
 
 ### Recommended Models
 
-These are based on MTEB [datasets](https://huggingface.co/datasets/mteb/results) as of 13-Jun-2026.
+These are based on MTEB [datasets](https://huggingface.co/datasets/mteb/results) as of 15-Jun-2026. All listed models have been verified to work with the `sentence-transformers` provider in `cocoindex-code`.
 
 | Tier | Model | Params | Code Score | Best For |
 | :--- | :--- | :--- | :--- | :--- |
-| **Micro** | [`Snowflake/arctic-embed-xs`](https://huggingface.co/Snowflake/snowflake-arctic-embed-xs) | 22M | 0.67 | Old CPUs, minimal RAM usage. |
-| **Small** | [`ibm-granite/granite-embedding-97m-multilingual-r2`](https://huggingface.co/ibm-granite/granite-embedding-97m-multilingual-r2) | 97M | 0.80 | Modern laptops, multilingual code. |
-| **Medium** | [`jinaai/jina-embeddings-v5-text-nano`](https://huggingface.co/jinaai/jina-embeddings-v5-text-nano) | 239M | **0.90** | **Performance sweet spot.** BERT-based (Fast). |
-| **High** | [`geevec-ai/geevec-embeddings-1.0-lite`](https://huggingface.co/geevec-ai/geevec-embeddings-1.0-lite) | 366M | **0.92** | Maximum local accuracy (needs GPU for speed). |
+| **Default** | [`Snowflake/arctic-embed-xs`](https://huggingface.co/Snowflake/snowflake-arctic-embed-xs) | 22M | 0.67 | Default |
+| **Micro** | [`lightonai/LateOn-Code-edge`](https://huggingface.co/lightonai/LateOn-Code-edge) | 17M | 0.82 | **Efficiency King.** Incredible code performance for its size. |
+| **Small** | [`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code) | 149M | 0.85 | Great balance of speed and accuracy on modern laptops. |
+| **Medium** | [`microsoft/harrier-oss-v1-270m`](https://huggingface.co/microsoft/harrier-oss-v1-270m) | 270M | **0.90** | **Performance sweet spot.** High accuracy, runs well on CPUs. |
+| **Multi** | [`ibm-granite/granite-embedding-97m-multilingual-r2`](https://huggingface.co/ibm-granite/granite-embedding-97m-multilingual-r2) | 97M | 0.80 | Multilingual codebases (e.g. Code + Docs in different languages). |
 
 #### Other Model Options
 
@@ -190,8 +191,8 @@ envs:
 
 ## Choosing Based on Your Content
 
-- **Heavy Source Code**: Use **Jina v5 Nano** (Local) or **Voyage 4 Large** (Cloud). Both score >0.90 on code search benchmarks.
-- **Large Documentation / Files**: Models with large context windows (8k+ tokens) like **Jina v5** (32k) or **OpenAI v3 Large** (8k).
+- **Heavy Source Code**: Use **LateOn-Code** (Micro/Small) or **Harrier 270m** (Medium). Both score >0.85 on code search benchmarks.
+- **Large Documentation / Files**: Models with large context windows like **Voyage 4 Large** (Cloud) or **OpenAI v3 Large** (8k).
 - **Multilingual Projects**: **Granite 97m** (Small Local) or **Cohere Multilingual v3** (Cloud).
 
 ### Fine-Tuning with `indexing_params` and `query_params`
@@ -210,16 +211,18 @@ embedding:
     input_type: query
 ```
 
-**Example for Sentence-Transformers (Jina):**
+**Example for Sentence-Transformers (Harrier):**
 
 ```yaml
 embedding:
   provider: sentence-transformers
-  model: jinaai/jina-embeddings-v5-text-nano
+  model: microsoft/harrier-oss-v1-270m
+  # Most encoder-only models don't require explicit prompts,
+  # but some (like Nomic or BGE) do:
   indexing_params:
-    prompt_name: retrieval.passage
+    prompt_name: null
   query_params:
-    prompt_name: retrieval.query
+    prompt_name: null
 ```
 
 ---
