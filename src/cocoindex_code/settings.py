@@ -37,6 +37,7 @@ DEFAULT_INCLUDED_PATTERNS: list[str] = [
     "**/*.hxx",  # C++ headers
     "**/*.hh",  # C++ headers
     "**/*.cs",  # C#
+    "**/*.dart",  # Dart
     "**/*.sql",  # SQL
     "**/*.sh",  # Shell
     "**/*.bash",  # Bash

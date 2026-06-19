@@ -675,6 +675,7 @@ embedding:
 | cpp | c++ | `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp` |
 | csharp | csharp, cs | `.cs` |
 | css | | `.css`, `.scss` |
+| dart | | `.dart` |
 | dtd | | `.dtd` |
 | fortran | f, f90, f95, f03 | `.f`, `.f90`, `.f95`, `.f03` |
 | go | golang | `.go` |
