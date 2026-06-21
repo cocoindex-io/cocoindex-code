@@ -23,14 +23,15 @@ def test_negation_is_preserved() -> None:
 
 
 def test_escaped_hash_is_literal_not_comment() -> None:
-    # "\#notacomment" -> a file literally named "#notacomment".
-    assert _normalize_gitignore_lines(["\\#notacomment"], ROOT) == ["**/#notacomment"]
+    # "\#notacomment" -> a file literally named "#notacomment". The escape is
+    # kept so GitIgnoreSpec does not read the pattern back as a comment.
+    assert _normalize_gitignore_lines(["\\#notacomment"], ROOT) == ["**/\\#notacomment"]
 
 
 def test_escaped_bang_is_literal_not_negation() -> None:
     # Regression: "\!important" means "ignore a file literally named '!important'",
     # NOT a negation, so it must not become a "!"-prefixed (negation) pattern.
-    assert _normalize_gitignore_lines(["\\!important"], ROOT) == ["**/!important"]
+    assert _normalize_gitignore_lines(["\\!important"], ROOT) == ["**/\\!important"]
 
 
 def test_escaped_bang_does_not_re_include_unrelated_matches() -> None:
@@ -46,5 +47,18 @@ def test_escaped_bang_does_not_re_include_unrelated_matches() -> None:
 
 def test_subdirectory_prefix_is_applied() -> None:
     assert _normalize_gitignore_lines(["\\!keep"], PurePath("sub/dir")) == [
-        "sub/dir/**/!keep"
+        "sub/dir/**/\\!keep"
     ]
+
+
+def test_escaped_path_bearing_pattern_is_literal() -> None:
+    # An escaped pattern that contains a "/" is anchored (no "**/" prefix is
+    # added), so the leading "!"/"#" would sit at the very start of the emitted
+    # pattern. Keeping the backslash is what stops GitIgnoreSpec from reading it
+    # back as a negation ("\!dir/file") or a comment ("\#dir/file").
+    spec = GitIgnoreSpec.from_lines(
+        _normalize_gitignore_lines(["\\!dir/file", "\\#dir/other"], ROOT)
+    )
+    assert spec.match_file("dir/file") is False  # unescaped sibling, untouched
+    assert spec.match_file("!dir/file") is True  # literal "!dir/file" ignored
+    assert spec.match_file("#dir/other") is True  # literal "#dir/other" ignored

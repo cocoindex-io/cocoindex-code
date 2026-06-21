@@ -50,12 +50,13 @@ def _normalize_gitignore_lines(lines: Iterable[str], directory: PurePath) -> lis
             continue
         # A leading "\#" or "\!" escapes a literal '#'/'!' — such a line is
         # neither a comment nor a negation. Detect the escape *before* the
-        # negation check, otherwise an escaped "\!foo" is unescaped to "!foo"
-        # and then misread as a negation that wrongly re-includes unrelated
-        # "foo" matches.
+        # negation check, and KEEP the backslash so the emitted pattern stays
+        # escaped for pathspec. Stripping it would leave a bare leading "!"/"#"
+        # — fine when a "**/" prefix is added ("\!foo" -> "**/!foo"), but for a
+        # path-bearing pattern there is no such prefix ("\!dir/f" -> "!dir/f"),
+        # and GitIgnoreSpec would then read it back as a negation/comment.
         escaped = line.startswith("\\#") or line.startswith("\\!")
         if escaped:
-            line = line[1:]
             negated = False
         else:
             negated = line.startswith("!")
