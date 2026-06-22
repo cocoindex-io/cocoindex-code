@@ -1,0 +1,63 @@
+[workspace]
+
+[package]
+name = "cocoindex-code"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0"
+description = "Rust port of cocoindex-code: embedded code search engine (ccc) built on the CocoIndex Rust SDK"
+
+[[bin]]
+name = "ccc"
+path = "src/main.rs"
+
+[dependencies]
+# CocoIndex Rust SDK. Path dep assumes the `cocoindex` repo is checked out as a
+# sibling of this repo (../../cocoindex). For distribution this should become a
+# git dependency on cocoindex-io/cocoindex (v1 branch).
+#
+#   text      -> RecursiveSplitter + detect_code_language (tree-sitter)
+#   sqlite    -> sqlite-vec (vec0) TableTarget sync
+#   fastembed -> local sentence-transformers embeddings (the only backend today)
+#   fs_live   -> live directory watching (used by the daemon)
+cocoindex = { path = "../../cocoindex/rust/sdk/cocoindex", features = [
+    "text",
+    "sqlite",
+    "fastembed",
+    "fs_live",
+] }
+
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+# Vector index + query path go through sqlx (matching the SDK's sqlite target).
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "sqlite",
+] }
+# Register the sqlite-vec (vec0) loadable extension into the sqlite build so the
+# SDK's vec0 virtual tables and our KNN queries work. Python uses the
+# `sqlite-vec` PyPI package for the same purpose.
+sqlite-vec = "0.1"
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
+
+clap = { version = "4", features = ["derive"] }
+# IPC: length-prefixed msgpack frames over a Unix socket (Python uses msgspec
+# msgpack over multiprocessing.connection; Rust-to-Rust, not wire-compatible).
+rmp-serde = "1"
+libc = "0.2"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# .gitignore-aware walking parity (nested .gitignore semantics).
+ignore = "0.4"
+dirs = "5"
+regex = "1"
+glob = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

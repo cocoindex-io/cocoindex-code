@@ -1,0 +1,5 @@
+# Cargo build output — never commit.
+/target
+
+# Local index/db scratch (created when running ccc in this dir).
+/.cocoindex_code
