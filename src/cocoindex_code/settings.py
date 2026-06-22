@@ -28,6 +28,8 @@ DEFAULT_INCLUDED_PATTERNS: list[str] = [
     "**/*.rs",  # Rust
     "**/*.go",  # Go
     "**/*.java",  # Java
+    "**/*.cls",  # Salesforce Apex classes
+    "**/*.trigger",  # Salesforce Apex triggers
     "**/*.c",  # C
     "**/*.h",  # C/C++ headers
     "**/*.cpp",  # C++
