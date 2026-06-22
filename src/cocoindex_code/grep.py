@@ -205,7 +205,9 @@ def _iter_targets(req: GrepRequest, compiler: _PatternCompiler) -> Iterator[_Tar
 
     if root.is_file():
         project_root = find_project_root(root.parent)
-        yield from _resolve_file(root, str(req.root), _ext_overrides(project_root), req, compiler)
+        yield from _resolve_file(
+            root, req.root.as_posix(), _ext_overrides(project_root), req, compiler
+        )
         return
 
     project_root = find_project_root(root)
@@ -232,7 +234,7 @@ def _iter_targets(req: GrepRequest, compiler: _PatternCompiler) -> Iterator[_Tar
             continue
         # Display paths mirror the root the user gave (e.g. "src/a.py", "/tmp/x/a.py"),
         # rather than always being cwd-relative.
-        display = str(req.root / abs_path.relative_to(root))
+        display = (req.root / abs_path.relative_to(root)).as_posix()
         yield from _resolve_file(abs_path, display, ext_overrides, req, compiler)
 
 
@@ -383,7 +385,9 @@ def _render_match(
 def render_file(fm: FileMatches, *, color: bool) -> str:
     """Render one file's matches: the path, then each match's line range, with
     matches separated by a ``---`` line."""
-    src_lines = fm.source.split("\n")
+    # Split on "\n" to keep line numbers aligned with the offsets below (which
+    # count "\n"), then drop the trailing "\r" that CRLF files leave on each line.
+    src_lines = [line.rstrip("\r") for line in fm.source.split("\n")]
     offsets = _line_char_offsets(fm.source)
     max_line = max((m.chunks[0].end.line for m in fm.matches if m.chunks), default=1)
     width = len(str(max_line))

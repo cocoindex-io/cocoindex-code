@@ -141,7 +141,7 @@ def test_grep_single_file(codebase: Path) -> None:
     req = g.GrepRequest(pattern=r"def \NAME(\(ARGS*\)):", root=codebase / "a.py")
     results = run_grep(req)
     assert len(results) == 1
-    assert results[0].path == str(codebase / "a.py")
+    assert results[0].path == (codebase / "a.py").as_posix()
     # a.py defines foo and bar.
     assert len(results[0].matches) == 2
 
@@ -212,9 +212,20 @@ def test_render_plain_format(codebase: Path) -> None:
     req = g.GrepRequest(pattern=r"def \NAME(\(ARGS*\)):", root=codebase / "sub" / "b.py")
     rendered = g.render_results(run_grep(req), color=False)
     lines = rendered.split("\n")
-    assert lines[0] == str(codebase / "sub" / "b.py")  # path header
+    assert lines[0] == (codebase / "sub" / "b.py").as_posix()  # path header
     # Gutter is "<line>| " — number, pipe, then exactly one space before the code.
     assert lines[1] == "1| def baz(y):"
+
+
+def test_render_strips_crlf_carriage_returns(tmp_path: Path) -> None:
+    # CRLF files must not leak a trailing "\r" into rendered code lines (regression:
+    # source.split("\n") left it on every line). newline="" writes "\r\n" verbatim
+    # instead of letting the platform translate it.
+    (tmp_path / "crlf.py").write_text("def baz(y):\r\n    pass\r\n", newline="")
+    req = g.GrepRequest(pattern=r"def \NAME(\(ARGS*\)):", root=tmp_path / "crlf.py")
+    rendered = g.render_results(run_grep(req), color=False)
+    assert "\r" not in rendered
+    assert "1| def baz(y):" in rendered
 
 
 def test_render_separator_between_matches(codebase: Path) -> None:
