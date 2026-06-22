@@ -103,7 +103,7 @@ echo "### F. Real Rust codebase (the port's own src) — multi-language"
 P="$ROOT/realrust"; mkdir -p "$P/src"
 cp "$REPO"/rust/src/*.rs "$P/src/"
 cp "$REPO"/rust/Cargo.toml "$P/"
-cp "$REPO"/rust/PORTING.md "$P/"
+cp "$REPO"/rust/README.md "$P/"
 cd "$P"; $BIN init >/dev/null 2>&1; rr=$($BIN index 2>&1 | grep -E "rust:|toml:|markdown:")
 has "indexed rust files"     "rust:"     "$rr"
 has "indexed toml"           "toml:"     "$rr"
