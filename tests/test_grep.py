@@ -149,7 +149,7 @@ def test_grep_single_file(codebase: Path) -> None:
 def test_grep_path_glob(codebase: Path) -> None:
     req = g.GrepRequest(pattern=r"def \NAME(\(ARGS*\)):", root=codebase, path_glob="sub/**")
     results = run_grep(req)
-    assert {fm.path for fm in results} == {str(codebase / "sub" / "b.py")}
+    assert {fm.path for fm in results} == {(codebase / "sub" / "b.py").as_posix()}
 
 
 def test_grep_no_matches(codebase: Path) -> None:
