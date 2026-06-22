@@ -372,10 +372,8 @@ async def _check_file_walk(project_root_str: str) -> DoctorCheckResult:
     """Walk project files and report counts + gitignore paths."""
     from pathlib import PurePath
 
-    from cocoindex.resources.file import PatternFilePathMatcher
-
-    from .indexer import GitignoreAwareMatcher
-    from .settings import load_gitignore_spec, load_project_settings
+    from .file_walk import build_matcher
+    from .settings import load_project_settings
 
     project_root = Path(project_root_str)
     try:
@@ -383,12 +381,7 @@ async def _check_file_walk(project_root_str: str) -> DoctorCheckResult:
     except FileNotFoundError as e:
         return DoctorCheckResult(name="File Walk", ok=False, details=[], errors=[str(e)])
 
-    gitignore_spec = load_gitignore_spec(project_root)
-    base_matcher = PatternFilePathMatcher(
-        included_patterns=ps.include_patterns,
-        excluded_patterns=ps.exclude_patterns,
-    )
-    matcher = GitignoreAwareMatcher(base_matcher, gitignore_spec, project_root)
+    matcher = build_matcher(project_root, ps.include_patterns, ps.exclude_patterns)
 
     counts_by_ext: dict[str, int] = {}
     gitignore_dirs: list[str] = []
