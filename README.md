@@ -63,6 +63,8 @@ Next, set up your [coding agent integration](#coding-agent-integration) — or j
 
 ## Coding Agent Integration
 
+This repository is a **single plugin marketplace** (`.claude-plugin/marketplace.json`) consumed by both **Claude Code** and **Grok** — same plugin id `cocoindex-code`, same `ccc` skill. Grok optionally activates the bundled hooks and MCP server with `--trust`; Claude Code users can install the same marketplace and rely on the skill alone or load hooks/MCP from the plugin as needed.
+
 ### Skill (Recommended)
 
 Install the `ccc` skill so your coding agent automatically uses semantic search when needed:
