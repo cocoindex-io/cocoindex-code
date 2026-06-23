@@ -508,6 +508,14 @@ chunkers:
 
 > `.cocoindex_code/` is automatically added to `.gitignore` during init.
 
+After editing `include_patterns`, `exclude_patterns`, or `language_overrides`:
+
+- Run `ccc doctor` to preview which files match.
+- Run `ccc index` or `ccc search --refresh ...` to update the existing index.
+- You do not need to delete the index or restart the daemon for these file-matching changes.
+
+If you add or change custom `chunkers`, restart the daemon first so the chunker registry is reloaded, then run `ccc index`.
+
 Use `chunkers` when you want to control how a file type is split into chunks before indexing.
 
 `module: example_toml_chunker:toml_chunker` means:
