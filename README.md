@@ -82,11 +82,38 @@ Works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and oth
 For Claude Code users, this repository is also a [plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). Install the skill from inside Claude Code with:
 
 ```text
-/plugin marketplace add Roxabi/cocoindex-code
+/plugin marketplace add cocoindex-io/cocoindex-code
 /plugin install cocoindex-code@cocoindex-code
 ```
 
 This bundles the same `ccc` skill, with version pinning and `/plugin marketplace update` for updates.
+
+#### Grok plugin (skill-only, same behavior as Claude)
+
+For [Grok](https://github.com/xai-org/grok) users, install the same `ccc` skill via Grok's plugin system. The plugin ships **only the skill** — no lifecycle hooks, no bundled MCP — matching the Claude Code plugin above.
+
+```bash
+grok plugin marketplace add cocoindex-io/cocoindex-code
+grok plugin install cocoindex-code
+grok plugin enable cocoindex-code
+```
+
+`--trust` is not required for this plugin (trust is only needed when a plugin bundles hooks or MCP servers).
+
+Grok does **not** import Claude's `enabledPlugins` or plugin cache; install and enable the plugin separately even if you already use cocoindex in Claude Code.
+
+**Index freshness (Claude and Grok):** there is no automatic `SessionStart` hook. The `ccc` skill instructs the agent to run `ccc index` (or `ccc search --refresh`) at the start of a session or after significant code changes. Search runs via the CLI (`ccc search`), not via MCP, unless you opt into MCP manually below.
+
+To keep a skill-only setup in Grok and avoid pulling MCP servers from Claude/Cursor config:
+
+```toml
+# ~/.grok/config.toml
+[compat.claude]
+mcps = false
+
+[compat.cursor]
+mcps = false
+```
 
 ### MCP Server
 
