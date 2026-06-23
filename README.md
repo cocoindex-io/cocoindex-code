@@ -86,28 +86,47 @@ For Claude Code users, this repository is also a [plugin marketplace](https://co
 /plugin install cocoindex-code@cocoindex-code
 ```
 
-This bundles the same `ccc` skill, with version pinning and `/plugin marketplace update` for updates.
+This bundles the same `ccc` skill, with version pinning and `/plugin marketplace update` for updates. The repository also ships `hooks/hooks.json` and `.mcp.json` for Grok (and Claude Code plugin installs that load those files); Claude users who want skill-only search can rely on the skill alone and add MCP manually in the [MCP Server](#mcp-server) section below instead of using the bundled `.mcp.json`.
 
-#### Grok plugin (skill-only, same behavior as Claude)
+#### Grok plugin
 
-For [Grok](https://github.com/xai-org/grok) users, install the same `ccc` skill via Grok's plugin system. The plugin ships **only the skill** — no lifecycle hooks, no bundled MCP — matching the Claude Code plugin above.
+For [Grok](https://github.com/xai-org/grok) users, install via Grok's plugin system. The plugin bundles three components:
+
+| Component | Purpose |
+|-----------|---------|
+| **Skill** (`skills/ccc/`) | Agent runs `ccc search` / `ccc index` via the CLI (same as Claude Code above) |
+| **Hook** (`hooks/hooks.json`) | `SessionStart` → incremental `ccc index` when `.cocoindex_code/` exists |
+| **MCP** (`.mcp.json`) | `ccc mcp` stdio server — `search` tool with `refresh_index=true` by default |
+
+Grok does **not** import Claude's `enabledPlugins` or plugin cache; install separately even if you already use cocoindex in Claude Code.
+
+**Full install** (skill + hook + MCP):
 
 ```bash
 grok plugin marketplace add cocoindex-io/cocoindex-code
-grok plugin install cocoindex-code
+grok plugin install cocoindex-code --trust
 grok plugin enable cocoindex-code
 ```
 
-`--trust` is not required for this plugin (trust is only needed when a plugin bundles hooks or MCP servers).
+`--trust` is required so Grok activates the plugin's hooks and MCP server (skills load when the plugin is enabled).
 
-Grok does **not** import Claude's `enabledPlugins` or plugin cache; install and enable the plugin separately even if you already use cocoindex in Claude Code.
+**Skill-only** (match Claude Code — no auto-index hook, no MCP tool):
 
-**Index freshness (Claude and Grok):** there is no automatic `SessionStart` hook. The `ccc` skill instructs the agent to run `ccc index` (or `ccc search --refresh`) at the start of a session or after significant code changes. Search runs via the CLI (`ccc search`), not via MCP, unless you opt into MCP manually below.
+Install and enable as above, then disable the optional components:
 
-To keep a skill-only setup in Grok and avoid pulling MCP servers from Claude/Cursor config:
+1. **Hooks** — open `/hooks`, select the `SessionStart` hook from `cocoindex-code`, press `Space` to disable.
+2. **MCP** — open `/mcps`, select `cocoindex-code`, press `Space` to disable; or persist in `~/.grok/config.toml`:
 
 ```toml
-# ~/.grok/config.toml
+[mcp_servers.cocoindex-code]
+enabled = false
+```
+
+The agent still owns indexing via the `ccc` skill (`ccc index` / `ccc search --refresh` when stale), same as Claude Code.
+
+To avoid importing MCP servers from your Claude/Cursor user config (unrelated to this plugin):
+
+```toml
 [compat.claude]
 mcps = false
 

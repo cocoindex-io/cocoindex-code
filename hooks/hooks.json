@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 60,
+            "command": "command -v ccc >/dev/null && test -d \"${CLAUDE_PROJECT_DIR}/.cocoindex_code\" && (cd \"${CLAUDE_PROJECT_DIR}\" && ccc index) 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cocoindex-code": {
+      "command": "ccc",
+      "args": ["mcp"]
+    }
+  }
+}

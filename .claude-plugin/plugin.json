@@ -1,7 +1,7 @@
 {
   "name": "cocoindex-code",
   "version": "1.0.0",
-  "description": "AST-based semantic code search via the ccc CLI. Bundles the ccc skill (skill-only; no hooks or MCP) so coding agents handle init, indexing, and search automatically.",
+  "description": "AST-based semantic code search via the ccc CLI. Bundles the ccc skill; Grok installs also activate a SessionStart index hook and MCP server (disable either for skill-only).",
   "author": {
     "name": "CocoIndex",
     "email": "hi@cocoindex.io"

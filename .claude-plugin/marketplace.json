@@ -10,7 +10,7 @@
     {
       "name": "cocoindex-code",
       "source": "./",
-      "description": "Semantic code search skill — wraps the `ccc` CLI to give coding agents AST-aware search over the current codebase.",
+      "description": "Semantic code search — ccc skill, optional SessionStart index hook, and MCP server (Grok: disable hook/MCP for skill-only).",
       "category": "development",
       "tags": [
         "semantic-search",
