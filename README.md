@@ -106,9 +106,11 @@ Grok does **not** import Claude's `enabledPlugins` or plugin cache; install sepa
 
 ```bash
 grok plugin marketplace add cocoindex-io/cocoindex-code
-grok plugin install cocoindex-code --trust
+grok plugin install cocoindex-io/cocoindex-code --trust
 grok plugin enable cocoindex-code
 ```
+
+Prefer the GitHub shorthand (`cocoindex-io/cocoindex-code`) for install — `grok plugin install cocoindex-code` can fail when no marketplace plugin matches that bare name.
 
 `--trust` is required so Grok activates the plugin's hooks and MCP server (skills load when the plugin is enabled).
 
