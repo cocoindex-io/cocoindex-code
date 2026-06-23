@@ -10,6 +10,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 from collections.abc import AsyncIterator, Callable
 from multiprocessing.connection import Connection, Listener
 from pathlib import Path
@@ -250,7 +251,11 @@ async def handle_connection(
                     conn.send_bytes(encode_response(resp))
             except Exception as exc:
                 logger.exception("Error during streaming response")
-                conn.send_bytes(encode_response(ErrorResponse(message=str(exc))))
+                conn.send_bytes(
+                    encode_response(
+                        ErrorResponse(message=str(exc), traceback=traceback.format_exc())
+                    )
+                )
         else:
             conn.send_bytes(encode_response(result))
     except (EOFError, OSError, asyncio.CancelledError):
@@ -359,6 +364,7 @@ async def _check_model(
         ok=False,
         details=[params_detail],
         errors=[result.error],
+        traceback=result.traceback,
     )
 
 
@@ -366,10 +372,8 @@ async def _check_file_walk(project_root_str: str) -> DoctorCheckResult:
     """Walk project files and report counts + gitignore paths."""
     from pathlib import PurePath
 
-    from cocoindex.resources.file import PatternFilePathMatcher
-
-    from .indexer import GitignoreAwareMatcher
-    from .settings import load_gitignore_spec, load_project_settings
+    from .file_walk import build_matcher
+    from .settings import load_project_settings
 
     project_root = Path(project_root_str)
     try:
@@ -377,12 +381,7 @@ async def _check_file_walk(project_root_str: str) -> DoctorCheckResult:
     except FileNotFoundError as e:
         return DoctorCheckResult(name="File Walk", ok=False, details=[], errors=[str(e)])
 
-    gitignore_spec = load_gitignore_spec(project_root)
-    base_matcher = PatternFilePathMatcher(
-        included_patterns=ps.include_patterns,
-        excluded_patterns=ps.exclude_patterns,
-    )
-    matcher = GitignoreAwareMatcher(base_matcher, gitignore_spec, project_root)
+    matcher = build_matcher(project_root, ps.include_patterns, ps.exclude_patterns)
 
     counts_by_ext: dict[str, int] = {}
     gitignore_dirs: list[str] = []

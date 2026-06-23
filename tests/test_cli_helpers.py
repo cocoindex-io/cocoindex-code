@@ -229,7 +229,7 @@ def test_init_auto_populates_known_model(
         "_resolve_embedding_choice",
         lambda **_kw: EmbeddingSettings(provider="litellm", model="cohere/embed-english-v3.0"),
     )
-    monkeypatch.setattr(cli, "_run_init_model_check", lambda path: None)
+    monkeypatch.setattr(cli, "_run_init_model_check", lambda: True)
 
     cli._setup_user_settings_interactive(litellm_model_flag=None)
 
@@ -264,7 +264,7 @@ def test_init_writes_comment_template_for_unknown_model(
         "_resolve_embedding_choice",
         lambda **_kw: EmbeddingSettings(provider="litellm", model="someprovider/unknown-model"),
     )
-    monkeypatch.setattr(cli, "_run_init_model_check", lambda path: None)
+    monkeypatch.setattr(cli, "_run_init_model_check", lambda: True)
 
     cli._setup_user_settings_interactive(litellm_model_flag=None)
 
@@ -275,3 +275,128 @@ def test_init_writes_comment_template_for_unknown_model(
     loaded = load_user_settings()
     assert loaded.embedding.indexing_params is None
     assert loaded.embedding.query_params is None
+
+
+def test_init_failed_check_prints_next_steps_and_keeps_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When the model check fails and we can't re-prompt (non-interactive), the
+    settings file is kept and a 'Next steps' recovery block is printed.
+    """
+    from cocoindex_code.settings import EmbeddingSettings, user_settings_path
+
+    user_dir = tmp_path / ".cocoindex_code"
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(user_dir))
+
+    monkeypatch.setattr(
+        cli,
+        "_resolve_embedding_choice",
+        lambda **_kw: EmbeddingSettings(provider="litellm", model="someprovider/unknown-model"),
+    )
+    monkeypatch.setattr(cli, "_run_init_model_check", lambda: False)
+    # Non-interactive: no retry prompt, falls straight through to next steps.
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+
+    cli._setup_user_settings_interactive(litellm_model_flag=None)
+
+    err = capsys.readouterr().err
+    assert "Next steps" in err
+    assert "ccc doctor" in err
+    # Settings are kept on disk so the user can edit them.
+    assert user_settings_path().is_file()
+
+
+def test_resolve_embedding_choice_prefills_previous_on_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On retry, last attempt's provider and model become the prompt defaults."""
+    import questionary
+
+    from cocoindex_code.settings import EmbeddingSettings
+
+    captured: dict[str, object] = {}
+
+    class _FakeQuestion:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def ask(self) -> object:
+            return self._value
+
+    def _fake_select(
+        message: str, choices: object, default: object = None, **_kw: object
+    ) -> _FakeQuestion:
+        captured["select_default"] = default
+        return _FakeQuestion("litellm")
+
+    def _fake_text(message: str, default: str = "", **_kw: object) -> _FakeQuestion:
+        captured["text_default"] = default
+        return _FakeQuestion("openai/text-embedding-3-small")
+
+    monkeypatch.setattr(questionary, "select", _fake_select)
+    monkeypatch.setattr(questionary, "text", _fake_text)
+
+    previous = EmbeddingSettings(provider="litellm", model="ollama/nomic-embed-text")
+    result = cli._resolve_embedding_choice(
+        litellm_model_flag=None,
+        st_installed=True,
+        tty=True,
+        previous=previous,
+    )
+
+    # Provider select is pre-pointed at last time's provider; model is pre-filled.
+    assert captured["select_default"] == "litellm"
+    assert captured["text_default"] == "ollama/nomic-embed-text"
+    assert result.provider == "litellm"
+    assert result.model == "openai/text-embedding-3-small"
+
+
+def test_st_model_rejection_reason_flags_ollama_prefix() -> None:
+    """`ollama/` models can't be used with sentence-transformers; valid HF ids pass."""
+    reason = cli._st_model_rejection_reason("ollama/nomic-embed-text")
+    assert reason is not None and "litellm" in reason
+    # Case-insensitive and whitespace-tolerant.
+    assert cli._st_model_rejection_reason("  OLLAMA/foo ") is not None
+    # Real HuggingFace ids with an `org/` slash must not false-positive.
+    assert cli._st_model_rejection_reason("Snowflake/snowflake-arctic-embed-xs") is None
+    assert cli._st_model_rejection_reason("openai/clip-vit-base-patch32") is None
+
+
+def test_resolve_embedding_choice_validates_st_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sentence-transformers model prompt gets a validator that rejects
+    `ollama/` models inline (before anything is written or tested)."""
+    import questionary
+
+    captured: dict[str, object] = {}
+
+    class _FakeQuestion:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def ask(self) -> object:
+            return self._value
+
+    def _fake_select(
+        message: str, choices: object, default: object = None, **_kw: object
+    ) -> _FakeQuestion:
+        return _FakeQuestion("sentence-transformers")
+
+    def _fake_text(
+        message: str, default: str = "", validate: object = None, **_kw: object
+    ) -> _FakeQuestion:
+        captured["validate"] = validate
+        return _FakeQuestion("Snowflake/snowflake-arctic-embed-xs")
+
+    monkeypatch.setattr(questionary, "select", _fake_select)
+    monkeypatch.setattr(questionary, "text", _fake_text)
+
+    cli._resolve_embedding_choice(litellm_model_flag=None, st_installed=True, tty=True)
+
+    validate = captured["validate"]
+    assert callable(validate)
+    assert validate("ollama/nomic-embed-text") is not True  # rejected (returns message)
+    assert validate("Snowflake/snowflake-arctic-embed-xs") is True

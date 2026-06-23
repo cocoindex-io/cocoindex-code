@@ -77,3 +77,78 @@ def test_print_handshake_warnings_no_warnings_prints_nothing(
     monkeypatch.setattr(client, "_surfaced_warnings", set())
     client._print_handshake_warnings(HandshakeResponse(ok=True, daemon_version="x"))
     assert capsys.readouterr().err == ""
+
+
+def test_connect_restarts_ensured_daemon_on_stale_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An already-ensured daemon reporting stale global settings (resp.ok True,
+    moved mtime) is restarted, not surfaced as an error. This is the `ccc init`
+    retry path, where rewriting global_settings.yml changes its mtime.
+    """
+    from cocoindex_code.protocol import HandshakeResponse
+
+    monkeypatch.setattr(client, "_daemon_ensured", True)
+
+    sentinel_conn = object()
+    calls = {"raw": 0, "stop": 0, "start": 0}
+
+    def fake_raw() -> object:
+        calls["raw"] += 1
+        if calls["raw"] == 1:
+            raise client.DaemonVersionError(
+                HandshakeResponse(ok=True, daemon_version="v1", global_settings_mtime_us=1)
+            )
+        return sentinel_conn
+
+    monkeypatch.setattr(client, "_raw_connect_and_handshake", fake_raw)
+    monkeypatch.setattr(client, "stop_daemon", lambda: calls.update(stop=calls["stop"] + 1))
+    monkeypatch.setattr(client, "start_daemon", lambda: calls.update(start=calls["start"] + 1))
+    monkeypatch.setattr(client, "_wait_for_daemon", lambda **_kw: None)
+    monkeypatch.setattr(client, "_is_daemon_supervised", lambda: False)
+
+    conn = client._connect_and_handshake()
+
+    assert conn is sentinel_conn
+    assert calls["stop"] == 1  # old daemon stopped
+    assert calls["start"] == 1  # fresh daemon started to reload settings
+    assert calls["raw"] == 2  # reconnected after restart
+
+
+def test_connect_fails_fast_on_version_mismatch_after_ensured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A genuine version mismatch (resp.ok False) after the daemon was already
+    ensured means the binary was swapped under us — fail fast, don't restart.
+    """
+    from cocoindex_code.protocol import HandshakeResponse
+
+    monkeypatch.setattr(client, "_daemon_ensured", True)
+    started = {"start": 0}
+
+    def fake_raw() -> object:
+        raise client.DaemonVersionError(HandshakeResponse(ok=False, daemon_version="other-version"))
+
+    monkeypatch.setattr(client, "_raw_connect_and_handshake", fake_raw)
+    monkeypatch.setattr(client, "stop_daemon", lambda: None)
+    monkeypatch.setattr(client, "start_daemon", lambda: started.update(start=1))
+    monkeypatch.setattr(client, "_wait_for_daemon", lambda **_kw: None)
+    monkeypatch.setattr(client, "_is_daemon_supervised", lambda: False)
+
+    with pytest.raises(client.DaemonVersionError):
+        client._connect_and_handshake()
+    assert started["start"] == 0  # never tried to restart
+
+
+def test_daemon_version_error_message_reflects_cause() -> None:
+    """The error text matches the real cause — not always "version mismatch"."""
+    from cocoindex_code.protocol import HandshakeResponse
+
+    version_err = client.DaemonVersionError(HandshakeResponse(ok=False, daemon_version="x"))
+    assert "version mismatch" in str(version_err)
+
+    settings_err = client.DaemonVersionError(
+        HandshakeResponse(ok=True, daemon_version="x", global_settings_mtime_us=1)
+    )
+    assert "stale global settings" in str(settings_err)
+    assert "version mismatch" not in str(settings_err)
