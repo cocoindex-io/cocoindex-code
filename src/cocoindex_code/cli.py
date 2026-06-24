@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import os
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
@@ -12,6 +13,7 @@ from typing import TYPE_CHECKING, TypeVar
 import typer as _typer
 
 if TYPE_CHECKING:
+    from .grep import FileMatches, GrepWarning
     from .protocol import (
         DoctorCheckResult,
         IndexingProgress,
@@ -655,6 +657,79 @@ def search(
         offset=offset,
     )
     print_search_results(resp)
+
+
+@app.command()
+def grep(
+    pattern: str = _typer.Argument(
+        ...,
+        help=r"By-example structural pattern; use \ for metavariables, "
+        r"e.g. 'def \NAME(\(ARGS*\)):' or 'foo(\(ARGS*\))'.",
+    ),
+    path: str = _typer.Argument(
+        ".", help="File or directory to search (default: current directory)."
+    ),
+    lang: list[str] = _typer.Option(
+        [], "--lang", help="Only match files of these languages (e.g. python, rust, cpp)."
+    ),
+    path_glob: str | None = _typer.Option(
+        None, "--path", help="Only match files whose path matches this glob (globset syntax)."
+    ),
+    no_color: bool = _typer.Option(False, "--no-color", help="Disable colored output."),
+) -> None:
+    r"""Structurally grep code by example (no index or daemon required).
+
+    Compiles the pattern per language and matches every supported source file
+    under PATH in parallel. Inside an initialized project it honors the project's
+    include/exclude and .gitignore rules; otherwise it scans all supported source
+    files.
+    """
+    from . import grep as _grep
+
+    target = Path(path)
+    if not target.exists():
+        _typer.echo(f"Error: path not found: {path}", err=True)
+        raise _typer.Exit(code=1)
+
+    req = _grep.GrepRequest(
+        pattern=pattern,
+        root=target,
+        languages=frozenset(lang_name.lower() for lang_name in lang) or None,
+        path_glob=path_glob,
+    )
+    use_color = not no_color and sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+    grep_run = _grep.Grep(req)
+    matched = 0
+    # `run` calls `_emit` from several worker threads at once; the lock keeps one
+    # file's output (and the `matched` bookkeeping) from interleaving with another's.
+    output_lock = threading.Lock()
+
+    def _emit(item: FileMatches | GrepWarning) -> None:
+        nonlocal matched
+        if isinstance(item, _grep.GrepWarning):
+            with output_lock:
+                _typer.echo(f"warning: {item.message}", err=True)
+            return
+        block = _grep.render_file(item, color=use_color)  # render outside the lock
+        with output_lock:
+            if matched:
+                _typer.echo()  # blank line between files
+            _typer.echo(block)
+            matched += 1
+
+    grep_run.run(_emit)
+
+    # The "unusable everywhere" verdict needs the whole walk, so it's known only
+    # once the run is done — report it before exiting.
+    if grep_run.unusable:
+        langs = ", ".join(grep_run.failed_languages)
+        _typer.echo(
+            f"Error: the pattern did not compile for any of the languages found ({langs}).",
+            err=True,
+        )
+        raise _typer.Exit(code=1)
+    if matched == 0:
+        _typer.echo("No matches found.")
 
 
 @app.command()
