@@ -134,6 +134,24 @@ Or use opencode.json:
 ```
 </details>
 
+<details>
+<summary>Kilo Code</summary>
+
+Add a local MCP server in `~/.config/kilo/kilo.jsonc`, `kilo.jsonc`, or `.kilo/kilo.jsonc`:
+
+```json
+{
+  "mcp": {
+    "cocoindex-code": {
+      "type": "local",
+      "command": ["ccc", "mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+</details>
+
 Once configured, the agent automatically decides when semantic code search is helpful — finding code by description, exploring unfamiliar codebases, fuzzy/conceptual matches, or locating implementations without knowing exact names.
 
 > **Note:** The `cocoindex-code` command (without subcommand) still works as an MCP server for backward compatibility. It auto-creates settings from environment variables on first run.
