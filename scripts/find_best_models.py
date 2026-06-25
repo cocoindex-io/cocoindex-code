@@ -163,6 +163,12 @@ def main():
         "jinaai/jina-embeddings-v5-text-nano": 239,
         "ibm-granite/granite-embedding-97m-multilingual-r2": 97,
         "geevec-ai/geevec-embeddings-1.0-lite": 366,
+        "lightonai/LateOn-Code-edge": 17,
+        "lightonai/LateOn-Code": 149,
+        "microsoft/harrier-oss-v1-270m": 270,
+        "thenlper/gte-small": 33,
+        "thenlper/gte-base": 109,
+        "codefuse-ai/F2LLM-v2-330M": 334,
     }
 
     def categorize(size):
@@ -178,7 +184,7 @@ def main():
 
     print("Analyzing top candidates to determine hardware tiers...", file=sys.stderr)
     results["max_score"] = results[["score_general", "score_code"]].max(axis=1)
-    results = results.sort_values(by="max_score", ascending=False).head(500)
+    results = results.sort_values(by="max_score", ascending=False).head(1000)
 
     results["size_mb"] = results["model_name"].map(known_sizes)
 
