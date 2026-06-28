@@ -140,6 +140,18 @@ envs:
   VOYAGE_API_KEY: your-api-key-here
 ```
 
+To access Voyage models through [MongoDB Atlas](https://www.mongodb.com/docs/voyageai/api-and-clients/),
+use the `mongodb/` prefix. Requests are routed to `https://ai.mongodb.com/v1` using your
+Atlas model API key (still read from `VOYAGE_API_KEY`):
+
+```yaml
+embedding:
+  provider: litellm
+  model: mongodb/voyage-4-large
+envs:
+  VOYAGE_API_KEY: your-atlas-model-api-key
+```
+
 For more information, see the [LiteLLM Providers Documentation](https://docs.litellm.ai/docs/providers).
 
 [Back to top](#table-of-contents)
