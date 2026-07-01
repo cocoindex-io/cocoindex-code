@@ -79,8 +79,8 @@ These are based on MTEB [datasets](https://huggingface.co/datasets/mteb/results)
 | **Default** | [`Snowflake/arctic-embed-xs`](https://huggingface.co/Snowflake/snowflake-arctic-embed-xs) | 22M | 384 | 0.67 | Enc | Very Fast | Smallest, most compatible default |
 | **Micro** | [`lightonai/LateOn-Code-edge`](https://huggingface.co/lightonai/LateOn-Code-edge) | 17M | 256 | 0.82 | Enc | Crazy Fast (231 cps) | **Efficiency King.** Incredible code performance for its size. |
 | **Small** | [`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code) | 149M | 768 | 0.85 | Enc | Fast (7 cps) | Great balance of speed and accuracy on modern laptops. |
-| **Medium (Encoder)** | [`Shuu12121/CodeSearch-ModernBERT-Crow-Plus`](https://huggingface.co/Shuu12121/CodeSearch-ModernBERT-Crow-Plus) | 152M |  | 0.89 | Enc | Fast | High accuracy with encoder speed; **best for CPU-only indexing at this tier.** |
-| **Larger (Decoder)** | [`microsoft/harrier-oss-v1-270m`](https://huggingface.co/microsoft/harrier-oss-v1-270m) | 270M | 640 | **0.90** | *Dec* | Slow | Highest local accuracy; **GPU** *strongly recommended* for acceptable speed. |
+| **Medium** | [`Shuu12121/CodeSearch-ModernBERT-Crow-Plus`](https://huggingface.co/Shuu12121/CodeSearch-ModernBERT-Crow-Plus) | 152M |  | 0.89 | Enc | Fast | High accuracy with encoder speed; **best for CPU-only indexing at this tier.** |
+| **Larger** | [`microsoft/harrier-oss-v1-270m`](https://huggingface.co/microsoft/harrier-oss-v1-270m) | 270M | 640 | **0.90** | *Dec* | Slow | Highest local accuracy; **GPU** *strongly recommended* for acceptable speed. |
 | **Multi-Lingual** | [`ibm-granite/granite-embedding-97m-multilingual-r2`](https://huggingface.co/ibm-granite/granite-embedding-97m-multilingual-r2) | 97M | 384 | 0.80 | Enc | Fast | Multilingual codebases (e.g. Code + Docs in different languages). |
 
 #### Other Model Options
