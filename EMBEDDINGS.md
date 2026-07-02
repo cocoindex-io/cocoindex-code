@@ -31,7 +31,7 @@
 
 ### Speed & Latency
 
-- **Local Sentence-Transformers**: Typically the **fastest** option for small-to-medium models. Because it runs directly inside the `cocoindex-code` process, it avoids the network latency of Cloud APIs and the communication overhead of Local Servers (Ollama).
+- **Local Sentence-Transformers**: Typically the **fastest** option for small-to-medium **encoder** models. Because it runs directly inside the `cocoindex-code` process, it avoids the network latency of Cloud APIs and the communication overhead of Local Servers (Ollama). Decoder-based models (e.g. `harrier-oss-v1`) are also in-process, but process tokens sequentially — expect 3–10× slower indexing per chunk on CPU unless you have a GPU.
 - **Local Servers (Ollama)**: Ideal for running **heavy models** (like `mxbai-embed-large`) on a GPU. While it has slight overhead compared to in-process execution, it is much faster than running large models on a CPU.
 - **Cloud APIs**: Slower per-request due to network latency, but highly parallel. Best for the initial indexing of massive repositories.
 
@@ -45,10 +45,14 @@ In `cocoindex-code`, this matters less than you might expect due to our **Langua
 - **Target Size**: While respecting boundaries, it targets a chunk size of **~1,000 characters** (~300 tokens).
 - **Compatibility**: This hybrid approach ensures code snippets are contextually coherent while remaining small enough to fit perfectly within even the smallest 512-token context windows.
 
-### CPU vs. GPU
+### CPU vs. GPU and Architecture
 
-- The default `xs` model is optimized for **CPUs**; you likely won't see a benefit from a GPU.
-- For `medium` or `large` models, a GPU is highly recommended. If you have one, you can tell Sentence-Transformers to use it by adding `device: cuda` (or `mps` for Mac) to your `global_settings.yml`.
+Indexing speed depends on **both parameter count and model architecture**:
+
+- **Encoder models** (BERT/ModernBERT-based, e.g. Snowflake, LateOn-Code, CodeSearch-ModernBERT): Process all tokens in parallel — fast on any modern CPU. The default `xs` and all models marked **Fast** or **Very Fast** in the table below are encoder-based.
+- **Decoder models** (LLM-based, e.g. `harrier-oss-v1`): Process tokens sequentially, making them **3–10× slower** than an encoder of comparable parameter count on CPU. A GPU is strongly recommended to achieve acceptable indexing throughput with these models.
+
+For encoder models at medium or large sizes, a GPU will still accelerate indexing. Add `device: cuda` (or `mps` on Mac) to `global_settings.yml`.
 
 ---
 
@@ -70,13 +74,14 @@ This option runs embedding models directly on your machine using the library.
 
 These are based on MTEB [datasets](https://huggingface.co/datasets/mteb/results) as of 15-Jun-2026. All listed models have been verified to work with the `sentence-transformers` provider in `cocoindex-code`.
 
-| Tier | Model | Params | Code Score | Best For |
-| :--- | :--- | :--- | :--- | :--- |
-| **Default** | [`Snowflake/arctic-embed-xs`](https://huggingface.co/Snowflake/snowflake-arctic-embed-xs) | 22M | 0.67 | Default |
-| **Micro** | [`lightonai/LateOn-Code-edge`](https://huggingface.co/lightonai/LateOn-Code-edge) | 17M | 0.82 | **Efficiency King.** Incredible code performance for its size. |
-| **Small** | [`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code) | 149M | 0.85 | Great balance of speed and accuracy on modern laptops. |
-| **Medium** | [`microsoft/harrier-oss-v1-270m`](https://huggingface.co/microsoft/harrier-oss-v1-270m) | 270M | **0.90** | **Performance sweet spot.** High accuracy, runs well on CPUs. |
-| **Multi** | [`ibm-granite/granite-embedding-97m-multilingual-r2`](https://huggingface.co/ibm-granite/granite-embedding-97m-multilingual-r2) | 97M | 0.80 | Multilingual codebases (e.g. Code + Docs in different languages). |
+| Tier | Model | Params | Dims | Code Score | Arch  | CPU Speed | Best For |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Default** | [`Snowflake/arctic-embed-xs`](https://huggingface.co/Snowflake/snowflake-arctic-embed-xs) | 22M | 384 | 0.67 | Enc | Very Fast | Smallest, most compatible default |
+| **Micro** | [`lightonai/LateOn-Code-edge`](https://huggingface.co/lightonai/LateOn-Code-edge) | 17M | 256 | 0.82 | Enc | Crazy Fast (231 cps) | **Efficiency King.** Incredible code performance for its size. |
+| **Small** | [`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code) | 149M | 768 | 0.85 | Enc | Fast (7 cps) | Great balance of speed and accuracy on modern laptops. |
+| **Medium** | [`Shuu12121/CodeSearch-ModernBERT-Crow-Plus`](https://huggingface.co/Shuu12121/CodeSearch-ModernBERT-Crow-Plus) | 152M |  | 0.89 | Enc | Fast | High accuracy with encoder speed; **best for CPU-only indexing at this tier.** |
+| **Larger** | [`microsoft/harrier-oss-v1-270m`](https://huggingface.co/microsoft/harrier-oss-v1-270m) | 270M | 640 | **0.90** | *Dec* | Slow | Highest local accuracy; **GPU** *strongly recommended* for acceptable speed. |
+| **Multi-Lingual** | [`ibm-granite/granite-embedding-97m-multilingual-r2`](https://huggingface.co/ibm-granite/granite-embedding-97m-multilingual-r2) | 97M | 384 | 0.80 | Enc | Fast | Multilingual codebases (e.g. Code + Docs in different languages). |
 
 #### Other Model Options
 
@@ -90,7 +95,7 @@ The default of `Snowflake/arctic-embed-xs` is a good choice in most situations, 
     4. Enable the **Sentence-Transformers Compatible** toggle.
     5. Adjust **Model Size** to fit your hardware (e.g., `< 500M` for CPUs).
 - **Compatibility**: Look for **Bi-encoders** with a fixed dimension size (e.g., 384, 768, 1024). Avoid "Late Interaction" (ColBERT) or "Cross-Encoders".
-- **Architecture**: **Encoder** models (BERT-based) are much faster on CPUs than **Decoder** models (LLM-based).
+- **Architecture**: **Encoder** models (BERT/ModernBERT-based) are much faster on CPUs than **Decoder** models (LLM-based). A decoder model of the same parameter count can be 3–10× slower per chunk due to sequential token processing. Prefer encoders for CPU-only workloads.
 
 ### Installation & Configuration
 
@@ -101,7 +106,7 @@ Example `global_settings.yml`:
 ```yaml
 embedding:
   provider: sentence-transformers
-  model: jinaai/jina-embeddings-v5-text-nano
+  model: lightonai/LateOn-Code-edge
   device: cpu # Use 'cuda' or 'mps' if you have a GPU
 ```
 
@@ -191,7 +196,8 @@ envs:
 
 ## Choosing Based on Your Content
 
-- **Heavy Source Code**: Use **LateOn-Code** (Micro/Small) or **Harrier 270m** (Medium). Both score >0.85 on code search benchmarks.
+- **Heavy Source Code, CPU-only**: Use **LateOn-Code** (Micro/Small) or **CodeSearch-ModernBERT-Crow-Plus** (Medium Encoder). Both are encoder-based and score >0.85 on code search benchmarks with good CPU throughput.
+- **Heavy Source Code, GPU available**: **Harrier 270m** (Medium Decoder, 0.90) gives the highest local accuracy and is much faster with a GPU.
 - **Large Documentation / Files**: Models with large context windows like **Voyage 4 Large** (Cloud) or **OpenAI v3 Large** (8k).
 - **Multilingual Projects**: **Granite 97m** (Small Local) or **Cohere Multilingual v3** (Cloud).
 
@@ -211,14 +217,15 @@ embedding:
     input_type: query
 ```
 
-**Example for Sentence-Transformers (Harrier):**
+**Example for Sentence-Transformers (symmetric models — Harrier, CodeSearch-ModernBERT, etc.):**
+
+Most local models don't require asymmetric prompts. If `ccc init` doesn't auto-detect defaults
+for your model, an explicit `null` disables any inherited prompt:
 
 ```yaml
 embedding:
   provider: sentence-transformers
-  model: microsoft/harrier-oss-v1-270m
-  # Most encoder-only models don't require explicit prompts,
-  # but some (like Nomic or BGE) do:
+  model: microsoft/harrier-oss-v1-270m  # or Shuu12121/CodeSearch-ModernBERT-Crow-Plus
   indexing_params:
     prompt_name: null
   query_params:
