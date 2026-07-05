@@ -20,6 +20,8 @@ if TYPE_CHECKING:
         ProjectStatusResponse,
         SearchResponse,
     )
+    from .textsearch import FileMatches as TextFileMatches
+    from .textsearch import TextSearchWarning
 
 from .settings import (
     DEFAULT_ST_MODEL,
@@ -264,6 +266,65 @@ def _search_with_wait_spinner(
         )
 
     return resp
+
+
+def _run_text_search(
+    terms: list[str],
+    *,
+    path_glob: str | None,
+    languages: list[str],
+    ignore_case: bool,
+    case_sensitive: bool,
+    no_color: bool,
+) -> None:
+    """Run the local literal/regex text search (``ccc search --text``).
+
+    Fully local — no project init or daemon required — walking files like
+    ``ccc grep``. Results stream per file as they complete.
+    """
+    from . import textsearch as _ts
+
+    if ignore_case and case_sensitive:
+        _typer.echo("Error: --ignore-case and --case-sensitive are mutually exclusive.", err=True)
+        raise _typer.Exit(code=1)
+    case_flag: bool | None = True if case_sensitive else (False if ignore_case else None)
+
+    try:
+        compiled = _ts.compile_terms(terms, case_sensitive=case_flag)
+    except _ts.TermSyntaxError as e:
+        _typer.echo(f"Error: {e}", err=True)
+        raise _typer.Exit(code=1)
+
+    req = _ts.TextSearchRequest(
+        terms=tuple(compiled),
+        root=Path.cwd(),
+        languages=frozenset(name.lower() for name in languages) or None,
+        path_glob=path_glob,
+    )
+    use_color = not no_color and sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+    matched = 0
+    # `run` calls `_emit` from several worker threads at once; the lock keeps one
+    # file's output (and the `matched` bookkeeping) from interleaving with another's.
+    output_lock = threading.Lock()
+
+    def _emit(item: TextFileMatches | TextSearchWarning) -> None:
+        nonlocal matched
+        if isinstance(item, _ts.TextSearchWarning):
+            with output_lock:
+                _typer.echo(f"warning: {item.message}", err=True)
+            return
+        block = _ts.render_file(item, color=use_color)  # render outside the lock
+        with output_lock:
+            if matched:
+                _typer.echo()  # blank line between files
+            _typer.echo(block)
+            matched += 1
+
+    _ts.TextSearch(req).run(_emit)
+
+    if matched == 0:
+        _typer.echo("No matches found.")
 
 
 _GITIGNORE_COMMENT = "# CocoIndex Code (ccc)"
@@ -625,14 +686,46 @@ def index() -> None:
 @app.command()
 @_catch_daemon_start_error
 def search(
-    query: list[str] = _typer.Argument(..., help="Search query"),
+    query: list[str] = _typer.Argument(..., help="Search query (or terms for --text)"),
     lang: list[str] = _typer.Option([], "--lang", help="Filter by language"),
     path: str | None = _typer.Option(None, "--path", help="Filter by file path glob"),
     offset: int = _typer.Option(0, "--offset", help="Number of results to skip"),
     limit: int = _typer.Option(10, "--limit", help="Maximum results to return"),
     refresh: bool = _typer.Option(False, "--refresh", help="Refresh index before searching"),
+    text: bool = _typer.Option(
+        False,
+        "--text",
+        "-t",
+        help="Literal/regex full-text search — local, no index or daemon.",
+    ),
+    ignore_case: bool = _typer.Option(
+        False, "-i", "--ignore-case", help="[--text] Force case-insensitive matching."
+    ),
+    case_sensitive: bool = _typer.Option(
+        False, "-s", "--case-sensitive", help="[--text] Force case-sensitive matching."
+    ),
+    no_color: bool = _typer.Option(False, "--no-color", help="[--text] Disable colored output."),
 ) -> None:
-    """Semantic search across the codebase."""
+    """Semantic search across the codebase (or literal/regex search with --text)."""
+    # --text is a local scan (like `grep`): branch out *before* the project/daemon
+    # gate below, so it runs anywhere with no index and no daemon.
+    if text:
+        if refresh:
+            # --refresh rebuilds the semantic index — meaningless for a live scan.
+            _typer.echo(
+                "Error: --refresh does not apply to --text (live scan, no index).", err=True
+            )
+            raise _typer.Exit(code=1)
+        _run_text_search(
+            query,
+            path_glob=path,
+            languages=lang,
+            ignore_case=ignore_case,
+            case_sensitive=case_sensitive,
+            no_color=no_color,
+        )
+        return
+
     project_root = str(require_project_root())
     query_str = " ".join(query)
 
