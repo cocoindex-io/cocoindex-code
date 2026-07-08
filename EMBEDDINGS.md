@@ -74,8 +74,8 @@ This option runs embedding models directly on your machine using the library.
 
 These are based on MTEB [datasets](https://huggingface.co/datasets/mteb/results) as of 15-Jun-2026. All listed models have been verified to work with the `sentence-transformers` provider in `cocoindex-code`.
 
-| Tier | Model | Params | Dims | Code Score | Arch  | CPU Speed | Best For |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| Tier | Model | Params | Dims | Code Score | Arch  | CPU Speed | Notes                                                        |
+| :--- | :--- | :--: | :--: | :--: | :--: | :--: | :--- |
 | **Default** | [`Snowflake/arctic-embed-xs`](https://huggingface.co/Snowflake/snowflake-arctic-embed-xs) | 22M | 384 | 0.67 | Enc | Very Fast | Smallest, most compatible default |
 | **Micro** | [`lightonai/LateOn-Code-edge`](https://huggingface.co/lightonai/LateOn-Code-edge) | 17M | 256 | 0.82 | Enc | Crazy Fast (231 cps) | **Efficiency King.** Incredible code performance for its size. |
 | **Small** | [`lightonai/LateOn-Code`](https://huggingface.co/lightonai/LateOn-Code) | 149M | 768 | 0.85 | Enc | Fast (7 cps) | Great balance of speed and accuracy on modern laptops. |
