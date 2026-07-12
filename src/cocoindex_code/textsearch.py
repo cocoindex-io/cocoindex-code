@@ -10,9 +10,10 @@ Query model (a small GitHub-code-search subset):
 
 * One or more **terms**, AND-combined: a file matches only if *every* term
   appears in it (on some line).
-* A term wrapped in slashes — ``/expr/`` — is a **regex**; otherwise the term is
-  a **literal** substring. A leading backslash escapes the slashes, so
-  ``\/lit/`` searches for the literal text ``/lit/``.
+* A term wrapped in slashes — ``/expr/`` — is a **regex**, *unless* its body has
+  an unescaped ``/`` (then it stays a **literal**, e.g. ``/blobs/v1/``) — matching
+  GitHub code search. Any other term is a literal substring. To regex-match a
+  literal slash, escape it inside the body: ``/\/foo\//``.
 * **Smart-case:** matching is case-insensitive unless the term contains an
   uppercase letter (decided per term), matching ripgrep's default. ``-i`` / ``-s``
   force the choice.
@@ -79,12 +80,34 @@ class FileMatches:
 
 
 @dataclass(frozen=True, slots=True)
+class Term:
+    """One compiled search term.
+
+    Keeps the metadata a future index needs to decide *per term* whether it can
+    use an inverted-index lookup (literal) or must fall back to a scan (regex) —
+    the raw text, whether it's a regex, and its case sensitivity — alongside the
+    compiled ``pattern`` used for matching today.
+    """
+
+    raw: str
+    """The term as typed (e.g. ``password`` or ``/def \\w+\\(/``)."""
+
+    is_regex: bool
+    """True for a ``/…/`` regex term; False for a literal substring."""
+
+    case_sensitive: bool
+    """The resolved case mode (after smart-case / ``-i`` / ``-s``)."""
+
+    pattern: re.Pattern[str]
+    """Compiled matcher — the case flag is already baked in."""
+
+
+@dataclass(frozen=True, slots=True)
 class TextSearchRequest:
     """A text-search invocation."""
 
-    terms: tuple[re.Pattern[str], ...]
-    """Compiled terms, AND-combined. Literals are pre-escaped, regexes compiled
-    as given; the case-sensitivity flag is already baked into each pattern."""
+    terms: tuple[Term, ...]
+    """Search terms, AND-combined — a file matches only if every term does."""
 
     root: Path
     """Directory to search."""
@@ -102,39 +125,41 @@ class TextSearchRequest:
 # ---------------------------------------------------------------------------
 
 
-def _term_source(raw: str) -> tuple[str, str]:
-    r"""Return ``(regex_source, text_for_case_detection)`` for one raw term.
+def _looks_like_regex(raw: str) -> bool:
+    r"""Whether ``raw`` is a ``/…/`` regex term (GitHub-code-search rule).
 
-    ``/expr/`` (with a non-empty body) → the regex ``expr``. A term starting with
-    ``\/`` is an escaped literal (the leading backslash is stripped). Anything
-    else is a literal substring (regex-escaped).
+    A term is a regex only if it is wrapped in slashes *and* its body has no
+    *free* (unescaped) ``/``. So ``/def \w+\(/`` is a regex, but ``/blobs/v1/``
+    stays a literal (the middle ``/`` is free) — matching GitHub. To regex-match
+    a literal slash, escape it inside the body: ``/\/foo\//``.
     """
-    if len(raw) >= 3 and raw[0] == "/" and raw[-1] == "/":
-        inner = raw[1:-1]
-        return inner, inner
-    if raw.startswith("\\/"):
-        literal = raw[1:]  # drop the escaping backslash, keep the rest verbatim
-        return re.escape(literal), literal
-    return re.escape(raw), raw
+    if len(raw) < 3 or raw[0] != "/" or raw[-1] != "/":
+        return False
+    # Drop escaped ``\\`` then ``\/``; any ``/`` still left is a free slash.
+    stripped = raw[1:-1].replace("\\\\", "").replace("\\/", "")
+    return "/" not in stripped
 
 
-def compile_terms(raw_terms: list[str], *, case_sensitive: bool | None) -> list[re.Pattern[str]]:
-    """Compile each raw term into a regex.
+def compile_terms(raw_terms: list[str], *, case_sensitive: bool | None) -> list[Term]:
+    """Compile each raw term into a :class:`Term`.
 
     ``case_sensitive`` forces the case handling for every term; ``None`` selects
-    smart-case per term (case-sensitive iff that term contains an uppercase
+    smart-case per term (case-sensitive iff the term contains an uppercase
     letter). Raises :class:`TermSyntaxError` on an invalid regex.
     """
-    compiled: list[re.Pattern[str]] = []
+    terms: list[Term] = []
     for raw in raw_terms:
-        source, for_case = _term_source(raw)
+        is_regex = _looks_like_regex(raw)
+        source = raw[1:-1] if is_regex else re.escape(raw)
+        for_case = raw[1:-1] if is_regex else raw
         cs = case_sensitive if case_sensitive is not None else any(c.isupper() for c in for_case)
         flags = 0 if cs else re.IGNORECASE
         try:
-            compiled.append(re.compile(source, flags))
+            pattern = re.compile(source, flags)
         except re.error as e:
             raise TermSyntaxError(f"invalid regex {raw!r}: {e}") from e
-    return compiled
+        terms.append(Term(raw=raw, is_regex=is_regex, case_sensitive=cs, pattern=pattern))
+    return terms
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +183,7 @@ def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
 
 
 def _match_file(
-    path: Path, display: str, terms: tuple[re.Pattern[str], ...]
+    path: Path, display: str, terms: tuple[Term, ...]
 ) -> FileMatches | TextSearchWarning | None:
     """Match one file.
 
@@ -181,7 +206,7 @@ def _match_file(
         spans: list[tuple[int, int]] = []
         for i, term in enumerate(terms):
             matched_here = False
-            for m in term.finditer(line):
+            for m in term.pattern.finditer(line):
                 if m.end() > m.start():  # ignore zero-width matches
                     spans.append((m.start(), m.end()))
                     matched_here = True

@@ -88,49 +88,65 @@ def corpus(tmp_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _one(raw: str, *, case_sensitive: bool | None = None) -> ts.Term:
+    (term,) = ts.compile_terms([raw], case_sensitive=case_sensitive)
+    return term
+
+
 def test_literal_matches_substring_smart_case() -> None:
-    (pat,) = ts.compile_terms(["password"], case_sensitive=None)
-    assert pat.search("has a password here")
-    assert pat.search("PASSWORD")  # lowercase term → smart-case insensitive
+    term = _one("password")
+    assert not term.is_regex
+    assert term.pattern.search("has a password here")
+    assert term.pattern.search("PASSWORD")  # lowercase term → smart-case insensitive
 
 
 def test_uppercase_term_is_case_sensitive() -> None:
-    (pat,) = ts.compile_terms(["Password"], case_sensitive=None)
-    assert pat.search("Password")
-    assert not pat.search("password")  # an uppercase letter → case-sensitive
+    term = _one("Password")
+    assert term.case_sensitive
+    assert term.pattern.search("Password")
+    assert not term.pattern.search("password")  # an uppercase letter → case-sensitive
 
 
 def test_case_override() -> None:
-    (insensitive,) = ts.compile_terms(["Password"], case_sensitive=False)
-    assert insensitive.search("password")
-    (sensitive,) = ts.compile_terms(["password"], case_sensitive=True)
-    assert not sensitive.search("PASSWORD")
+    assert _one("Password", case_sensitive=False).pattern.search("password")
+    assert not _one("password", case_sensitive=True).pattern.search("PASSWORD")
 
 
 def test_literal_metachars_are_escaped() -> None:
     # A literal with regex metacharacters matches literally, not as a pattern.
-    (pat,) = ts.compile_terms(["a.b"], case_sensitive=None)
-    assert pat.search("a.b")
-    assert not pat.search("axb")  # '.' is a literal dot, not "any char"
+    term = _one("a.b")
+    assert not term.is_regex
+    assert term.pattern.search("a.b")
+    assert not term.pattern.search("axb")  # '.' is a literal dot, not "any char"
 
 
 def test_regex_term() -> None:
-    (pat,) = ts.compile_terms([r"/def \w+\(/"], case_sensitive=None)
-    assert pat.search("def foo(")
-    assert not pat.search("definitely typed")
+    term = _one(r"/def \w+\(/")
+    assert term.is_regex
+    assert term.pattern.search("def foo(")
+    assert not term.pattern.search("definitely typed")
 
 
-def test_escaped_slashes_are_literal() -> None:
-    # \/foo/ → the literal text "/foo/", not a regex.
-    (pat,) = ts.compile_terms([r"\/foo/"], case_sensitive=None)
-    assert pat.search("x /foo/ y")
-    assert not pat.search("foo")
+def test_slash_wrapped_with_free_slash_stays_literal() -> None:
+    # GitHub rule: a free (unescaped) `/` in the body → literal, not a regex.
+    term = _one("/blobs/docs-v1/")
+    assert not term.is_regex
+    assert term.pattern.search("see /blobs/docs-v1/ path")
+    assert not term.pattern.search("blobs docs-v1")
+
+
+def test_regex_can_match_literal_slashes_when_escaped() -> None:
+    # Escaping the slashes inside a regex matches a literal `/foo/`.
+    term = _one(r"/\/foo\//")
+    assert term.is_regex
+    assert term.pattern.search("x /foo/ y")
+    assert not term.pattern.search("foo")
 
 
 def test_bare_double_slash_is_literal() -> None:
-    # "//" is too short to be a regex body → treated as a literal.
-    (pat,) = ts.compile_terms(["//"], case_sensitive=None)
-    assert pat.search("a // comment")
+    term = _one("//")  # too short to be a regex body
+    assert not term.is_regex
+    assert term.pattern.search("a // comment")
 
 
 def test_invalid_regex_raises() -> None:
@@ -341,3 +357,14 @@ def test_cli_lang_filter(corpus: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
     assert "auth.py" in result.output
     assert "config.yaml" not in result.output
+
+
+def test_cli_limit(corpus: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(corpus)
+    # "password" matches 5 files; --limit 2 caps the printed files to 2.
+    result = runner.invoke(
+        app, ["search", "--text", "--limit", "2", "password"], catch_exceptions=False
+    )
+    assert result.exit_code == 0
+    candidates = ["src/auth.py", "src/db.py", "README.md", "config.yaml", "notes.txt"]
+    assert sum(1 for f in candidates if f in result.output) == 2

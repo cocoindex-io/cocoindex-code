@@ -273,6 +273,7 @@ def _run_text_search(
     *,
     path_glob: str | None,
     languages: list[str],
+    limit: int,
     ignore_case: bool,
     case_sensitive: bool,
     no_color: bool,
@@ -316,6 +317,8 @@ def _run_text_search(
             return
         block = _ts.render_file(item, color=use_color)  # render outside the lock
         with output_lock:
+            if limit and matched >= limit:
+                return  # --limit reached — stop printing further files
             if matched:
                 _typer.echo()  # blank line between files
             _typer.echo(block)
@@ -720,6 +723,7 @@ def search(
             query,
             path_glob=path,
             languages=lang,
+            limit=limit,
             ignore_case=ignore_case,
             case_sensitive=case_sensitive,
             no_color=no_color,
