@@ -27,6 +27,8 @@ from cocoindex_code._daemon_paths import (
 from cocoindex_code._version import __version__
 from cocoindex_code.daemon import IdleReaper
 from cocoindex_code.protocol import (
+    DaemonStatusRequest,
+    DaemonStatusResponse,
     HandshakeRequest,
     IndexProgressUpdate,
     IndexRequest,
@@ -97,6 +99,19 @@ def test_reaper_heartbeat_tracked_separately() -> None:
     assert reaper.last_heartbeat is None
     reaper.record_heartbeat()
     assert reaper.last_heartbeat is not None
+
+
+# ---------------------------------------------------------------------------
+# MCP heartbeat interval
+# ---------------------------------------------------------------------------
+
+
+def test_heartbeat_interval_is_a_third_of_the_timeout_clamped() -> None:
+    from cocoindex_code.server import heartbeat_interval_s
+
+    assert heartbeat_interval_s(1) == 30  # 20 s → clamped up to 30 s
+    assert heartbeat_interval_s(10) == 200  # 600 s / 3
+    assert heartbeat_interval_s(180) == 300  # 3600 s → clamped down to 300 s
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +222,59 @@ def test_daemon_does_not_exit_with_live_connection(idle_env: Path) -> None:
         _assert_cleaned_up(sock_path)
     finally:
         _stop_daemon_thread(thread, sock_path)
+
+
+def test_daemon_does_not_exit_while_heartbeats_arrive(idle_env: Path) -> None:
+    """Periodic heartbeats keep the daemon alive past its idle timeout; once
+    they stop, it exits on the normal timeout. Mirrors a live MCP session
+    dying (heartbeats stop) without any explicit shutdown.
+    """
+    from cocoindex_code.client import send_heartbeat
+
+    thread, sock_path = _start_daemon_thread(idle_timeout_s=1.0, idle_check_interval_s=0.2)
+    try:
+        # Heartbeat every 0.4 s for ~3 s — several idle timeouts' worth.
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            assert send_heartbeat() is True
+            time.sleep(0.4)
+        assert thread.is_alive(), "daemon idle-exited despite heartbeats"
+
+        # The status endpoint reports the heartbeat age.
+        conn = Client(sock_path, family=connection_family())
+        conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
+        conn.recv_bytes()
+        conn.send_bytes(encode_request(DaemonStatusRequest()))
+        status = decode_response(conn.recv_bytes())
+        conn.close()
+        assert isinstance(status, DaemonStatusResponse)
+        assert status.last_heartbeat_seconds is not None
+        assert status.last_heartbeat_seconds < 2.0
+
+        # Heartbeats stopped — the daemon exits on the next idle timeout.
+        thread.join(timeout=15)
+        assert not thread.is_alive(), "daemon did not exit after heartbeats stopped"
+        _assert_cleaned_up(sock_path)
+    finally:
+        _stop_daemon_thread(thread, sock_path)
+
+
+def test_send_heartbeat_does_not_spawn_a_daemon(idle_env: Path) -> None:
+    """Against a stopped daemon, send_heartbeat returns False and never starts
+    one — otherwise `ccc daemon stop` during an MCP session would fight the
+    heartbeat loop.
+    """
+    from cocoindex_code.client import send_heartbeat
+
+    sock_path = dm.daemon_socket_path()
+    assert not os.path.exists(sock_path)
+
+    assert send_heartbeat() is False
+
+    # Give a hypothetical spawned daemon time to appear, then confirm nothing did.
+    time.sleep(1.0)
+    assert not os.path.exists(sock_path)
+    assert not daemon_pid_path().exists()
 
 
 def test_daemon_does_not_exit_during_index_run(idle_env: Path) -> None:
