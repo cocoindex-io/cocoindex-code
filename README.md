@@ -515,9 +515,14 @@ embedding:
 
 envs:                                                # extra environment variables for the daemon
   OPENAI_API_KEY: your-key                           # only needed if not already in your shell environment
+
+daemon:
+  idle_timeout_minutes: 180                          # optional: exit the daemon after this long without client activity (default 180, 0 = never)
 ```
 
 > **Note:** The daemon inherits your shell environment. If an API key (e.g. `OPENAI_API_KEY`) is already set as an environment variable, you don't need to duplicate it in `envs`. The `envs` field is only for values that aren't in your environment.
+
+> **Idle timeout:** the background daemon holds the embedding model in RAM, so it exits after `daemon.idle_timeout_minutes` without client activity and is restarted automatically on your next `ccc` command or MCP search. A live MCP session sends periodic heartbeats, so the daemon never idles out while your coding agent is connected. Set `0` to keep the daemon running forever.
 
 > **Custom location:** set `COCOINDEX_CODE_DIR` to place `global_settings.yml` somewhere other than `~/.cocoindex_code/` — useful if you want the file to live alongside your projects (e.g. on a synced folder).
 

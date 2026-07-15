@@ -1044,6 +1044,12 @@ def daemon_status() -> None:
     resp = _client.daemon_status()
     _typer.echo(f"Daemon version: {resp.version}")
     _typer.echo(f"Uptime: {resp.uptime_seconds:.1f}s")
+    timeout_desc = f"{resp.idle_timeout_minutes}m" if resp.idle_timeout_minutes > 0 else "disabled"
+    _typer.echo(f"Idle: {resp.idle_seconds:.1f}s (timeout: {timeout_desc})")
+    if resp.last_heartbeat_seconds is None:
+        _typer.echo("Last heartbeat: never")
+    else:
+        _typer.echo(f"Last heartbeat: {resp.last_heartbeat_seconds:.1f}s ago")
     if resp.projects:
         _typer.echo("Projects:")
         for p in resp.projects:
