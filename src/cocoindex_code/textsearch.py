@@ -25,6 +25,7 @@ file completes.
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -244,7 +245,12 @@ class TextSearch:
     def __init__(self, req: TextSearchRequest) -> None:
         self._req = req
 
-    def run(self, emit: Callable[[FileMatches | TextSearchWarning], object]) -> None:
+    def run(
+        self,
+        emit: Callable[[FileMatches | TextSearchWarning], object],
+        *,
+        limit: int | None = None,
+    ) -> bool:
         """Match the request, calling ``emit`` with each file's matches (and any
         read warning) the moment it's ready — while the walk is still running.
 
@@ -253,18 +259,45 @@ class TextSearch:
         I/O rather than the matching itself; still, results stream as they
         finish. ``emit`` is called from worker threads, so a consumer doing I/O
         must serialize itself.
+
+        With ``limit`` set, at most ``limit`` matching files are emitted and the
+        walk stops as soon as that many are found (warnings are never capped).
+        Returns ``True`` if the walk was cut short by ``limit`` — i.e. more files
+        may match.
         """
         terms = self._req.terms
+        matched = 0
+        hit_limit = False
+        lock = threading.Lock()
+        stop = threading.Event()
 
         def _match(item: tuple[Path, str]) -> None:
+            nonlocal matched, hit_limit
+            if stop.is_set():
+                return
             result = _match_file(item[0], item[1], terms)
-            if result is not None:  # None = binary / undecodable / AND not met
+            if result is None:  # binary / undecodable / AND not met
+                return
+            if isinstance(result, TextSearchWarning):
                 emit(result)
+                return
+            with lock:
+                if limit is not None and matched >= limit:
+                    return
+                matched += 1
+                if limit is not None and matched >= limit:
+                    hit_limit = True
+                    stop.set()  # enough matches — stop feeding the walk
+            emit(result)
 
         with ThreadPoolExecutor() as pool:
             for abs_path, display in _iter_files(self._req):
+                if stop.is_set():
+                    break
                 pool.submit(_match, (abs_path, display))
             # ThreadPoolExecutor.__exit__ waits for every submitted match.
+
+        return hit_limit
 
 
 # ---------------------------------------------------------------------------

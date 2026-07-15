@@ -314,17 +314,21 @@ def _run_text_search(
             return
         block = _ts.render_file(item, color=use_color)  # render outside the lock
         with output_lock:
-            if limit and matched >= limit:
-                return  # --limit reached — stop printing further files
             if matched:
                 _typer.echo()  # blank line between files
             _typer.echo(block)
             matched += 1
 
-    _ts.TextSearch(req).run(_emit)
+    # The engine caps emitted files at `limit` and reports whether it stopped early.
+    hit_limit = _ts.TextSearch(req).run(_emit, limit=limit)
 
     if matched == 0:
         _typer.echo("No matches found.")
+    elif hit_limit:
+        _typer.echo(
+            f"\nStopped at --limit {limit}. Re-run with a higher --limit to see more.",
+            err=True,
+        )
 
 
 _GITIGNORE_COMMENT = "# CocoIndex Code (ccc)"

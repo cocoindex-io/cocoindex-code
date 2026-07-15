@@ -232,6 +232,23 @@ def test_many_files(tmp_path: Path) -> None:
     assert len({fm.path for fm in files}) == n
 
 
+def test_run_respects_limit(corpus: Path) -> None:
+    # "password" matches 5 files; limit=2 emits at most 2 and reports it stopped early.
+    got: list[ts.FileMatches | ts.TextSearchWarning] = []
+    hit = ts.TextSearch(req_for(corpus, "password")).run(got.append, limit=2)
+    files = [it for it in got if isinstance(it, ts.FileMatches)]
+    assert len(files) <= 2
+    assert hit is True
+
+
+def test_run_no_limit_returns_all(corpus: Path) -> None:
+    got: list[ts.FileMatches | ts.TextSearchWarning] = []
+    hit = ts.TextSearch(req_for(corpus, "password")).run(got.append)
+    files = [it for it in got if isinstance(it, ts.FileMatches)]
+    assert len(files) == 5
+    assert hit is False
+
+
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
@@ -378,3 +395,21 @@ def test_cli_limit(corpus: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
     candidates = ["src/auth.py", "src/db.py", "README.md", "config.yaml", "notes.txt"]
     assert sum(1 for f in candidates if f in result.output) == 2
+
+
+def test_cli_limit_hint(corpus: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(corpus)
+    # 5 files match; --limit 2 truncates → a hint to raise the limit is shown.
+    result = runner.invoke(
+        app, ["search", "--text", "--limit", "2", "password"], catch_exceptions=False
+    )
+    assert result.exit_code == 0
+    assert "higher --limit" in result.output
+
+
+def test_cli_no_hint_under_limit(corpus: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(corpus)
+    # Only 1 file matches "localhost" — well under the limit, so no truncation hint.
+    result = runner.invoke(app, ["search", "--text", "localhost"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert "higher --limit" not in result.output
