@@ -76,11 +76,13 @@ def _apply_host_cwd() -> None:
 # ---------------------------------------------------------------------------
 
 
-def require_project_root() -> Path:
+def require_project_root(*, auto_init: bool = False) -> Path:
     """Find the project root by walking up from CWD.
 
     Checks global settings first (more fundamental), then project settings.
-    Exits with code 1 if either check fails.
+    With ``auto_init``, a missing project is initialized with default settings
+    instead of failing; missing global settings always exit with code 1, since
+    creating them needs the interactive model setup in ``ccc init``.
     """
     gs_path = user_settings_path()
     if not gs_path.is_file():
@@ -92,6 +94,8 @@ def require_project_root() -> Path:
         raise _typer.Exit(code=1)
     root = find_project_root(Path.cwd())
     if root is None:
+        if auto_init:
+            return _auto_init_project(Path.cwd())
         _typer.echo(
             "Error: Not in an initialized project directory.\n"
             "Run `ccc init` in your project root to get started.",
@@ -99,6 +103,24 @@ def require_project_root() -> Path:
         )
         raise _typer.Exit(code=1)
     return root
+
+
+def _auto_init_project(cwd: Path) -> Path:
+    """Create default project settings without an explicit ``ccc init``.
+
+    Anchors at the nearest parent git root when there is one, so running from
+    a repo subdirectory initializes the repo root rather than the subdirectory.
+    """
+    root = find_parent_with_marker(cwd) or cwd
+    _create_project_settings(root)
+    return root
+
+
+def _create_project_settings(root: Path) -> None:
+    """Write default project settings at *root* and gitignore the settings dir."""
+    save_project_settings(root, default_project_settings())
+    add_to_gitignore(root)
+    _typer.echo(f"Created project settings: {format_path_for_display(project_settings_path(root))}")
 
 
 _F = TypeVar("_F", bound=Callable[..., object])
@@ -599,12 +621,7 @@ def init(
             )
             raise _typer.Exit(code=1)
 
-    # Create project settings
-    save_project_settings(cwd, default_project_settings())
-    _typer.echo(f"Created project settings: {format_path_for_display(settings_file)}")
-
-    # Add to .gitignore
-    add_to_gitignore(cwd)
+    _create_project_settings(cwd)
 
     _typer.echo("You can edit the settings files to customize indexing behavior.")
     _typer.echo("Run `ccc index` to build the index.")
@@ -616,7 +633,7 @@ def index() -> None:
     """Create/update index for the codebase."""
     from . import client as _client
 
-    project_root = str(require_project_root())
+    project_root = str(require_project_root(auto_init=True))
     print_project_header(project_root)
     _run_index_with_progress(project_root)
     print_index_stats(_client.project_status(project_root))

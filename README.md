@@ -239,7 +239,7 @@ ccc search "authentication logic"       # search!
 
 The background daemon starts automatically on first use.
 
-> **Tip:** `ccc index` auto-initializes if you haven't run `ccc init` yet, so you can skip straight to indexing.
+> **Tip:** Once global settings exist (created by your first `ccc init` on the machine), `ccc index` auto-initializes new projects with default settings — you can skip `ccc init` and go straight to indexing.
 
 ### CLI Reference
 
