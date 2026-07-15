@@ -106,9 +106,17 @@ class EmbeddingSettings:
 
 
 @dataclass
+class DaemonSettings:
+    # Minutes without client activity before the daemon exits (0 = never exit).
+    # Clients auto-restart the daemon on the next request, so exiting is cheap.
+    idle_timeout_minutes: int = 180
+
+
+@dataclass
 class UserSettings:
     embedding: EmbeddingSettings
     envs: dict[str, str] = field(default_factory=dict)
+    daemon: DaemonSettings = field(default_factory=DaemonSettings)
 
 
 @dataclass
@@ -433,6 +441,8 @@ def _user_settings_to_dict(settings: UserSettings) -> dict[str, Any]:
     d: dict[str, Any] = {"embedding": _embedding_settings_to_dict(settings.embedding)}
     if settings.envs:
         d["envs"] = dict(settings.envs)
+    if settings.daemon != DaemonSettings():
+        d["daemon"] = {"idle_timeout_minutes": settings.daemon.idle_timeout_minutes}
     return d
 
 
@@ -457,7 +467,13 @@ def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
         emb_kwargs["query_params"] = dict(emb_dict["query_params"] or {})
     embedding = EmbeddingSettings(**emb_kwargs)
     envs = d.get("envs", {})
-    return UserSettings(embedding=embedding, envs=envs)
+    # `daemon:` section is optional — missing keys use the dataclass defaults.
+    daemon_dict = d.get("daemon") or {}
+    daemon_kwargs: dict[str, Any] = {}
+    if "idle_timeout_minutes" in daemon_dict:
+        daemon_kwargs["idle_timeout_minutes"] = int(daemon_dict["idle_timeout_minutes"])
+    daemon = DaemonSettings(**daemon_kwargs)
+    return UserSettings(embedding=embedding, envs=envs, daemon=daemon)
 
 
 def _project_settings_to_dict(settings: ProjectSettings) -> dict[str, Any]:
