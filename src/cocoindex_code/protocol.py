@@ -70,6 +70,11 @@ Request = (
 class HandshakeResponse(_msgspec.Struct, tag="handshake"):
     ok: bool
     daemon_version: str
+    # The daemon's process id. The client remembers it so that, when the
+    # daemon later vanishes, the graceful-exit marker (written on shutdown
+    # with the same pid) can be matched race-free against the exact process
+    # the client was talking to — distinguishing a graceful exit from a crash.
+    pid: int
     global_settings_mtime_us: int | None = None
     # Non-fatal daemon-side warnings surfaced to the client on every handshake.
     # The client dedupes and prints them to stderr (see client._print_handshake_warnings).

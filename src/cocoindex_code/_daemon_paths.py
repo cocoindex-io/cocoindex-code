@@ -6,8 +6,11 @@ can import these without pulling in the full daemon stack.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .settings import user_settings_dir
@@ -58,3 +61,50 @@ def daemon_pid_path() -> Path:
 def daemon_log_path() -> Path:
     """Return the path for the daemon's log file."""
     return daemon_runtime_dir() / "daemon.log"
+
+
+def daemon_last_exit_path() -> Path:
+    """Return the path for the daemon's graceful-exit marker file."""
+    return daemon_runtime_dir() / "last_exit"
+
+
+@dataclass
+class LastExitMarker:
+    """Record of the most recent *graceful* daemon exit.
+
+    Written by the daemon's graceful shutdown path (``StopRequest``,
+    SIGTERM/SIGINT) and removed again at the next daemon startup. A crashed
+    daemon (SIGKILL, OOM, segfault) never writes it — that absence is how the
+    client tells a crash from a graceful exit.
+    """
+
+    pid: int
+    reason: str
+    timestamp: float
+
+
+def write_last_exit_marker(pid: int, reason: str) -> None:
+    """Persist the graceful-exit marker. Best-effort — never raises."""
+    payload = json.dumps({"pid": pid, "reason": reason, "timestamp": time.time()})
+    try:
+        daemon_last_exit_path().write_text(payload)
+    except OSError:
+        pass
+
+
+def read_last_exit_marker() -> LastExitMarker | None:
+    """Read the graceful-exit marker, or None when absent/unreadable."""
+    try:
+        data = json.loads(daemon_last_exit_path().read_text())
+        return LastExitMarker(
+            pid=int(data["pid"]),
+            reason=str(data["reason"]),
+            timestamp=float(data["timestamp"]),
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def clear_last_exit_marker() -> None:
+    """Remove the marker (daemon startup) so it always refers to the most recent exit."""
+    daemon_last_exit_path().unlink(missing_ok=True)

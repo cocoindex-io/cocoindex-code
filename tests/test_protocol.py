@@ -13,6 +13,7 @@ from cocoindex_code.protocol import (
     DoctorResponse,
     ErrorResponse,
     HandshakeRequest,
+    HandshakeResponse,
     IndexingProgress,
     IndexProgressUpdate,
     IndexRequest,
@@ -42,6 +43,15 @@ def test_encode_decode_handshake_request() -> None:
     decoded = decode_request(data)
     assert isinstance(decoded, HandshakeRequest)
     assert decoded.version == "1.0.0"
+
+
+def test_encode_decode_handshake_response_with_pid() -> None:
+    resp = HandshakeResponse(ok=True, daemon_version="1.0.0", pid=4242)
+    decoded = decode_response(encode_response(resp))
+    assert isinstance(decoded, HandshakeResponse)
+    assert decoded.ok is True
+    assert decoded.daemon_version == "1.0.0"
+    assert decoded.pid == 4242
 
 
 def test_encode_decode_search_request_with_defaults() -> None:

@@ -8,6 +8,7 @@ with it through the per-request client functions, mirroring how ``ccc index`` /
 from __future__ import annotations
 
 import os
+import signal
 import tempfile
 import time
 from collections.abc import Iterator
@@ -154,7 +155,7 @@ def test_daemon_starts_in_no_settings_mode_without_global_settings() -> None:
         # _raw_connect_and_handshake does its own handshake read — but it also
         # raises DaemonVersionError when the client-side mtime disagrees. With
         # the file absent on both sides, mtime=None matches, so handshake OK.
-        conn = _raw_connect_and_handshake()
+        conn, _handshake = _raw_connect_and_handshake()
         try:
             # Send a project request — should get an ErrorResponse pointing at
             # `ccc init`, not a crash.
@@ -186,3 +187,101 @@ def test_daemon_env_response_includes_host_path_mappings(
     resp = client.daemon_env()
     assert hasattr(resp, "host_path_mappings")
     assert resp.host_path_mappings == []
+
+
+def test_client_restarts_daemon_silently_after_graceful_exit(
+    e2e_daemon: tuple[str, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """After a successful request (``_daemon_ensured`` True), a daemon that
+    exits gracefully (StopRequest) leaves a graceful-exit marker and is
+    transparently restarted by the next request, with no crash warning.
+    The fresh daemon removes the marker at startup.
+
+    NOTE: keep this test near the end of the module — it stops the shared
+    daemon and relies on the client to bring a fresh one back up.
+    """
+    from cocoindex_code._daemon_paths import daemon_last_exit_path, read_last_exit_marker
+    from cocoindex_code.protocol import StopRequest, encode_request
+
+    # Establish a session: this sets client._daemon_ensured = True.
+    resp = client.daemon_status()
+    assert resp.version == __version__
+    assert client._daemon_ensured is True
+    daemon_pid = client._ensured_daemon_pid
+    assert daemon_pid is not None
+
+    # Stop the daemon *without* client.stop_daemon(), which would reset
+    # _daemon_ensured and hide the race under test.
+    conn, _handshake = client._raw_connect_and_handshake()
+    try:
+        conn.send_bytes(encode_request(StopRequest()))
+        conn.recv_bytes()
+    finally:
+        conn.close()
+    assert client._wait_for_daemon_exit(timeout=10.0), "daemon did not exit"
+
+    # The graceful exit left a marker with the stopped daemon's pid and reason.
+    marker = read_last_exit_marker()
+    assert marker is not None
+    assert marker.pid == daemon_pid
+    assert marker.reason == "stop_request"
+
+    # The next request must transparently restart the daemon and succeed —
+    # silently, since the exit was graceful.
+    capsys.readouterr()  # drain anything printed so far
+    resp2 = client.daemon_status()
+    assert resp2.version == __version__
+    assert "exited unexpectedly" not in capsys.readouterr().err
+
+    # The fresh daemon removed the marker at startup.
+    assert not daemon_last_exit_path().exists()
+
+
+def test_client_warns_and_restarts_after_daemon_crash(
+    e2e_daemon: tuple[str, Path],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A SIGKILLed daemon leaves no graceful-exit marker; the next request
+    warns on stderr but still succeeds via a restart.
+
+    NOTE: keep this test last in the module — it kills the shared daemon and
+    relies on the client to bring a fresh one back up.
+    """
+    from multiprocessing.connection import Client as _RawClient
+
+    from cocoindex_code._daemon_paths import connection_family, daemon_last_exit_path
+
+    monkeypatch.setattr(client, "_consecutive_crash_restarts", 0)
+
+    # Establish a session and remember the daemon's pid from the handshake.
+    resp = client.daemon_status()
+    assert resp.version == __version__
+    daemon_pid = client._ensured_daemon_pid
+    assert daemon_pid is not None
+
+    os.kill(daemon_pid, signal.SIGKILL)
+
+    # Wait until the listener is actually gone (the socket file lingers after
+    # SIGKILL, but connecting to it starts failing once the process died).
+    sock_path, _ = e2e_daemon
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            probe = _RawClient(sock_path, family=connection_family())
+            probe.close()
+            time.sleep(0.1)
+        except OSError:
+            break
+    else:
+        raise TimeoutError("daemon listener still up after SIGKILL")
+
+    assert not daemon_last_exit_path().exists(), "a crash must not leave a marker"
+
+    # The next request warns but still succeeds via restart.
+    capsys.readouterr()  # drain
+    resp2 = client.daemon_status()
+    assert resp2.version == __version__
+    assert "exited unexpectedly" in capsys.readouterr().err
+    assert client._consecutive_crash_restarts == 1

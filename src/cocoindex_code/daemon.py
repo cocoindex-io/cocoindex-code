@@ -17,11 +17,13 @@ from pathlib import Path
 from typing import Any
 
 from ._daemon_paths import (
+    clear_last_exit_marker,
     connection_family,
     daemon_log_path,
     daemon_pid_path,
     daemon_runtime_dir,
     daemon_socket_path,
+    write_last_exit_marker,
 )
 from ._version import __version__
 from .chunking import ChunkerFn as _ChunkerFn
@@ -232,6 +234,7 @@ async def handle_connection(
                 HandshakeResponse(
                     ok=ok,
                     daemon_version=__version__,
+                    pid=os.getpid(),
                     global_settings_mtime_us=settings_mtime_us,
                     warnings=list(handshake_warnings),
                 )
@@ -590,9 +593,11 @@ def run_daemon() -> None:
         settings_env_keys = []
         embedder = None
 
-    # Write PID file
+    # Write PID file; drop the previous daemon's graceful-exit marker so the
+    # marker always refers to the most recent exit.
     pid_path = daemon_pid_path()
     pid_path.write_text(str(os.getpid()))
+    clear_last_exit_marker()
 
     # Set up logging to file
     log_path = daemon_log_path()
@@ -625,8 +630,17 @@ def run_daemon() -> None:
     loop = asyncio.new_event_loop()
     tasks: set[asyncio.Task[Any]] = set()
 
-    def _request_shutdown() -> None:
-        """Trigger daemon shutdown — called by StopRequest or signal handler."""
+    shutdown_reason: str | None = None
+
+    def _request_shutdown(reason: str) -> None:
+        """Trigger daemon shutdown — called by StopRequest or signal handler.
+
+        Records *reason* (first one wins) for the graceful-exit marker written
+        during cleanup.
+        """
+        nonlocal shutdown_reason
+        if shutdown_reason is None:
+            shutdown_reason = reason
         loop.stop()
 
     def _spawn_handler(conn: Connection) -> None:
@@ -635,7 +649,7 @@ def run_daemon() -> None:
                 conn,
                 registry,
                 start_time,
-                _request_shutdown,
+                lambda: _request_shutdown("stop_request"),
                 settings_mtime_us,
                 settings_env_keys,
                 handshake_warnings,
@@ -647,7 +661,7 @@ def run_daemon() -> None:
     # Handle signals for graceful shutdown
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, _request_shutdown)
+            loop.add_signal_handler(sig, _request_shutdown, "signal")
     except (RuntimeError, NotImplementedError):
         pass  # Not in main thread, or not supported on this platform (e.g. Windows)
 
@@ -669,6 +683,12 @@ def run_daemon() -> None:
     try:
         loop.run_forever()
     finally:
+        # 0. Record the graceful exit (StopRequest, signal). Written first so
+        #    a client that races the rest of the cleanup already sees it. A
+        #    crashed daemon never gets here — the marker's absence is how the
+        #    client detects a crash.
+        write_last_exit_marker(pid=os.getpid(), reason=shutdown_reason or "unknown")
+
         # 1. Stop accepting new connections.
         listener.close()
 
