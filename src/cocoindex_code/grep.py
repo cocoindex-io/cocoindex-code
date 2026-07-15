@@ -20,15 +20,8 @@ from pathlib import Path
 import click
 from cocoindex.ops.code import CodeMatch, CodePattern
 from cocoindex.ops.text import detect_code_language
-from cocoindex.resources.file import PatternFilePathMatcher
 
-from .file_walk import build_matcher, find_git_root, iter_included_files
-from .settings import (
-    DEFAULT_EXCLUDED_PATTERNS,
-    DEFAULT_INCLUDED_PATTERNS,
-    find_project_root,
-    load_project_settings,
-)
+from .file_walk import iter_project_files
 
 # A trivial, always-valid pattern (a bare identifier) used to probe whether a
 # language is structurally matchable, independent of the user's pattern.
@@ -151,13 +144,6 @@ def _detect_language(path: Path, ext_overrides: dict[str, str]) -> str | None:
     return ext_overrides.get(path.suffix) or detect_code_language(filename=path.name)
 
 
-def _ext_overrides(project_root: Path | None) -> dict[str, str]:
-    if project_root is None:
-        return {}
-    ps = load_project_settings(project_root)
-    return {f".{lo.ext}": lo.lang for lo in ps.language_overrides}
-
-
 def _target_for_file(
     abs_path: Path,
     display: str,
@@ -201,41 +187,9 @@ def _iter_targets(req: GrepRequest, compiler: _PatternCompiler) -> Iterator[_Tar
     ``.gitignore`` rules decide which files belong to the project. Outside a project
     we fall back to the default source-file patterns.
     """
-    root = req.root.resolve()
-
-    if root.is_file():
-        project_root = find_project_root(root.parent)
-        yield from _resolve_file(
-            root, req.root.as_posix(), _ext_overrides(project_root), req, compiler
-        )
-        return
-
-    project_root = find_project_root(root)
-    if project_root is not None:
-        ps = load_project_settings(project_root)
-        included, excluded = ps.include_patterns, ps.exclude_patterns
-        ext_overrides = {f".{lo.ext}": lo.lang for lo in ps.language_overrides}
-        base = project_root
-    else:
-        included = list(DEFAULT_INCLUDED_PATTERNS)
-        excluded = list(DEFAULT_EXCLUDED_PATTERNS)
-        ext_overrides = {}
-        # Anchor at the enclosing git repo so grepping a subdirectory still honors the
-        # repo-root (and intervening) .gitignore; fall back to the target dir itself.
-        base = find_git_root(root) or root
-
-    matcher = build_matcher(base, included, excluded)
-    path_filter = (
-        PatternFilePathMatcher(included_patterns=[req.path_glob]) if req.path_glob else None
-    )
-
-    for abs_path, rel in iter_included_files(root, base, matcher):
-        if path_filter is not None and not path_filter.is_file_included(rel):
-            continue
-        # Display paths mirror the root the user gave (e.g. "src/a.py", "/tmp/x/a.py"),
-        # rather than always being cwd-relative.
-        display = (req.root / abs_path.relative_to(root)).as_posix()
-        yield from _resolve_file(abs_path, display, ext_overrides, req, compiler)
+    walk = iter_project_files(req.root, req.path_glob)
+    for abs_path, display in walk.files:
+        yield from _resolve_file(abs_path, display, walk.ext_overrides, req, compiler)
 
 
 # ---------------------------------------------------------------------------

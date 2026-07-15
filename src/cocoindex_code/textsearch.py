@@ -32,15 +32,8 @@ from pathlib import Path
 
 import click
 from cocoindex.ops.text import detect_code_language
-from cocoindex.resources.file import PatternFilePathMatcher
 
-from .file_walk import build_matcher, find_git_root, iter_included_files
-from .settings import (
-    DEFAULT_EXCLUDED_PATTERNS,
-    DEFAULT_INCLUDED_PATTERNS,
-    find_project_root,
-    load_project_settings,
-)
+from .file_walk import iter_project_files
 
 
 class TermSyntaxError(ValueError):
@@ -233,38 +226,14 @@ def _iter_files(req: TextSearchRequest) -> Iterator[tuple[Path, str]]:
     language — text search covers every included file (source, docs, config).
     ``--lang`` optionally restricts by detected language.
     """
-    root = req.root.resolve()
-
-    project_root = find_project_root(root)
-    if project_root is not None:
-        ps = load_project_settings(project_root)
-        included, excluded = ps.include_patterns, ps.exclude_patterns
-        ext_overrides = {f".{lo.ext}": lo.lang for lo in ps.language_overrides}
-        base = project_root
-    else:
-        included = list(DEFAULT_INCLUDED_PATTERNS)
-        excluded = list(DEFAULT_EXCLUDED_PATTERNS)
-        ext_overrides = {}
-        # Anchor .gitignore resolution at the enclosing git repo so searching a
-        # subdirectory still honors the repo-root rules; fall back to the target.
-        base = find_git_root(root) or root
-
-    matcher = build_matcher(base, included, excluded)
-    path_filter = (
-        PatternFilePathMatcher(included_patterns=[req.path_glob]) if req.path_glob else None
-    )
-
-    for abs_path, rel in iter_included_files(root, base, matcher):
-        if path_filter is not None and not path_filter.is_file_included(rel):
-            continue
+    walk = iter_project_files(req.root, req.path_glob)
+    for abs_path, display in walk.files:
         if req.languages is not None:
-            language = ext_overrides.get(abs_path.suffix) or detect_code_language(
+            language = walk.ext_overrides.get(abs_path.suffix) or detect_code_language(
                 filename=abs_path.name
             )
             if language is None or language.lower() not in req.languages:
                 continue
-        # Display paths mirror the root the user gave (cwd-relative here).
-        display = (req.root / abs_path.relative_to(root)).as_posix()
         yield abs_path, display
 
 

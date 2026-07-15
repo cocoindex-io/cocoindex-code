@@ -1,10 +1,13 @@
 """Shared source-file walking: pattern + .gitignore matching, reused by the
-indexer, the daemon's doctor file-walk, and ``ccc grep``.
+indexer, the daemon's doctor file-walk, ``ccc grep``, and ``ccc search --text``.
 
 The matcher (include/exclude globs + nested ``.gitignore`` awareness) is the
 single source of truth for "which files count as part of the project". The
-indexer feeds it to CocoIndex's incremental file source; the daemon and ``ccc
-grep`` drive a plain :func:`os.walk` over it via :func:`iter_included_files`.
+indexer feeds it to CocoIndex's incremental file source; the daemon drives a
+plain :func:`os.walk` over it via :func:`iter_included_files`. The local searches
+(``grep`` / ``--text``) share the higher-level :func:`iter_project_files`, which
+resolves a root to its included files and yields display paths — leaving per-file
+language gating to each caller.
 """
 
 from __future__ import annotations
@@ -12,11 +15,18 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable, Iterator
 from pathlib import Path, PurePath
+from typing import NamedTuple
 
 from cocoindex.resources.file import FilePathMatcher, PatternFilePathMatcher
 from pathspec import GitIgnoreSpec
 
-from .settings import load_gitignore_spec
+from .settings import (
+    DEFAULT_EXCLUDED_PATTERNS,
+    DEFAULT_INCLUDED_PATTERNS,
+    find_project_root,
+    load_gitignore_spec,
+    load_project_settings,
+)
 
 
 def _normalize_gitignore_lines(lines: Iterable[str], directory: PurePath) -> list[str]:
@@ -174,3 +184,75 @@ def iter_included_files(
             rel_path = rel_dir / fname if rel_dir != PurePath(".") else PurePath(fname)
             if matcher.is_file_included(rel_path):
                 yield dirpath / fname, rel_path
+
+
+class ProjectFiles(NamedTuple):
+    """A search root resolved to the files the project includes, plus the
+    extension→language overrides callers need for their own per-file language
+    decisions.
+
+    Shared by ``ccc grep`` and ``ccc search --text``: the *walk* is common, while
+    per-file gating differs (grep skips files with no matchable code language;
+    text search keeps every included file). So this yields language-agnostic files
+    and hands the overrides back for the caller to decide.
+    """
+
+    files: Iterator[tuple[Path, str]]
+    """``(absolute_path, display_path)`` for every included file, in sorted walk
+    order — code, docs, and config alike."""
+
+    ext_overrides: dict[str, str]
+    """Project extension→language overrides (e.g. ``{".inc": "php"}``); ``{}``
+    outside an initialized project."""
+
+
+def _language_overrides(project_root: Path | None) -> dict[str, str]:
+    """Extension→language overrides from project settings; ``{}`` if no project."""
+    if project_root is None:
+        return {}
+    ps = load_project_settings(project_root)
+    return {f".{lo.ext}": lo.lang for lo in ps.language_overrides}
+
+
+def iter_project_files(root: Path, path_glob: str | None = None) -> ProjectFiles:
+    """Resolve ``root`` to the project's included files — the single source of
+    truth shared by ``ccc grep`` and ``ccc search --text``.
+
+    Honors the project's include/exclude + nested ``.gitignore`` (or the default
+    source-file patterns outside a project) and an optional ``path_glob``. ``root``
+    may be a file (searched on its own) or a directory (walked recursively).
+    ``files`` yields display paths mirroring ``root`` (e.g. ``src/a.py``); language
+    gating is left to the caller.
+    """
+    resolved = root.resolve()
+
+    if resolved.is_file():
+        # A single file: just it, anchored to its enclosing project (if any).
+        overrides = _language_overrides(find_project_root(resolved.parent))
+        return ProjectFiles(files=iter([(resolved, root.as_posix())]), ext_overrides=overrides)
+
+    project_root = find_project_root(resolved)
+    if project_root is not None:
+        ps = load_project_settings(project_root)
+        included, excluded = ps.include_patterns, ps.exclude_patterns
+        ext_overrides = {f".{lo.ext}": lo.lang for lo in ps.language_overrides}
+        base = project_root
+    else:
+        included = list(DEFAULT_INCLUDED_PATTERNS)
+        excluded = list(DEFAULT_EXCLUDED_PATTERNS)
+        ext_overrides = {}
+        # Anchor .gitignore at the enclosing git repo so a subdirectory search
+        # still honors the repo-root rules; fall back to the target itself.
+        base = find_git_root(resolved) or resolved
+
+    matcher = build_matcher(base, included, excluded)
+    path_filter = PatternFilePathMatcher(included_patterns=[path_glob]) if path_glob else None
+
+    def _walk() -> Iterator[tuple[Path, str]]:
+        for abs_path, rel in iter_included_files(resolved, base, matcher):
+            if path_filter is not None and not path_filter.is_file_included(rel):
+                continue
+            # Display paths mirror the root the user gave (e.g. "src/a.py").
+            yield abs_path, (root / abs_path.relative_to(resolved)).as_posix()
+
+    return ProjectFiles(files=_walk(), ext_overrides=ext_overrides)
