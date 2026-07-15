@@ -275,7 +275,6 @@ def _run_text_search(
     languages: list[str],
     limit: int,
     ignore_case: bool,
-    case_sensitive: bool,
     no_color: bool,
 ) -> None:
     """Run the local literal/regex text search (``ccc search --text``).
@@ -285,10 +284,8 @@ def _run_text_search(
     """
     from . import textsearch as _ts
 
-    if ignore_case and case_sensitive:
-        _typer.echo("Error: --ignore-case and --case-sensitive are mutually exclusive.", err=True)
-        raise _typer.Exit(code=1)
-    case_flag: bool | None = True if case_sensitive else (False if ignore_case else None)
+    # -i forces case-insensitive; otherwise smart-case.
+    case_flag: bool | None = False if ignore_case else None
 
     try:
         compiled = _ts.compile_terms(terms, case_sensitive=case_flag)
@@ -702,10 +699,7 @@ def search(
         help="Literal/regex full-text search — local, no index or daemon.",
     ),
     ignore_case: bool = _typer.Option(
-        False, "-i", "--ignore-case", help="[--text] Force case-insensitive matching."
-    ),
-    case_sensitive: bool = _typer.Option(
-        False, "-s", "--case-sensitive", help="[--text] Force case-sensitive matching."
+        False, "-i", "--ignore-case", help="[--text] Case-insensitive (default: smart-case)."
     ),
     no_color: bool = _typer.Option(False, "--no-color", help="[--text] Disable colored output."),
 ) -> None:
@@ -713,11 +707,14 @@ def search(
     # --text is a local scan (like `grep`): branch out *before* the project/daemon
     # gate below, so it runs anywhere with no index and no daemon.
     if text:
+        # --refresh / --offset are index concepts — meaningless for a live scan.
         if refresh:
-            # --refresh rebuilds the semantic index — meaningless for a live scan.
             _typer.echo(
                 "Error: --refresh does not apply to --text (live scan, no index).", err=True
             )
+            raise _typer.Exit(code=1)
+        if offset:
+            _typer.echo("Error: --offset does not apply to --text (live scan, no index).", err=True)
             raise _typer.Exit(code=1)
         _run_text_search(
             query,
@@ -725,10 +722,15 @@ def search(
             languages=lang,
             limit=limit,
             ignore_case=ignore_case,
-            case_sensitive=case_sensitive,
             no_color=no_color,
         )
         return
+
+    # --ignore-case / --no-color only make sense for the --text local scan.
+    invalid = [n for n, v in (("--ignore-case", ignore_case), ("--no-color", no_color)) if v]
+    if invalid:
+        _typer.echo(f"Error: {', '.join(invalid)} only apply with --text.", err=True)
+        raise _typer.Exit(code=1)
 
     project_root = str(require_project_root())
     query_str = " ".join(query)

@@ -340,13 +340,23 @@ def test_cli_refresh_rejected(corpus: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert "--refresh does not apply" in result.output
 
 
-def test_cli_conflicting_case_flags(corpus: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_offset_rejected(corpus: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(corpus)
     result = runner.invoke(
-        app, ["search", "--text", "-i", "-s", "password"], catch_exceptions=False
+        app, ["search", "--text", "--offset", "3", "password"], catch_exceptions=False
     )
     assert result.exit_code == 1
-    assert "mutually exclusive" in result.output
+    assert "--offset does not apply" in result.output
+
+
+def test_cli_text_flags_rejected_without_text(
+    corpus: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(corpus)
+    # -i is a --text flag; using it for semantic search is an error, not a silent no-op.
+    result = runner.invoke(app, ["search", "-i", "password"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert "only apply with --text" in result.output
 
 
 def test_cli_lang_filter(corpus: Path, monkeypatch: pytest.MonkeyPatch) -> None:
