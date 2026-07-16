@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import signal
+import sys
 import tempfile
 import time
 from collections.abc import Iterator
@@ -261,7 +262,12 @@ def test_client_warns_and_restarts_after_daemon_crash(
     daemon_pid = client._ensured_daemon_pid
     assert daemon_pid is not None
 
-    os.kill(daemon_pid, signal.SIGKILL)
+    if sys.platform == "win32":
+        # No SIGKILL on Windows; os.kill with any non-CTRL signal calls
+        # TerminateProcess, which is equally abrupt (no handlers run).
+        os.kill(daemon_pid, signal.SIGTERM)
+    else:
+        os.kill(daemon_pid, signal.SIGKILL)
 
     # Wait until the listener is actually gone (the socket file lingers after
     # SIGKILL, but connecting to it starts failing once the process died).
