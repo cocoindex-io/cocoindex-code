@@ -12,7 +12,7 @@ import threading
 import time
 import traceback
 from collections.abc import AsyncIterator, Callable
-from multiprocessing.connection import Connection, Listener
+from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
 from typing import Any
 
@@ -780,14 +780,27 @@ def run_daemon(
         pass  # Not in main thread, or not supported on this platform (e.g. Windows)
 
     # Accept loop runs in a background thread; new connections are dispatched
-    # to the event loop via call_soon_threadsafe.  The loop exits when
-    # listener.close() (called during shutdown) causes accept() to raise.
+    # to the event loop via call_soon_threadsafe.  On POSIX the loop exits when
+    # listener.close() (called during shutdown) causes accept() to raise.  On
+    # Windows, PipeListener.close() does not cancel an in-flight
+    # ConnectNamedPipe wait, so shutdown additionally sets `shutting_down` and
+    # wakes accept() with a dummy client connection; the accepted connection
+    # (dummy or real) is dropped and the thread exits.
+    shutting_down = threading.Event()
+
     def _accept_loop() -> None:
         while True:
             try:
                 conn = listener.accept()
-                loop.call_soon_threadsafe(_spawn_handler, conn)
             except OSError:
+                break
+            if shutting_down.is_set():
+                conn.close()
+                break
+            try:
+                loop.call_soon_threadsafe(_spawn_handler, conn)
+            except RuntimeError:  # loop already closed — shutdown race
+                conn.close()
                 break
 
     accept_thread = threading.Thread(target=_accept_loop, daemon=True)
@@ -803,8 +816,19 @@ def run_daemon(
         #    absence is how the client detects a crash.
         write_last_exit_marker(pid=os.getpid(), reason=shutdown_reason or "unknown")
 
-        # 1. Stop accepting new connections.
+        # 1. Stop accepting new connections.  On Windows a blocked accept()
+        #    holds an open pipe instance that listener.close() can't release
+        #    (it only closes the queued next-instance handle), which would keep
+        #    the named pipe alive after exit — wake it with a dummy connection
+        #    so the accept thread closes it and exits.
+        shutting_down.set()
+        if sys.platform == "win32":
+            try:
+                Client(sock_path, family=connection_family()).close()
+            except OSError:
+                pass
         listener.close()
+        accept_thread.join(timeout=5)
 
         # 2. Cancel handler tasks (they may be blocked in run_in_executor)
         #    and the idle-reaper task.
