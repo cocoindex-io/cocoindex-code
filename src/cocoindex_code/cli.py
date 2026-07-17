@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
+import msgspec as _msgspec
 import typer as _typer
 
 if TYPE_CHECKING:
@@ -653,6 +654,7 @@ def search(
     offset: int = _typer.Option(0, "--offset", help="Number of results to skip"),
     limit: int = _typer.Option(10, "--limit", help="Maximum results to return"),
     refresh: bool = _typer.Option(False, "--refresh", help="Refresh index before searching"),
+    json_output: bool = _typer.Option(False, "--json", help="Output results as JSON"),
 ) -> None:
     """Semantic search across the codebase."""
     project_root = str(require_project_root())
@@ -678,7 +680,14 @@ def search(
         limit=limit,
         offset=offset,
     )
-    print_search_results(resp)
+    if json_output:
+        sys.stdout.buffer.write(_msgspec.json.encode(resp))
+        sys.stdout.buffer.write(b"\n")
+        sys.stdout.buffer.flush()
+        if not resp.success:
+            raise _typer.Exit(code=1)
+    else:
+        print_search_results(resp)
 
 
 @app.command()

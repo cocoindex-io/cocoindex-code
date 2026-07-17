@@ -8,6 +8,7 @@ commands through typer's CliRunner.
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from collections.abc import Iterator
@@ -406,6 +407,30 @@ def test_session_index_auto_initializes(e2e_project: Path) -> None:
     result = runner.invoke(app, ["search", "fibonacci"], catch_exceptions=False)
     assert result.exit_code == 0, result.output
     assert "main.py" in result.output
+
+
+def test_session_search_json_output(e2e_project: Path) -> None:
+    """`ccc search --json` emits the SearchResponse as parseable JSON on stdout."""
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    runner.invoke(app, ["index"], catch_exceptions=False)
+
+    result = runner.invoke(app, ["search", "fibonacci", "--json"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["success"] is True
+    assert payload["results"], "expected at least one result"
+    top = payload["results"][0]
+    assert {"file_path", "language", "content", "start_line", "end_line", "score"} <= top.keys()
+    assert isinstance(top["score"], float)
+    assert any("main.py" in r["file_path"] for r in payload["results"])
+
+    # --json --refresh composes: index progress goes to stderr, stdout stays pure JSON.
+    result = runner.invoke(
+        app, ["search", "fibonacci", "--json", "--refresh"], catch_exceptions=False
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["success"] is True
 
 
 def test_session_subdirectory_path_default(e2e_project: Path) -> None:

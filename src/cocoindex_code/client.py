@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable
 from multiprocessing.connection import Client, Connection
 from pathlib import Path
+from typing import NamedTuple
 
 from ._daemon_paths import (
     connection_family,
@@ -23,6 +24,7 @@ from ._daemon_paths import (
     daemon_pid_path,
     daemon_runtime_dir,
     daemon_socket_path,
+    read_last_exit_marker,
 )
 from ._version import __version__
 from .protocol import (
@@ -64,6 +66,19 @@ logger = logging.getLogger(__name__)
 
 
 _daemon_ensured = False
+
+# PID of the daemon we last completed a handshake with. Matched against the
+# graceful-exit marker when the daemon later vanishes, to tell an expected
+# exit (e.g. `ccc daemon stop`) from a crash.
+_ensured_daemon_pid: int | None = None
+
+# Consecutive crash-restarts in this process. Reset whenever the daemon
+# answers without needing a restart; at _MAX_CONSECUTIVE_CRASH_RESTARTS we
+# stop relaunching a crash-looping daemon and surface the failure instead.
+# In-process state: it matters for the long-lived MCP server, while one-shot
+# CLI invocations get at most one crash-restart each — which is fine.
+_consecutive_crash_restarts = 0
+_MAX_CONSECUTIVE_CRASH_RESTARTS = 3
 
 # Tracks which daemon-side handshake warnings have already been surfaced to
 # the user in this process. We print each distinct warning at most once per
@@ -111,33 +126,43 @@ def _connect_and_handshake() -> Connection:
 
     Returns the open connection for the caller to send exactly one request.
 
-    Automatically starts or restarts the daemon when it is absent or running
-    with stale global settings (e.g. a ``ccc init`` retry rewrote
-    ``global_settings.yml`` after the daemon loaded it). A genuine *version*
-    mismatch after we have already reached a matching daemon means the binary
-    was replaced under us mid-session — that fails fast instead of looping on
-    restarts.
+    Automatically starts or restarts the daemon when it is absent (first call,
+    or it exited since the last request) or running with
+    stale global settings (e.g. a ``ccc init`` retry rewrote
+    ``global_settings.yml`` after the daemon loaded it). An ensured daemon
+    that vanished *without* leaving a graceful-exit marker crashed — that is
+    restarted loudly, and given up on after a few consecutive crashes (see
+    ``_handle_vanished_daemon``). A genuine *version* mismatch after we have
+    already reached a matching daemon means the binary was replaced under us
+    mid-session — that fails fast instead of looping on restarts.
     """
-    global _daemon_ensured  # noqa: PLW0603
+    global _daemon_ensured, _ensured_daemon_pid, _consecutive_crash_restarts  # noqa: PLW0603
 
     try:
-        conn = _raw_connect_and_handshake()
+        result = _raw_connect_and_handshake()
         _daemon_ensured = True
-        return conn
+        _ensured_daemon_pid = result.resp.pid
+        # The daemon answered without needing a restart — any crash streak is over.
+        _consecutive_crash_restarts = 0
+        return result.conn
     except DaemonVersionError as e:
         # `resp.ok` is False only for a real version mismatch. Once we have
         # ensured a matching daemon, a fresh version mismatch means the binary
         # was swapped under us — fail fast. A settings-only restart request
         # (resp.ok True, but the loaded settings mtime moved) is expected;
-        # restart the daemon below so it reloads them.
+        # restart the daemon below so it reloads them. (stop_daemon sends a
+        # StopRequest, so this restart leaves a graceful-exit marker and the
+        # next connect stays silent.)
         if _daemon_ensured and not e.resp.ok:
             raise
         stop_daemon()
     except (ConnectionRefusedError, OSError):
-        # No daemon answered. Normal on the first call (start one below); if we
-        # had already ensured one it vanished mid-session — surface that.
+        # No daemon answered. Normal on the first call of this process (start
+        # one below). If we had already ensured one, decide crash vs graceful
+        # exit — a crash restarts loudly and is capped, a graceful exit (e.g.
+        # a manual stop) restarts silently.
         if _daemon_ensured:
-            raise
+            _handle_vanished_daemon()
 
     if _is_daemon_supervised():
         # Supervisor is responsible for (re)starting the daemon — just wait
@@ -150,16 +175,51 @@ def _connect_and_handshake() -> Connection:
     # Verify the fresh daemon is reachable
     for _attempt in range(10):
         try:
-            conn = _raw_connect_and_handshake()
+            result = _raw_connect_and_handshake()
             _daemon_ensured = True
-            return conn
+            _ensured_daemon_pid = result.resp.pid
+            return result.conn
         except (ConnectionRefusedError, OSError):
             time.sleep(0.5)
 
     raise RuntimeError("Failed to connect to daemon after starting it")
 
 
-def _raw_connect_and_handshake() -> Connection:
+def _handle_vanished_daemon() -> None:
+    """Decide how to react when an ensured daemon no longer answers.
+
+    A graceful exit (``ccc daemon stop``, SIGTERM) leaves a
+    last-exit marker carrying the exiting daemon's pid; when it matches the
+    pid we handshook with, the restart is expected and silent. No marker (or
+    a marker from a different process) means the daemon *crashed*: restart
+    it, but warn on stderr, and after ``_MAX_CONSECUTIVE_CRASH_RESTARTS``
+    consecutive crashes raise instead of relaunching a crash-looping daemon.
+    """
+    global _consecutive_crash_restarts  # noqa: PLW0603
+
+    marker = read_last_exit_marker()
+    if marker is not None and marker.pid == _ensured_daemon_pid:
+        return  # graceful exit — silent transparent restart
+
+    _consecutive_crash_restarts += 1
+    if _consecutive_crash_restarts >= _MAX_CONSECUTIVE_CRASH_RESTARTS:
+        raise RuntimeError(
+            f"cocoindex-code daemon crashed {_consecutive_crash_restarts} times in a row; "
+            f"not restarting it again. Check the daemon log ({daemon_log_path()}) "
+            "or run `ccc doctor`."
+        )
+    print_warning(
+        "cocoindex-code daemon exited unexpectedly; restarting. "
+        f"See {daemon_log_path()} for details."
+    )
+
+
+class _HandshakeResult(NamedTuple):
+    conn: Connection
+    resp: HandshakeResponse
+
+
+def _raw_connect_and_handshake() -> _HandshakeResult:
     """Low-level connect + handshake without auto-start logic."""
     sock = daemon_socket_path()
     if sys.platform != "win32" and not os.path.exists(sock):
@@ -187,7 +247,7 @@ def _raw_connect_and_handshake() -> Connection:
         conn.close()
         raise DaemonVersionError(resp)
     _print_handshake_warnings(resp)
-    return conn
+    return _HandshakeResult(conn=conn, resp=resp)
 
 
 class DaemonVersionError(RuntimeError):
@@ -500,8 +560,9 @@ def stop_daemon() -> None:
 
     Escalation: StopRequest → SIGTERM → SIGKILL.
     """
-    global _daemon_ensured  # noqa: PLW0603
+    global _daemon_ensured, _ensured_daemon_pid  # noqa: PLW0603
     _daemon_ensured = False
+    _ensured_daemon_pid = None
     _surfaced_warnings.clear()
     pid_path = daemon_pid_path()
 
@@ -515,7 +576,7 @@ def stop_daemon() -> None:
 
     # 1) Graceful StopRequest via socket (bypass auto-start)
     try:
-        conn = _raw_connect_and_handshake()
+        conn = _raw_connect_and_handshake().conn
         try:
             conn.send_bytes(encode_request(StopRequest()))
             conn.recv_bytes()
