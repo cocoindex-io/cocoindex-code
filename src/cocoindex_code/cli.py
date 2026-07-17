@@ -81,17 +81,22 @@ def require_project_root(*, auto_init: bool = False) -> Path:
 
     Checks global settings first (more fundamental), then project settings.
     With ``auto_init``, a missing project is initialized with default settings
-    instead of failing; missing global settings always exit with code 1, since
-    creating them needs the interactive model setup in ``ccc init``.
+    instead of failing. Missing global settings run the same interactive model
+    setup as ``ccc init`` — but only on a TTY, since picking an embedding model
+    is a consequential choice; non-interactive runs (scripts, hooks, agents)
+    still exit with code 1 rather than silently committing to a default model.
     """
     gs_path = user_settings_path()
     if not gs_path.is_file():
-        _typer.echo(
-            f"Error: Global settings not found: {format_path_for_display(gs_path)}\n"
-            "Run `ccc init` to create it with default settings.",
-            err=True,
-        )
-        raise _typer.Exit(code=1)
+        if auto_init and sys.stdin.isatty():
+            _setup_user_settings_interactive(None)
+        else:
+            _typer.echo(
+                f"Error: Global settings not found: {format_path_for_display(gs_path)}\n"
+                "Run `ccc init` to create it with default settings.",
+                err=True,
+            )
+            raise _typer.Exit(code=1)
     root = find_project_root(Path.cwd())
     if root is None:
         if auto_init:
