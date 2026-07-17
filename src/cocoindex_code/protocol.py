@@ -155,12 +155,10 @@ class DaemonStatusResponse(_msgspec.Struct, tag="daemon_status"):
     version: str
     uptime_seconds: float
     projects: list[DaemonProjectInfo]
-    # Idle-timeout observability: seconds since the last client activity, the
-    # configured timeout (0 = never exit), and seconds since the last MCP
-    # heartbeat (None = never received one).
+    # Idle-timeout observability: seconds since the last client activity and
+    # the configured timeout (0 = never exit).
     idle_seconds: float
     idle_timeout_minutes: int
-    last_heartbeat_seconds: float | None = None
 
 
 class RemoveProjectResponse(_msgspec.Struct, tag="remove_project"):

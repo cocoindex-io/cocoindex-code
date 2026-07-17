@@ -215,23 +215,16 @@ class IdleReaper:
 
     ``last_activity`` is refreshed on every accepted connection and again when
     each handler task finishes, so a long streaming request (e.g. an index run)
-    counts as activity up to its end.  ``last_heartbeat`` additionally records
-    when the most recent ``HeartbeatRequest`` was dispatched — for status
-    reporting only; heartbeat connections refresh ``last_activity`` like any
-    other connection.
+    counts as activity up to its end.
     """
 
     def __init__(self, timeout: timedelta, *, supervised: bool) -> None:
         self.timeout = timeout
         self.supervised = supervised
         self.last_activity = time.monotonic()
-        self.last_heartbeat: float | None = None
 
     def record_activity(self) -> None:
         self.last_activity = time.monotonic()
-
-    def record_heartbeat(self) -> None:
-        self.last_heartbeat = time.monotonic()
 
     def idle_seconds(self, now: float | None = None) -> float:
         return (time.monotonic() if now is None else now) - self.last_activity
@@ -570,9 +563,6 @@ async def _dispatch(
                 projects=registry.list_projects(),
                 idle_seconds=reaper.idle_seconds(now),
                 idle_timeout_minutes=round(reaper.timeout / timedelta(minutes=1)),
-                last_heartbeat_seconds=(
-                    None if reaper.last_heartbeat is None else now - reaper.last_heartbeat
-                ),
             )
 
         if isinstance(req, RemoveProjectRequest):
@@ -584,7 +574,8 @@ async def _dispatch(
             return StopResponse(ok=True)
 
         if isinstance(req, HeartbeatRequest):
-            reaper.record_heartbeat()
+            # A heartbeat's only effect is the connection itself, which the
+            # accept path already recorded as activity.
             return HeartbeatResponse(ok=True)
 
         if isinstance(req, DaemonEnvRequest):

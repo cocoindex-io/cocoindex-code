@@ -139,7 +139,6 @@ def test_encode_decode_daemon_status_response() -> None:
     assert decoded.projects[0].indexing is False
     assert decoded.idle_seconds == 12.5
     assert decoded.idle_timeout_minutes == 180
-    assert decoded.last_heartbeat_seconds is None
 
 
 def test_encode_decode_heartbeat_round_trip() -> None:

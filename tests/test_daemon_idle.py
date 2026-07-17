@@ -28,8 +28,6 @@ from cocoindex_code._daemon_paths import (
 from cocoindex_code._version import __version__
 from cocoindex_code.daemon import IdleReaper
 from cocoindex_code.protocol import (
-    DaemonStatusRequest,
-    DaemonStatusResponse,
     HandshakeRequest,
     IndexProgressUpdate,
     IndexRequest,
@@ -93,13 +91,6 @@ def test_reaper_activity_resets_idle_clock() -> None:
     now = reaper.last_activity + 1.0
     assert reaper.should_exit(now=now, active_handlers=0, indexing=False) is False
     assert reaper.idle_seconds(now) == pytest.approx(1.0)
-
-
-def test_reaper_heartbeat_tracked_separately() -> None:
-    reaper = IdleReaper(timeout=timedelta(seconds=60), supervised=False)
-    assert reaper.last_heartbeat is None
-    reaper.record_heartbeat()
-    assert reaper.last_heartbeat is not None
 
 
 # ---------------------------------------------------------------------------
@@ -240,17 +231,6 @@ def test_daemon_does_not_exit_while_heartbeats_arrive(idle_env: Path) -> None:
             assert send_heartbeat() is True
             time.sleep(0.4)
         assert thread.is_alive(), "daemon idle-exited despite heartbeats"
-
-        # The status endpoint reports the heartbeat age.
-        conn = Client(sock_path, family=connection_family())
-        conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
-        conn.recv_bytes()
-        conn.send_bytes(encode_request(DaemonStatusRequest()))
-        status = decode_response(conn.recv_bytes())
-        conn.close()
-        assert isinstance(status, DaemonStatusResponse)
-        assert status.last_heartbeat_seconds is not None
-        assert status.last_heartbeat_seconds < 2.0
 
         # Heartbeats stopped — the daemon exits on the next idle timeout.
         thread.join(timeout=15)
