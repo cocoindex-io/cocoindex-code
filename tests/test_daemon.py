@@ -146,6 +146,8 @@ def test_daemon_starts_and_accepts_handshake(daemon_sock: str) -> None:
     conn, resp = _connect_and_handshake(daemon_sock)
     assert resp.ok is True
     assert resp.daemon_version == __version__
+    # The in-process daemon reports its (== pytest's) pid for crash detection.
+    assert resp.pid == os.getpid()
     # The session daemon uses a non-legacy model so no warnings expected.
     assert resp.warnings == []
     conn.close()
