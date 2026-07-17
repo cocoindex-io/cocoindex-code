@@ -12,6 +12,7 @@ import threading
 import time
 import traceback
 from collections.abc import AsyncIterator, Callable
+from datetime import timedelta
 from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
 from typing import Any
@@ -220,8 +221,8 @@ class IdleReaper:
     other connection.
     """
 
-    def __init__(self, timeout_s: float, *, supervised: bool) -> None:
-        self.timeout_s = timeout_s
+    def __init__(self, timeout: timedelta, *, supervised: bool) -> None:
+        self.timeout = timeout
         self.supervised = supervised
         self.last_activity = time.monotonic()
         self.last_heartbeat: float | None = None
@@ -242,13 +243,13 @@ class IdleReaper:
         the daemon lifecycle, no handler task is live, no project is indexing,
         and the idle period exceeds the timeout.
         """
-        if self.timeout_s <= 0:
+        if self.timeout <= timedelta(0):
             return False
         if self.supervised:
             return False
         if active_handlers > 0 or indexing:
             return False
-        return now - self.last_activity > self.timeout_s
+        return now - self.last_activity > self.timeout.total_seconds()
 
 
 # ---------------------------------------------------------------------------
@@ -568,7 +569,7 @@ async def _dispatch(
                 uptime_seconds=now - start_time,
                 projects=registry.list_projects(),
                 idle_seconds=reaper.idle_seconds(now),
-                idle_timeout_minutes=round(reaper.timeout_s / 60),
+                idle_timeout_minutes=round(reaper.timeout / timedelta(minutes=1)),
                 last_heartbeat_seconds=(
                     None if reaper.last_heartbeat is None else now - reaper.last_heartbeat
                 ),
@@ -619,8 +620,8 @@ async def _dispatch(
 
 def run_daemon(
     *,
-    idle_timeout_s: float | None = None,
-    idle_check_interval_s: float = 60.0,
+    idle_timeout: timedelta | None = None,
+    idle_check_interval: timedelta = timedelta(minutes=1),
 ) -> None:
     """Main entry point for the daemon process (blocking).
 
@@ -628,7 +629,7 @@ def run_daemon(
     to serve connections, and performs cleanup when shutdown is requested via
     ``StopRequest``, a signal (SIGTERM / SIGINT), or the idle timeout.
 
-    ``idle_timeout_s`` and ``idle_check_interval_s`` exist so tests can run a
+    ``idle_timeout`` and ``idle_check_interval`` exist so tests can run a
     seconds-scale idle timeout in-process; production leaves them at their
     defaults and the timeout comes from ``daemon.idle_timeout_minutes`` in
     ``global_settings.yml`` (the dataclass default when the file is missing).
@@ -708,10 +709,10 @@ def run_daemon(
     tasks: set[asyncio.Task[Any]] = set()
 
     reaper = IdleReaper(
-        timeout_s=(
-            idle_timeout_s
-            if idle_timeout_s is not None
-            else daemon_settings.idle_timeout_minutes * 60.0
+        timeout=(
+            idle_timeout
+            if idle_timeout is not None
+            else timedelta(minutes=daemon_settings.idle_timeout_minutes)
         ),
         supervised=os.environ.get("COCOINDEX_CODE_DAEMON_SUPERVISED") == "1",
     )
@@ -756,7 +757,7 @@ def run_daemon(
     async def _idle_reaper_loop() -> None:
         """Periodically check the idle predicate; trigger shutdown when it fires."""
         while True:
-            await asyncio.sleep(idle_check_interval_s)
+            await asyncio.sleep(idle_check_interval.total_seconds())
             if reaper.should_exit(
                 now=time.monotonic(),
                 active_handlers=len(tasks),
@@ -765,7 +766,7 @@ def run_daemon(
                 logger.info(
                     "Idle for %.1fm (timeout %.1fm), shutting down",
                     reaper.idle_seconds() / 60,
-                    reaper.timeout_s / 60,
+                    reaper.timeout / timedelta(minutes=1),
                 )
                 _request_shutdown("idle_timeout")
                 return

@@ -1,8 +1,8 @@
 """Idle-timeout tests: IdleReaper predicate units + in-process daemon E2E.
 
 The E2E tests start the daemon in-process (a background thread) with a
-seconds-scale idle timeout injected via ``run_daemon(idle_timeout_s=...,
-idle_check_interval_s=...)`` and verify it exits — or refuses to exit — at
+seconds-scale idle timeout injected via ``run_daemon(idle_timeout=...,
+idle_check_interval=...)`` and verify it exits — or refuses to exit — at
 the right times, and that the socket and PID file are cleaned up.
 """
 
@@ -12,6 +12,7 @@ import os
 import tempfile
 import threading
 import time
+from datetime import timedelta
 from multiprocessing.connection import Client, Connection
 from pathlib import Path
 
@@ -50,43 +51,43 @@ from cocoindex_code.settings import (
 
 
 def test_reaper_exits_after_timeout_elapsed() -> None:
-    reaper = IdleReaper(timeout_s=60.0, supervised=False)
+    reaper = IdleReaper(timeout=timedelta(seconds=60), supervised=False)
     now = reaper.last_activity + 61.0
     assert reaper.should_exit(now=now, active_handlers=0, indexing=False) is True
 
 
 def test_reaper_stays_before_timeout() -> None:
-    reaper = IdleReaper(timeout_s=60.0, supervised=False)
+    reaper = IdleReaper(timeout=timedelta(seconds=60), supervised=False)
     now = reaper.last_activity + 59.0
     assert reaper.should_exit(now=now, active_handlers=0, indexing=False) is False
 
 
 def test_reaper_stays_with_live_handler() -> None:
-    reaper = IdleReaper(timeout_s=60.0, supervised=False)
+    reaper = IdleReaper(timeout=timedelta(seconds=60), supervised=False)
     now = reaper.last_activity + 61.0
     assert reaper.should_exit(now=now, active_handlers=1, indexing=False) is False
 
 
 def test_reaper_stays_while_indexing() -> None:
-    reaper = IdleReaper(timeout_s=60.0, supervised=False)
+    reaper = IdleReaper(timeout=timedelta(seconds=60), supervised=False)
     now = reaper.last_activity + 61.0
     assert reaper.should_exit(now=now, active_handlers=0, indexing=True) is False
 
 
 def test_reaper_timeout_zero_never_exits() -> None:
-    reaper = IdleReaper(timeout_s=0.0, supervised=False)
+    reaper = IdleReaper(timeout=timedelta(0), supervised=False)
     now = reaper.last_activity + 1_000_000.0
     assert reaper.should_exit(now=now, active_handlers=0, indexing=False) is False
 
 
 def test_reaper_supervised_never_exits() -> None:
-    reaper = IdleReaper(timeout_s=60.0, supervised=True)
+    reaper = IdleReaper(timeout=timedelta(seconds=60), supervised=True)
     now = reaper.last_activity + 1_000_000.0
     assert reaper.should_exit(now=now, active_handlers=0, indexing=False) is False
 
 
 def test_reaper_activity_resets_idle_clock() -> None:
-    reaper = IdleReaper(timeout_s=60.0, supervised=False)
+    reaper = IdleReaper(timeout=timedelta(seconds=60), supervised=False)
     reaper.last_activity -= 120.0  # long idle...
     reaper.record_activity()  # ...then a connection arrives
     now = reaper.last_activity + 1.0
@@ -95,7 +96,7 @@ def test_reaper_activity_resets_idle_clock() -> None:
 
 
 def test_reaper_heartbeat_tracked_separately() -> None:
-    reaper = IdleReaper(timeout_s=60.0, supervised=False)
+    reaper = IdleReaper(timeout=timedelta(seconds=60), supervised=False)
     assert reaper.last_heartbeat is None
     reaper.record_heartbeat()
     assert reaper.last_heartbeat is not None
@@ -133,8 +134,8 @@ def _start_daemon_thread(
     """Run the daemon in-process and wait for its socket to appear."""
     thread = threading.Thread(
         target=lambda: dm.run_daemon(
-            idle_timeout_s=idle_timeout_s,
-            idle_check_interval_s=idle_check_interval_s,
+            idle_timeout=timedelta(seconds=idle_timeout_s),
+            idle_check_interval=timedelta(seconds=idle_check_interval_s),
         ),
         daemon=True,
     )
