@@ -139,12 +139,12 @@ def _connect_and_handshake() -> Connection:
     global _daemon_ensured, _ensured_daemon_pid, _consecutive_crash_restarts  # noqa: PLW0603
 
     try:
-        conn, resp = _raw_connect_and_handshake()
+        result = _raw_connect_and_handshake()
         _daemon_ensured = True
-        _ensured_daemon_pid = resp.pid
+        _ensured_daemon_pid = result.resp.pid
         # The daemon answered without needing a restart — any crash streak is over.
         _consecutive_crash_restarts = 0
-        return conn
+        return result.conn
     except DaemonVersionError as e:
         # `resp.ok` is False only for a real version mismatch. Once we have
         # ensured a matching daemon, a fresh version mismatch means the binary
@@ -175,10 +175,10 @@ def _connect_and_handshake() -> Connection:
     # Verify the fresh daemon is reachable
     for _attempt in range(10):
         try:
-            conn, resp = _raw_connect_and_handshake()
+            result = _raw_connect_and_handshake()
             _daemon_ensured = True
-            _ensured_daemon_pid = resp.pid
-            return conn
+            _ensured_daemon_pid = result.resp.pid
+            return result.conn
         except (ConnectionRefusedError, OSError):
             time.sleep(0.5)
 
@@ -576,7 +576,7 @@ def stop_daemon() -> None:
 
     # 1) Graceful StopRequest via socket (bypass auto-start)
     try:
-        conn, _resp = _raw_connect_and_handshake()
+        conn = _raw_connect_and_handshake().conn
         try:
             conn.send_bytes(encode_request(StopRequest()))
             conn.recv_bytes()

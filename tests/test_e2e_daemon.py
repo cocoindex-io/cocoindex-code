@@ -156,7 +156,7 @@ def test_daemon_starts_in_no_settings_mode_without_global_settings() -> None:
         # _raw_connect_and_handshake does its own handshake read — but it also
         # raises DaemonVersionError when the client-side mtime disagrees. With
         # the file absent on both sides, mtime=None matches, so handshake OK.
-        conn, _handshake = _raw_connect_and_handshake()
+        conn = _raw_connect_and_handshake().conn
         try:
             # Send a project request — should get an ErrorResponse pointing at
             # `ccc init`, not a crash.
@@ -214,7 +214,7 @@ def test_client_restarts_daemon_silently_after_graceful_exit(
 
     # Stop the daemon *without* client.stop_daemon(), which would reset
     # _daemon_ensured and hide the race under test.
-    conn, _handshake = client._raw_connect_and_handshake()
+    conn = client._raw_connect_and_handshake().conn
     try:
         conn.send_bytes(encode_request(StopRequest()))
         conn.recv_bytes()

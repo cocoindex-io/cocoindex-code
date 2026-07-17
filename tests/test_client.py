@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import tempfile
+from multiprocessing.connection import Connection
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -96,13 +98,13 @@ def test_connect_restarts_ensured_daemon_on_stale_settings(
     ok_resp = HandshakeResponse(ok=True, daemon_version="v1", pid=42)
     calls = {"raw": 0, "stop": 0, "start": 0}
 
-    def fake_raw() -> tuple[object, HandshakeResponse]:
+    def fake_raw() -> client._HandshakeResult:
         calls["raw"] += 1
         if calls["raw"] == 1:
             raise client.DaemonVersionError(
                 HandshakeResponse(ok=True, daemon_version="v1", pid=42, global_settings_mtime_us=1)
             )
-        return sentinel_conn, ok_resp
+        return client._HandshakeResult(conn=cast(Connection, sentinel_conn), resp=ok_resp)
 
     monkeypatch.setattr(client, "_raw_connect_and_handshake", fake_raw)
     monkeypatch.setattr(client, "stop_daemon", lambda: calls.update(stop=calls["stop"] + 1))
@@ -170,11 +172,11 @@ def _setup_vanished_daemon(
     ok_resp = HandshakeResponse(ok=True, daemon_version="v1", pid=43)
     calls = {"raw": 0, "start": 0}
 
-    def fake_raw() -> tuple[object, HandshakeResponse]:
+    def fake_raw() -> client._HandshakeResult:
         calls["raw"] += 1
         if calls["raw"] == 1:
             raise ConnectionRefusedError("daemon socket not found")
-        return sentinel_conn, ok_resp
+        return client._HandshakeResult(conn=cast(Connection, sentinel_conn), resp=ok_resp)
 
     monkeypatch.setattr(client, "_raw_connect_and_handshake", fake_raw)
     monkeypatch.setattr(client, "start_daemon", lambda: calls.update(start=calls["start"] + 1))
@@ -256,7 +258,11 @@ def test_crash_counter_resets_on_clean_connect(monkeypatch: pytest.MonkeyPatch) 
 
     sentinel_conn = object()
     ok_resp = HandshakeResponse(ok=True, daemon_version="v1", pid=7)
-    monkeypatch.setattr(client, "_raw_connect_and_handshake", lambda: (sentinel_conn, ok_resp))
+    monkeypatch.setattr(
+        client,
+        "_raw_connect_and_handshake",
+        lambda: client._HandshakeResult(conn=cast(Connection, sentinel_conn), resp=ok_resp),
+    )
 
     conn = client._connect_and_handshake()
 
