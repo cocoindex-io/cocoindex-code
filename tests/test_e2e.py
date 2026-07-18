@@ -396,6 +396,19 @@ def test_session_search_refresh() -> None:
     assert "main.py" in result.output
 
 
+def test_session_index_auto_initializes(e2e_project: Path) -> None:
+    """Running ``ccc index`` from an uninitialized dir auto-creates project settings."""
+    result = runner.invoke(app, ["index"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert "Created project settings" in result.output
+    assert (e2e_project / ".cocoindex_code" / "settings.yml").is_file()
+
+    # The auto-initialized project is fully usable: search works.
+    result = runner.invoke(app, ["search", "fibonacci"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert "main.py" in result.output
+
+
 def test_session_search_json_output(e2e_project: Path) -> None:
     """`ccc search --json` emits the SearchResponse as parseable JSON on stdout."""
     runner.invoke(app, ["init"], catch_exceptions=False)
@@ -418,14 +431,6 @@ def test_session_search_json_output(e2e_project: Path) -> None:
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
     assert payload["success"] is True
-
-
-@pytest.mark.usefixtures("e2e_project")
-def test_session_index_not_initialized_errors() -> None:
-    """Running ``ccc index`` from uninitialized dir should error."""
-    result = runner.invoke(app, ["index"])
-    assert result.exit_code != 0
-    assert "ccc init" in result.output
 
 
 def test_session_subdirectory_path_default(e2e_project: Path) -> None:
