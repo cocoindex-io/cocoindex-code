@@ -50,6 +50,16 @@ class DaemonEnvRequest(_msgspec.Struct, tag="daemon_env"):
     pass
 
 
+class HeartbeatRequest(_msgspec.Struct, tag="heartbeat"):
+    """Counts as client activity for the daemon's idle timeout.
+
+    Sent periodically by long-lived MCP servers so the daemon does not
+    idle-exit under an active session.
+    """
+
+    pass
+
+
 Request = (
     HandshakeRequest
     | IndexRequest
@@ -60,6 +70,7 @@ Request = (
     | StopRequest
     | DoctorRequest
     | DaemonEnvRequest
+    | HeartbeatRequest
 )
 
 # ---------------------------------------------------------------------------
@@ -144,6 +155,10 @@ class DaemonStatusResponse(_msgspec.Struct, tag="daemon_status"):
     version: str
     uptime_seconds: float
     projects: list[DaemonProjectInfo]
+    # Idle-timeout observability: seconds since the last client activity and
+    # the configured timeout (0 = never exit).
+    idle_seconds: float
+    idle_timeout_minutes: int
 
 
 class RemoveProjectResponse(_msgspec.Struct, tag="remove_project"):
@@ -151,6 +166,10 @@ class RemoveProjectResponse(_msgspec.Struct, tag="remove_project"):
 
 
 class StopResponse(_msgspec.Struct, tag="stop"):
+    ok: bool
+
+
+class HeartbeatResponse(_msgspec.Struct, tag="heartbeat"):
     ok: bool
 
 
@@ -198,6 +217,7 @@ Response = (
     | DaemonStatusResponse
     | RemoveProjectResponse
     | StopResponse
+    | HeartbeatResponse
     | DoctorResponse
     | DaemonEnvResponse
     | ErrorResponse

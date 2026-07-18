@@ -17,6 +17,8 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from .settings import DaemonSettings, load_user_settings
+
 _MCP_INSTRUCTIONS = (
     "Code search and codebase understanding tools."
     "\n"
@@ -157,6 +159,45 @@ def create_mcp_server(project_root: str) -> FastMCP:
             return SearchResultModel(success=False, message=f"Query failed: {e!s}")
 
     return mcp
+
+
+# === Daemon heartbeat loop ===
+
+
+def heartbeat_interval_s(idle_timeout_minutes: int) -> int:
+    """Heartbeat period for a given idle timeout: a third of the timeout,
+    clamped to [30 s, 300 s] so several heartbeats always fit in one idle
+    window without hammering the daemon on very long timeouts.
+    """
+    return max(30, min(300, idle_timeout_minutes * 60 // 3))
+
+
+async def run_heartbeat_loop() -> None:
+    """Periodically heartbeat the daemon so it never idle-exits under this
+    live MCP session; when this process dies (even SIGKILL) the heartbeats
+    stop and the daemon exits on its normal idle timeout.
+
+    Reads the timeout from the same ``global_settings.yml`` the daemon reads
+    (dataclass default when the file is missing or invalid). Returns
+    immediately when the timeout is 0 (daemon never idle-exits). The
+    heartbeat itself never starts or restarts a daemon — see
+    ``client.send_heartbeat``.
+    """
+    from .client import send_heartbeat
+
+    try:
+        timeout_minutes = load_user_settings().daemon.idle_timeout_minutes
+    except (FileNotFoundError, ValueError):
+        timeout_minutes = DaemonSettings().idle_timeout_minutes
+    if timeout_minutes <= 0:
+        return
+
+    interval = heartbeat_interval_s(timeout_minutes)
+    loop = asyncio.get_event_loop()
+    while True:
+        await asyncio.sleep(interval)
+        # Client I/O is blocking — run off the event loop thread.
+        await loop.run_in_executor(None, send_heartbeat)
 
 
 # Keep the old `mcp` global for backward compatibility in __init__.py
@@ -326,7 +367,14 @@ def main() -> None:
         async def _serve() -> None:
             from .cli import _bg_index
 
-            asyncio.create_task(_bg_index(str(project_root)))
-            await mcp_server.run_stdio_async()
+            background_tasks = {
+                asyncio.create_task(_bg_index(str(project_root))),
+                asyncio.create_task(run_heartbeat_loop()),
+            }
+            try:
+                await mcp_server.run_stdio_async()
+            finally:
+                for task in background_tasks:
+                    task.cancel()
 
         asyncio.run(_serve())

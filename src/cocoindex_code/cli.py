@@ -1025,11 +1025,18 @@ def mcp() -> None:
     project_root = str(require_project_root())
 
     async def _run_mcp() -> None:
-        from .server import create_mcp_server
+        from .server import create_mcp_server, run_heartbeat_loop
 
         mcp_server = create_mcp_server(project_root)
-        asyncio.create_task(_bg_index(project_root))
-        await mcp_server.run_stdio_async()
+        background_tasks = {
+            asyncio.create_task(_bg_index(project_root)),
+            asyncio.create_task(run_heartbeat_loop()),
+        }
+        try:
+            await mcp_server.run_stdio_async()
+        finally:
+            for task in background_tasks:
+                task.cancel()
 
     asyncio.run(_run_mcp())
 
@@ -1059,6 +1066,8 @@ def daemon_status() -> None:
     resp = _client.daemon_status()
     _typer.echo(f"Daemon version: {resp.version}")
     _typer.echo(f"Uptime: {resp.uptime_seconds:.1f}s")
+    timeout_desc = f"{resp.idle_timeout_minutes}m" if resp.idle_timeout_minutes > 0 else "disabled"
+    _typer.echo(f"Idle: {resp.idle_seconds:.1f}s (timeout: {timeout_desc})")
     if resp.projects:
         _typer.echo("Projects:")
         for p in resp.projects:

@@ -14,6 +14,7 @@ from cocoindex_code.settings import (
     DEFAULT_EXCLUDED_PATTERNS,
     DEFAULT_INCLUDED_PATTERNS,
     ChunkerMapping,
+    DaemonSettings,
     EmbeddingSettings,
     LanguageOverride,
     ProjectSettings,
@@ -471,6 +472,62 @@ class TestHostPathMapping:
         monkeypatch.setenv("COCOINDEX_CODE_HOST_PATH_MAPPING", "relative=/abs")
         with pytest.raises(ValueError, match="source path must be absolute"):
             get_host_path_mappings()
+
+
+# ---------------------------------------------------------------------------
+# daemon settings (idle timeout)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_daemon_settings_absent_section_uses_default(tmp_path: Path) -> None:
+    path = tmp_path / ".cocoindex_code" / "global_settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("embedding:\n  provider: litellm\n  model: m\n")
+    loaded = load_user_settings()
+    assert loaded.daemon.idle_timeout_minutes == 180
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_daemon_settings_parses_idle_timeout(tmp_path: Path) -> None:
+    path = tmp_path / ".cocoindex_code" / "global_settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "embedding:\n  provider: litellm\n  model: m\ndaemon:\n  idle_timeout_minutes: 30\n"
+    )
+    loaded = load_user_settings()
+    assert loaded.daemon.idle_timeout_minutes == 30
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_daemon_settings_explicit_zero_means_never(tmp_path: Path) -> None:
+    path = tmp_path / ".cocoindex_code" / "global_settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "embedding:\n  provider: litellm\n  model: m\ndaemon:\n  idle_timeout_minutes: 0\n"
+    )
+    loaded = load_user_settings()
+    assert loaded.daemon.idle_timeout_minutes == 0
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_daemon_settings_round_trip() -> None:
+    settings = UserSettings(
+        embedding=EmbeddingSettings(provider="litellm", model="m"),
+        daemon=DaemonSettings(idle_timeout_minutes=45),
+    )
+    save_user_settings(settings)
+    loaded = load_user_settings()
+    assert loaded.daemon.idle_timeout_minutes == 45
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_daemon_settings_default_omitted_from_yaml() -> None:
+    from cocoindex_code.settings import user_settings_path
+
+    settings = UserSettings(embedding=EmbeddingSettings(provider="litellm", model="m"))
+    save_user_settings(settings)
+    assert "daemon" not in user_settings_path().read_text()
 
 
 # ---------------------------------------------------------------------------

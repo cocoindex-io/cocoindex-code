@@ -37,6 +37,8 @@ from .protocol import (
     ErrorResponse,
     HandshakeRequest,
     HandshakeResponse,
+    HeartbeatRequest,
+    HeartbeatResponse,
     IndexingProgress,
     IndexProgressUpdate,
     IndexRequest,
@@ -412,6 +414,30 @@ def remove_project(project_root: str) -> RemoveProjectResponse:
 
 def stop() -> StopResponse:
     return _send(StopRequest())  # type: ignore[return-value]
+
+
+def send_heartbeat() -> bool:
+    """Send one heartbeat so a running daemon counts an active MCP session as activity.
+
+    Uses the raw (non-auto-starting) connect path and returns False when no
+    compatible daemon answers: a heartbeat keeps an existing daemon warm but
+    must NEVER start or restart one — otherwise `ccc daemon stop` during an
+    MCP session would fight the heartbeat loop. The daemon still auto-starts
+    lazily on the next real search/index request.
+    """
+    try:
+        conn, _resp = _raw_connect_and_handshake()
+    except (ConnectionRefusedError, DaemonVersionError, OSError):
+        return False
+    try:
+        conn.send_bytes(encode_request(HeartbeatRequest()))
+        data = conn.recv_bytes()
+    except (EOFError, OSError):
+        return False
+    finally:
+        conn.close()
+    resp = decode_response(data)
+    return isinstance(resp, HeartbeatResponse) and resp.ok
 
 
 def daemon_env() -> DaemonEnvResponse:
