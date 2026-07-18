@@ -812,13 +812,15 @@ def run_daemon(
         #    holds an open pipe instance that listener.close() can't release
         #    (it only closes the queued next-instance handle), which would keep
         #    the named pipe alive after exit — wake it with a dummy connection
-        #    so the accept thread closes it and exits.
+        #    so the accept thread closes it and exits.  POSIX doesn't need the
+        #    wake-up (listener.close() makes accept() raise), but it's harmless
+        #    there and keeps this path exercised on every platform rather than
+        #    only on Windows CI.
         shutting_down.set()
-        if sys.platform == "win32":
-            try:
-                Client(sock_path, family=connection_family()).close()
-            except OSError:
-                pass
+        try:
+            Client(sock_path, family=connection_family()).close()
+        except OSError:
+            pass
         listener.close()
         accept_thread.join(timeout=5)
 
