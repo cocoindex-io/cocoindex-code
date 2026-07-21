@@ -366,6 +366,14 @@ def test_cli_offset_rejected(corpus: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert "--offset does not apply" in result.output
 
 
+def test_cli_json_rejected(corpus: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(corpus)
+    # --json has no defined shape for text matches yet; reject rather than ignore.
+    result = runner.invoke(app, ["search", "--text", "--json", "password"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert "--json is not supported with --text" in result.output
+
+
 def test_cli_text_flags_rejected_without_text(
     corpus: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -31,6 +31,8 @@ The tool runs as a **long-lived background daemon** (`daemon.py`) that accepts c
 
 The daemon is auto-started by `client.py` when not running. It is restarted automatically when the `global_settings.yml` mtime changes (version bump or settings edit), detected via the `HandshakeResponse.global_settings_mtime_us` field.
 
+The daemon idle-exits after `daemon.idle_timeout_minutes` (default 180, 0 = never) without client activity, unless a live MCP session is sending heartbeats; clients transparently restart it on the next request. Graceful exits leave a `last_exit` marker file so the client can tell an expected exit from a crash (which triggers a loud restart, capped after consecutive crashes).
+
 ### Key Layers
 
 **`protocol.py`** — All IPC message types as `msgspec.Struct` tagged unions, serialized as msgpack. Every request type, response type, and streaming wrapper lives here. The `Request` and `Response` type aliases are the union types used by the decoder.

@@ -12,16 +12,19 @@ import threading
 import time
 import traceback
 from collections.abc import AsyncIterator, Callable
-from multiprocessing.connection import Connection, Listener
+from datetime import timedelta
+from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
 from typing import Any
 
 from ._daemon_paths import (
+    clear_last_exit_marker,
     connection_family,
     daemon_log_path,
     daemon_pid_path,
     daemon_runtime_dir,
     daemon_socket_path,
+    write_last_exit_marker,
 )
 from ._version import __version__
 from .chunking import ChunkerFn as _ChunkerFn
@@ -40,6 +43,8 @@ from .protocol import (
     ErrorResponse,
     HandshakeRequest,
     HandshakeResponse,
+    HeartbeatRequest,
+    HeartbeatResponse,
     IndexRequest,
     IndexStreamResponse,
     IndexWaitingNotice,
@@ -58,6 +63,7 @@ from .protocol import (
 )
 from .settings import (
     ChunkerMapping,
+    DaemonSettings,
     UserSettings,
     format_path_for_display,
     get_host_path_mappings,
@@ -194,6 +200,50 @@ class ProjectRegistry:
             for root, project in self._projects.items()
         ]
 
+    def any_indexing(self) -> bool:
+        """True when any loaded project currently holds its index lock."""
+        return any(project._index_lock.locked() for project in self._projects.values())
+
+
+# ---------------------------------------------------------------------------
+# Idle reaper
+# ---------------------------------------------------------------------------
+
+
+class IdleReaper:
+    """Tracks client activity and decides when the daemon should idle-exit.
+
+    ``last_activity`` is refreshed on every accepted connection and again when
+    each handler task finishes, so a long streaming request (e.g. an index run)
+    counts as activity up to its end.
+    """
+
+    def __init__(self, timeout: timedelta, *, supervised: bool) -> None:
+        self.timeout = timeout
+        self.supervised = supervised
+        self.last_activity = time.monotonic()
+
+    def record_activity(self) -> None:
+        self.last_activity = time.monotonic()
+
+    def idle_seconds(self, now: float | None = None) -> float:
+        return (time.monotonic() if now is None else now) - self.last_activity
+
+    def should_exit(self, *, now: float, active_handlers: int, indexing: bool) -> bool:
+        """Pure exit predicate — testable without an event loop.
+
+        Exit only when a timeout is configured, no external supervisor owns
+        the daemon lifecycle, no handler task is live, no project is indexing,
+        and the idle period exceeds the timeout.
+        """
+        if self.timeout <= timedelta(0):
+            return False
+        if self.supervised:
+            return False
+        if active_handlers > 0 or indexing:
+            return False
+        return now - self.last_activity > self.timeout.total_seconds()
+
 
 # ---------------------------------------------------------------------------
 # Connection handler
@@ -208,6 +258,7 @@ async def handle_connection(
     settings_mtime_us: int | None,
     settings_env_names: list[str],
     handshake_warnings: list[str],
+    reaper: IdleReaper,
 ) -> None:
     """Handle a single client connection (per-request model).
 
@@ -232,6 +283,7 @@ async def handle_connection(
                 HandshakeResponse(
                     ok=ok,
                     daemon_version=__version__,
+                    pid=os.getpid(),
                     global_settings_mtime_us=settings_mtime_us,
                     warnings=list(handshake_warnings),
                 )
@@ -244,7 +296,7 @@ async def handle_connection(
         data = await loop.run_in_executor(None, conn.recv_bytes)
         req = decode_request(data)
 
-        result = await _dispatch(req, registry, start_time, on_shutdown, settings_env_names)
+        result = await _dispatch(req, registry, start_time, on_shutdown, settings_env_names, reaper)
         if isinstance(result, AsyncIterator):
             try:
                 async for resp in result:
@@ -460,6 +512,7 @@ async def _dispatch(
     start_time: float,
     on_shutdown: Callable[[], None],
     settings_env_names: list[str],
+    reaper: IdleReaper,
 ) -> (
     Response
     | AsyncIterator[IndexStreamResponse]
@@ -503,10 +556,13 @@ async def _dispatch(
             return project.get_status()
 
         if isinstance(req, DaemonStatusRequest):
+            now = time.monotonic()
             return DaemonStatusResponse(
                 version=__version__,
-                uptime_seconds=time.monotonic() - start_time,
+                uptime_seconds=now - start_time,
                 projects=registry.list_projects(),
+                idle_seconds=reaper.idle_seconds(now),
+                idle_timeout_minutes=round(reaper.timeout / timedelta(minutes=1)),
             )
 
         if isinstance(req, RemoveProjectRequest):
@@ -516,6 +572,11 @@ async def _dispatch(
         if isinstance(req, StopRequest):
             on_shutdown()
             return StopResponse(ok=True)
+
+        if isinstance(req, HeartbeatRequest):
+            # A heartbeat's only effect is the connection itself, which the
+            # accept path already recorded as activity.
+            return HeartbeatResponse(ok=True)
 
         if isinstance(req, DaemonEnvRequest):
             from .protocol import DbPathMappingEntry
@@ -548,12 +609,21 @@ async def _dispatch(
 # ---------------------------------------------------------------------------
 
 
-def run_daemon() -> None:
+def run_daemon(
+    *,
+    idle_timeout: timedelta | None = None,
+    idle_check_interval: timedelta = timedelta(minutes=1),
+) -> None:
     """Main entry point for the daemon process (blocking).
 
     Sets up the listener, runs the asyncio event loop (``loop.run_forever``)
     to serve connections, and performs cleanup when shutdown is requested via
-    ``StopRequest`` or a signal (SIGTERM / SIGINT).
+    ``StopRequest``, a signal (SIGTERM / SIGINT), or the idle timeout.
+
+    ``idle_timeout`` and ``idle_check_interval`` exist so tests can run a
+    seconds-scale idle timeout in-process; production leaves them at their
+    defaults and the timeout comes from ``daemon.idle_timeout_minutes`` in
+    ``global_settings.yml`` (the dataclass default when the file is missing).
     """
     daemon_runtime_dir().mkdir(parents=True, exist_ok=True)
 
@@ -567,8 +637,10 @@ def run_daemon() -> None:
     indexing_params: dict[str, Any] = {}
     query_params: dict[str, Any] = {}
     handshake_warnings: list[str] = []
+    daemon_settings = DaemonSettings()
     if user_settings_path().is_file():
         user_settings = load_user_settings()
+        daemon_settings = user_settings.daemon
         settings_env_keys = list(user_settings.envs.keys())
         for key, value in user_settings.envs.items():
             os.environ[key] = value
@@ -590,9 +662,11 @@ def run_daemon() -> None:
         settings_env_keys = []
         embedder = None
 
-    # Write PID file
+    # Write PID file; drop the previous daemon's graceful-exit marker so the
+    # marker always refers to the most recent exit.
     pid_path = daemon_pid_path()
     pid_path.write_text(str(os.getpid()))
+    clear_last_exit_marker()
 
     # Set up logging to file
     log_path = daemon_log_path()
@@ -625,41 +699,100 @@ def run_daemon() -> None:
     loop = asyncio.new_event_loop()
     tasks: set[asyncio.Task[Any]] = set()
 
-    def _request_shutdown() -> None:
-        """Trigger daemon shutdown — called by StopRequest or signal handler."""
+    reaper = IdleReaper(
+        timeout=(
+            idle_timeout
+            if idle_timeout is not None
+            else timedelta(minutes=daemon_settings.idle_timeout_minutes)
+        ),
+        supervised=os.environ.get("COCOINDEX_CODE_DAEMON_SUPERVISED") == "1",
+    )
+
+    shutdown_reason: str | None = None
+
+    def _request_shutdown(reason: str) -> None:
+        """Trigger daemon shutdown — called by StopRequest, signal, or idle reaper.
+
+        Records *reason* (first one wins) for the graceful-exit marker written
+        during cleanup.
+        """
+        nonlocal shutdown_reason
+        if shutdown_reason is None:
+            shutdown_reason = reason
         loop.stop()
 
     def _spawn_handler(conn: Connection) -> None:
+        reaper.record_activity()
         task = loop.create_task(
             handle_connection(
                 conn,
                 registry,
                 start_time,
-                _request_shutdown,
+                lambda: _request_shutdown("stop_request"),
                 settings_mtime_us,
                 settings_env_keys,
                 handshake_warnings,
+                reaper,
             )
         )
         tasks.add(task)
-        task.add_done_callback(tasks.discard)
+
+        def _on_done(t: asyncio.Task[Any]) -> None:
+            tasks.discard(t)
+            # A finished handler is activity too — a long streaming request
+            # (e.g. an index run) counts up to its end, not just its start.
+            reaper.record_activity()
+
+        task.add_done_callback(_on_done)
+
+    async def _idle_reaper_loop() -> None:
+        """Periodically check the idle predicate; trigger shutdown when it fires."""
+        while True:
+            await asyncio.sleep(idle_check_interval.total_seconds())
+            if reaper.should_exit(
+                now=time.monotonic(),
+                active_handlers=len(tasks),
+                indexing=registry.any_indexing(),
+            ):
+                logger.info(
+                    "Idle for %.1fm (timeout %.1fm), shutting down",
+                    reaper.idle_seconds() / 60,
+                    reaper.timeout / timedelta(minutes=1),
+                )
+                _request_shutdown("idle_timeout")
+                return
+
+    reaper_task = loop.create_task(_idle_reaper_loop())
 
     # Handle signals for graceful shutdown
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, _request_shutdown)
+            loop.add_signal_handler(sig, _request_shutdown, "signal")
     except (RuntimeError, NotImplementedError):
         pass  # Not in main thread, or not supported on this platform (e.g. Windows)
 
     # Accept loop runs in a background thread; new connections are dispatched
-    # to the event loop via call_soon_threadsafe.  The loop exits when
-    # listener.close() (called during shutdown) causes accept() to raise.
+    # to the event loop via call_soon_threadsafe.  On POSIX the loop exits when
+    # listener.close() (called during shutdown) causes accept() to raise.  On
+    # Windows, PipeListener.close() does not cancel an in-flight
+    # ConnectNamedPipe wait, so shutdown additionally sets `shutting_down` and
+    # wakes accept() with a dummy client connection; the accepted connection
+    # (dummy or real) is dropped and the thread exits.
+    shutting_down = threading.Event()
+
     def _accept_loop() -> None:
         while True:
             try:
                 conn = listener.accept()
-                loop.call_soon_threadsafe(_spawn_handler, conn)
             except OSError:
+                break
+            if shutting_down.is_set():
+                conn.close()
+                break
+            try:
+                loop.call_soon_threadsafe(_spawn_handler, conn)
+            except RuntimeError:  # loop already closed — shutdown race
+                conn.close()
                 break
 
     accept_thread = threading.Thread(target=_accept_loop, daemon=True)
@@ -669,14 +802,34 @@ def run_daemon() -> None:
     try:
         loop.run_forever()
     finally:
-        # 1. Stop accepting new connections.
-        listener.close()
+        # 0. Record the graceful exit (idle timeout, StopRequest, signal).
+        #    Written first so a client that races the rest of the cleanup
+        #    already sees it. A crashed daemon never gets here — the marker's
+        #    absence is how the client detects a crash.
+        write_last_exit_marker(pid=os.getpid(), reason=shutdown_reason or "unknown")
 
-        # 2. Cancel handler tasks (they may be blocked in run_in_executor).
-        for task in tasks:
+        # 1. Stop accepting new connections.  On Windows a blocked accept()
+        #    holds an open pipe instance that listener.close() can't release
+        #    (it only closes the queued next-instance handle), which would keep
+        #    the named pipe alive after exit — wake it with a dummy connection
+        #    so the accept thread closes it and exits.  POSIX doesn't need the
+        #    wake-up (listener.close() makes accept() raise), but it's harmless
+        #    there and keeps this path exercised on every platform rather than
+        #    only on Windows CI.
+        shutting_down.set()
+        try:
+            Client(sock_path, family=connection_family()).close()
+        except OSError:
+            pass
+        listener.close()
+        accept_thread.join(timeout=5)
+
+        # 2. Cancel handler tasks (they may be blocked in run_in_executor)
+        #    and the idle-reaper task.
+        pending = [*tasks, reaper_task]
+        for task in pending:
             task.cancel()
-        if tasks:
-            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
         # 3. Release project resources.
         registry.close_all()

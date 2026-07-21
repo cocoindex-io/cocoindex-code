@@ -13,6 +13,9 @@ from cocoindex_code.protocol import (
     DoctorResponse,
     ErrorResponse,
     HandshakeRequest,
+    HandshakeResponse,
+    HeartbeatRequest,
+    HeartbeatResponse,
     IndexingProgress,
     IndexProgressUpdate,
     IndexRequest,
@@ -42,6 +45,15 @@ def test_encode_decode_handshake_request() -> None:
     decoded = decode_request(data)
     assert isinstance(decoded, HandshakeRequest)
     assert decoded.version == "1.0.0"
+
+
+def test_encode_decode_handshake_response_with_pid() -> None:
+    resp = HandshakeResponse(ok=True, daemon_version="1.0.0", pid=4242)
+    decoded = decode_response(encode_response(resp))
+    assert isinstance(decoded, HandshakeResponse)
+    assert decoded.ok is True
+    assert decoded.daemon_version == "1.0.0"
+    assert decoded.pid == 4242
 
 
 def test_encode_decode_search_request_with_defaults() -> None:
@@ -114,6 +126,8 @@ def test_encode_decode_daemon_status_response() -> None:
         projects=[
             DaemonProjectInfo(project_root="/tmp/proj", indexing=False),
         ],
+        idle_seconds=12.5,
+        idle_timeout_minutes=180,
     )
     data = encode_response(resp)
     decoded = decode_response(data)
@@ -123,6 +137,19 @@ def test_encode_decode_daemon_status_response() -> None:
     assert len(decoded.projects) == 1
     assert decoded.projects[0].project_root == "/tmp/proj"
     assert decoded.projects[0].indexing is False
+    assert decoded.idle_seconds == 12.5
+    assert decoded.idle_timeout_minutes == 180
+
+
+def test_encode_decode_heartbeat_round_trip() -> None:
+    req = HeartbeatRequest()
+    decoded_req = decode_request(encode_request(req))
+    assert isinstance(decoded_req, HeartbeatRequest)
+
+    resp = HeartbeatResponse(ok=True)
+    decoded_resp = decode_response(encode_response(resp))
+    assert isinstance(decoded_resp, HeartbeatResponse)
+    assert decoded_resp.ok is True
 
 
 def test_tagged_union_dispatch() -> None:
@@ -202,6 +229,7 @@ def test_all_request_types_round_trip() -> None:
         StopRequest(),
         DoctorRequest(project_root="/tmp"),
         DaemonEnvRequest(),
+        HeartbeatRequest(),
     ]
     for req in requests:
         data = encode_request(req)
@@ -290,9 +318,16 @@ def test_all_response_types_round_trip() -> None:
         IndexWaitingNotice(),
         SearchResponse(success=True),
         ProjectStatusResponse(indexing=False, total_chunks=0, total_files=0, languages={}),
-        DaemonStatusResponse(version="1.0.0", uptime_seconds=0.0, projects=[]),
+        DaemonStatusResponse(
+            version="1.0.0",
+            uptime_seconds=0.0,
+            projects=[],
+            idle_seconds=0.0,
+            idle_timeout_minutes=180,
+        ),
         RemoveProjectResponse(ok=True),
         StopResponse(ok=True),
+        HeartbeatResponse(ok=True),
         DoctorResponse(
             result=DoctorCheckResult(name="test", ok=True, details=[], errors=[]),
         ),
