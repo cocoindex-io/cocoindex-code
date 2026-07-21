@@ -31,10 +31,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-import click
 from cocoindex.ops.text import detect_code_language
 
 from .file_walk import iter_project_files
+from .render import gutter, gutter_width, paint, path_header
 
 
 class TermSyntaxError(ValueError):
@@ -305,12 +305,6 @@ class TextSearch:
 # ---------------------------------------------------------------------------
 
 
-def _paint(text: str, color: bool, **style: object) -> str:
-    if not color or not text:
-        return text
-    return click.style(text, **style)  # type: ignore[arg-type]
-
-
 def _highlight_line(text: str, spans: list[tuple[int, int]], color: bool) -> str:
     """Render a line with its matched spans emphasized."""
     if not color or not spans:
@@ -319,7 +313,7 @@ def _highlight_line(text: str, spans: list[tuple[int, int]], color: bool) -> str
     cursor = 0
     for start, end in spans:
         out.append(text[cursor:start])
-        out.append(click.style(text[start:end], fg="red", bold=True))
+        out.append(paint(text[start:end], color, fg="red", bold=True))
         cursor = end
     out.append(text[cursor:])
     return "".join(out)
@@ -329,11 +323,11 @@ def render_file(fm: FileMatches, *, color: bool) -> str:
     """Render one file's matches: the path header, then ``line| text`` per
     matching line with matched spans emphasized — mirroring ``ccc grep``."""
     max_line = max((lm.line_no for lm in fm.matches), default=1)
-    width = len(str(max_line))
-    parts = [_paint(fm.path, color, fg="magenta", bold=True)]
+    width = gutter_width(max_line)
+    parts = [path_header(fm.path, color=color)]
     for lm in fm.matches:
-        gutter = _paint(f"{lm.line_no:>{width}}| ", color, fg="bright_black")
-        parts.append(f"{gutter}{_highlight_line(lm.text, lm.spans, color)}")
+        prefix = gutter(lm.line_no, width, color=color)
+        parts.append(f"{prefix}{_highlight_line(lm.text, lm.spans, color)}")
     return "\n".join(parts)
 
 

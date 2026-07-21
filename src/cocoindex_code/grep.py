@@ -17,11 +17,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-import click
 from cocoindex.ops.code import CodeMatch, CodePattern
 from cocoindex.ops.text import detect_code_language
 
 from .file_walk import iter_project_files
+from .render import gutter, gutter_width, paint, path_header
 
 # A trivial, always-valid pattern (a bare identifier) used to probe whether a
 # language is structurally matchable, independent of the user's pattern.
@@ -287,12 +287,6 @@ def _line_char_offsets(source: str) -> list[int]:
     return offsets
 
 
-def _paint(text: str, color: bool, **style: object) -> str:
-    if not color or not text:
-        return text
-    return click.style(text, **style)  # type: ignore[arg-type]
-
-
 def _render_code_line(
     line_no: int,
     text: str,
@@ -306,13 +300,13 @@ def _render_code_line(
     and the matched span shown normally."""
     pre = max(0, min(dim_pre_end, len(text)))
     post = max(pre, min(dim_post_start, len(text)))
-    gutter = _paint(f"{line_no:>{width}}| ", color, fg="bright_black")
+    prefix = gutter(line_no, width, color=color)
     if not color:
-        return f"{gutter}{text}"
-    before = _paint(text[:pre], color, dim=True)
+        return f"{prefix}{text}"
+    before = paint(text[:pre], color, dim=True)
     matched = text[pre:post]
-    after = _paint(text[post:], color, dim=True)
-    return f"{gutter}{before}{matched}{after}"
+    after = paint(text[post:], color, dim=True)
+    return f"{prefix}{before}{matched}{after}"
 
 
 def _render_match(
@@ -344,15 +338,15 @@ def render_file(fm: FileMatches, *, color: bool) -> str:
     src_lines = [line.rstrip("\r") for line in fm.source.split("\n")]
     offsets = _line_char_offsets(fm.source)
     max_line = max((m.chunks[0].end.line for m in fm.matches if m.chunks), default=1)
-    width = len(str(max_line))
+    width = gutter_width(max_line)
 
-    parts = [_paint(fm.path, color, fg="magenta", bold=True)]
+    parts = [path_header(fm.path, color=color)]
     emitted = False
     for match in fm.matches:
         if not match.chunks:
             continue
         if emitted:
-            parts.append(_paint("---", color, fg="bright_black"))
+            parts.append(paint("---", color, fg="bright_black"))
         parts.extend(_render_match(src_lines, offsets, match, width, color))
         emitted = True
     return "\n".join(parts)
