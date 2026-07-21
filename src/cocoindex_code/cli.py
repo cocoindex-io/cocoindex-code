@@ -21,6 +21,8 @@ if TYPE_CHECKING:
         ProjectStatusResponse,
         SearchResponse,
     )
+    from .textsearch import FileMatches as TextFileMatches
+    from .textsearch import TextSearchWarning
 
 from .settings import (
     DEFAULT_ST_MODEL,
@@ -292,6 +294,69 @@ def _search_with_wait_spinner(
         )
 
     return resp
+
+
+def _run_text_search(
+    terms: list[str],
+    *,
+    path_glob: str | None,
+    languages: list[str],
+    limit: int,
+    ignore_case: bool,
+    no_color: bool,
+) -> None:
+    """Run the local literal/regex text search (``ccc search --text``).
+
+    Fully local — no project init or daemon required — walking files like
+    ``ccc grep``. Results stream per file as they complete.
+    """
+    from . import textsearch as _ts
+
+    # -i forces case-insensitive; otherwise smart-case.
+    case_flag: bool | None = False if ignore_case else None
+
+    try:
+        compiled = _ts.compile_terms(terms, case_sensitive=case_flag)
+    except _ts.TermSyntaxError as e:
+        _typer.echo(f"Error: {e}", err=True)
+        raise _typer.Exit(code=1)
+
+    req = _ts.TextSearchRequest(
+        terms=tuple(compiled),
+        root=Path.cwd(),
+        languages=frozenset(name.lower() for name in languages) or None,
+        path_glob=path_glob,
+    )
+    use_color = not no_color and sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+    matched = 0
+    # `run` calls `_emit` from several worker threads at once; the lock keeps one
+    # file's output (and the `matched` bookkeeping) from interleaving with another's.
+    output_lock = threading.Lock()
+
+    def _emit(item: TextFileMatches | TextSearchWarning) -> None:
+        nonlocal matched
+        if isinstance(item, _ts.TextSearchWarning):
+            with output_lock:
+                _typer.echo(f"warning: {item.message}", err=True)
+            return
+        block = _ts.render_file(item, color=use_color)  # render outside the lock
+        with output_lock:
+            if matched:
+                _typer.echo()  # blank line between files
+            _typer.echo(block)
+            matched += 1
+
+    # The engine caps emitted files at `limit` and reports whether it stopped early.
+    hit_limit = _ts.TextSearch(req).run(_emit, limit=limit)
+
+    if matched == 0:
+        _typer.echo("No matches found.")
+    elif hit_limit:
+        _typer.echo(
+            f"\nStopped at --limit {limit}. Re-run with a higher --limit to see more.",
+            err=True,
+        )
 
 
 _GITIGNORE_COMMENT = "# CocoIndex Code (ccc)"
@@ -648,15 +713,58 @@ def index() -> None:
 @app.command()
 @_catch_daemon_start_error
 def search(
-    query: list[str] = _typer.Argument(..., help="Search query"),
+    query: list[str] = _typer.Argument(..., help="Search query (or terms for --text)"),
     lang: list[str] = _typer.Option([], "--lang", help="Filter by language"),
     path: str | None = _typer.Option(None, "--path", help="Filter by file path glob"),
     offset: int = _typer.Option(0, "--offset", help="Number of results to skip"),
     limit: int = _typer.Option(10, "--limit", help="Maximum results to return"),
     refresh: bool = _typer.Option(False, "--refresh", help="Refresh index before searching"),
     json_output: bool = _typer.Option(False, "--json", help="Output results as JSON"),
+    text: bool = _typer.Option(
+        False,
+        "--text",
+        "-t",
+        help="Literal/regex full-text search — local, no index or daemon.",
+    ),
+    ignore_case: bool = _typer.Option(
+        False, "-i", "--ignore-case", help="[--text] Case-insensitive (default: smart-case)."
+    ),
+    no_color: bool = _typer.Option(False, "--no-color", help="[--text] Disable colored output."),
 ) -> None:
-    """Semantic search across the codebase."""
+    """Semantic search across the codebase (or literal/regex search with --text)."""
+    # --text is a local scan (like `grep`): branch out *before* the project/daemon
+    # gate below, so it runs anywhere with no index and no daemon.
+    if text:
+        # --refresh / --offset are index concepts — meaningless for a live scan.
+        if refresh:
+            _typer.echo(
+                "Error: --refresh does not apply to --text (live scan, no index).", err=True
+            )
+            raise _typer.Exit(code=1)
+        if offset:
+            _typer.echo("Error: --offset does not apply to --text (live scan, no index).", err=True)
+            raise _typer.Exit(code=1)
+        # A JSON shape for line-level text matches isn't defined yet — reject rather
+        # than silently ignore the flag.
+        if json_output:
+            _typer.echo("Error: --json is not supported with --text yet.", err=True)
+            raise _typer.Exit(code=1)
+        _run_text_search(
+            query,
+            path_glob=path,
+            languages=lang,
+            limit=limit,
+            ignore_case=ignore_case,
+            no_color=no_color,
+        )
+        return
+
+    # --ignore-case / --no-color only make sense for the --text local scan.
+    invalid = [n for n, v in (("--ignore-case", ignore_case), ("--no-color", no_color)) if v]
+    if invalid:
+        _typer.echo(f"Error: {', '.join(invalid)} only apply with --text.", err=True)
+        raise _typer.Exit(code=1)
+
     project_root = str(require_project_root())
     query_str = " ".join(query)
 
