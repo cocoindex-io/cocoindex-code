@@ -22,6 +22,8 @@ class SearchRequest(_msgspec.Struct, tag="search"):
     query: str
     languages: list[str] | None = None
     paths: list[str] | None = None
+    exclude_paths: list[str] | None = None
+    mode: str = "semantic"
     limit: int = 5
     offset: int = 0
 
@@ -117,7 +119,6 @@ class IndexProgressUpdate(_msgspec.Struct, tag="index_progress"):
 class IndexWaitingNotice(_msgspec.Struct, tag="index_waiting"):
     """Sent when another indexing is already in progress and the client must wait."""
 
-    pass
 
 
 class SearchResult(_msgspec.Struct):
