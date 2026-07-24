@@ -18,6 +18,8 @@ from multiprocessing.connection import Client, Connection
 from pathlib import Path
 from typing import NamedTuple
 
+import msgspec
+
 from ._daemon_paths import (
     connection_family,
     daemon_log_path,
@@ -158,6 +160,16 @@ def _connect_and_handshake() -> Connection:
         if _daemon_ensured and not e.resp.ok:
             raise
         stop_daemon()
+    except DaemonProtocolError:
+        # The reply didn't even decode — a daemon whose wire protocol
+        # drifted beyond what the version-mismatch path can express (e.g.
+        # still running a pre-upgrade binary). Same treatment as a version
+        # mismatch: restart it below; once a matching daemon was already
+        # ensured this cannot legitimately happen, so fail fast instead of
+        # looping on restarts.
+        if _daemon_ensured:
+            raise
+        stop_daemon()
     except (ConnectionRefusedError, OSError):
         # No daemon answered. Normal on the first call of this process (start
         # one below). If we had already ensured one, decide crash vs graceful
@@ -238,7 +250,15 @@ def _raw_connect_and_handshake() -> _HandshakeResult:
         conn.close()
         raise ConnectionRefusedError(f"Handshake failed: {e}") from e
 
-    resp = decode_response(data)
+    try:
+        resp = decode_response(data)
+    except msgspec.DecodeError as e:
+        # The daemon speaks an incompatible wire protocol — e.g. a stale
+        # pre-upgrade daemon whose handshake reply no longer matches this
+        # client's schema. Must not escape as a raw decode error: the caller
+        # handles DaemonProtocolError by restarting the daemon (issue #237).
+        conn.close()
+        raise DaemonProtocolError(f"Undecodable handshake reply from daemon: {e}") from e
     if isinstance(resp, ErrorResponse):
         conn.close()
         raise RuntimeError(f"Daemon error: {resp.message}")
@@ -272,6 +292,19 @@ class DaemonVersionError(RuntimeError):
                 "Daemon is running with stale global settings and needs a restart. Please retry."
             )
         super().__init__(message)
+
+
+class DaemonProtocolError(RuntimeError):
+    """Raised when the daemon's handshake reply cannot be decoded at all.
+
+    A version-mismatched daemon normally reports itself via ``resp.ok`` being
+    False (→ ``DaemonVersionError``), but that requires its reply to decode
+    against this client's schema. When even decoding fails, the daemon is
+    from a version whose wire protocol drifted too far — handled the same
+    way: restart on first contact, fail fast once a matching daemon was
+    already ensured. Subclasses RuntimeError so broad daemon-failure handlers
+    (e.g. in ``stop_daemon``) cover it.
+    """
 
 
 class DaemonStartError(RuntimeError):
@@ -427,7 +460,7 @@ def send_heartbeat() -> bool:
     """
     try:
         conn, _resp = _raw_connect_and_handshake()
-    except (ConnectionRefusedError, DaemonVersionError, OSError):
+    except (ConnectionRefusedError, DaemonVersionError, DaemonProtocolError, OSError):
         return False
     try:
         conn.send_bytes(encode_request(HeartbeatRequest()))
@@ -608,7 +641,11 @@ def stop_daemon() -> None:
             conn.recv_bytes()
         finally:
             conn.close()
-    except (ConnectionRefusedError, OSError, RuntimeError, DaemonVersionError):
+    except (ConnectionRefusedError, OSError, RuntimeError, DaemonVersionError, DaemonProtocolError):
+        # A version-mismatched or protocol-incompatible daemon refuses the
+        # handshake, so the graceful StopRequest is impossible — fall through
+        # to the SIGTERM escalation below, which must never be skipped just
+        # because the daemon speaks a different protocol (issue #237).
         pass
 
     if _wait_for_daemon_exit(timeout=3.0):

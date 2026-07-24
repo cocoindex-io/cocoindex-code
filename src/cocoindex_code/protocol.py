@@ -79,13 +79,21 @@ Request = (
 
 
 class HandshakeResponse(_msgspec.Struct, tag="handshake"):
+    # The handshake is the one message exchanged between *mismatched*
+    # client/daemon versions — it is how a mismatch gets detected in the
+    # first place. Every field added after a release MUST have a default:
+    # a required field makes an older daemon's reply undecodable, which
+    # breaks the restart-on-mismatch path and bricks every command
+    # (issue #237).
     ok: bool
     daemon_version: str
     # The daemon's process id. The client remembers it so that, when the
     # daemon later vanishes, the graceful-exit marker (written on shutdown
     # with the same pid) can be matched race-free against the exact process
     # the client was talking to — distinguishing a graceful exit from a crash.
-    pid: int
+    # None only when decoding the reply of a pre-0.2.38 daemon, whose
+    # handshake never satisfies ``ok`` and version checks anyway.
+    pid: int | None = None
     global_settings_mtime_us: int | None = None
     # Non-fatal daemon-side warnings surfaced to the client on every handshake.
     # The client dedupes and prints them to stderr (see client._print_handshake_warnings).

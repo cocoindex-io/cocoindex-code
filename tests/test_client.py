@@ -147,6 +147,89 @@ def test_connect_fails_fast_on_version_mismatch_after_ensured(
     assert started["start"] == 0  # never tried to restart
 
 
+def test_connect_restarts_daemon_on_undecodable_handshake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A handshake reply that does not even decode — a daemon whose wire
+    protocol drifted beyond the version-mismatch path, e.g. a stale
+    pre-upgrade daemon (issue #237) — is restarted, not surfaced as a raw
+    decode error.
+    """
+    monkeypatch.setattr(client, "_daemon_ensured", False)
+
+    sentinel_conn = object()
+    ok_resp = HandshakeResponse(ok=True, daemon_version="v1", pid=42)
+    calls = {"raw": 0, "stop": 0, "start": 0}
+
+    def fake_raw() -> client._HandshakeResult:
+        calls["raw"] += 1
+        if calls["raw"] == 1:
+            raise client.DaemonProtocolError("Undecodable handshake reply from daemon")
+        return client._HandshakeResult(conn=cast(Connection, sentinel_conn), resp=ok_resp)
+
+    monkeypatch.setattr(client, "_raw_connect_and_handshake", fake_raw)
+    monkeypatch.setattr(client, "stop_daemon", lambda: calls.update(stop=calls["stop"] + 1))
+    monkeypatch.setattr(client, "start_daemon", lambda: calls.update(start=calls["start"] + 1))
+    monkeypatch.setattr(client, "_wait_for_daemon", lambda **_kw: None)
+    monkeypatch.setattr(client, "_is_daemon_supervised", lambda: False)
+
+    conn = client._connect_and_handshake()
+
+    assert conn is sentinel_conn
+    assert calls["stop"] == 1  # incompatible daemon stopped
+    assert calls["start"] == 1  # fresh daemon started
+    assert calls["raw"] == 2  # reconnected after restart
+
+
+def test_connect_fails_fast_on_undecodable_handshake_after_ensured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once a matching daemon was ensured, an undecodable handshake reply
+    cannot legitimately happen — fail fast, don't loop on restarts.
+    """
+    monkeypatch.setattr(client, "_daemon_ensured", True)
+    started = {"start": 0}
+
+    def fake_raw() -> client._HandshakeResult:
+        raise client.DaemonProtocolError("Undecodable handshake reply from daemon")
+
+    monkeypatch.setattr(client, "_raw_connect_and_handshake", fake_raw)
+    monkeypatch.setattr(client, "stop_daemon", lambda: None)
+    monkeypatch.setattr(client, "start_daemon", lambda: started.update(start=1))
+    monkeypatch.setattr(client, "_wait_for_daemon", lambda **_kw: None)
+    monkeypatch.setattr(client, "_is_daemon_supervised", lambda: False)
+
+    with pytest.raises(client.DaemonProtocolError):
+        client._connect_and_handshake()
+    assert started["start"] == 0  # never tried to restart
+
+
+def test_stop_daemon_escalates_past_undecodable_handshake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``ccc daemon stop`` must still work against a protocol-incompatible
+    daemon (issue #237): the graceful StopRequest is impossible, so it falls
+    through to the kill escalation instead of crashing.
+    """
+    monkeypatch.setattr(client, "daemon_pid_path", lambda: tmp_path / "daemon.pid")
+
+    def fake_raw() -> client._HandshakeResult:
+        raise client.DaemonProtocolError("Undecodable handshake reply from daemon")
+
+    monkeypatch.setattr(client, "_raw_connect_and_handshake", fake_raw)
+    waited = {"n": 0}
+
+    def fake_wait(timeout: float) -> bool:
+        waited["n"] += 1
+        return True
+
+    monkeypatch.setattr(client, "_wait_for_daemon_exit", fake_wait)
+
+    client.stop_daemon()  # must not raise
+
+    assert waited["n"] == 1  # reached the escalation ladder
+
+
 # ---------------------------------------------------------------------------
 # Vanished-daemon handling: graceful-exit marker vs crash
 # ---------------------------------------------------------------------------

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import msgspec
+
 from cocoindex_code.protocol import (
     DaemonEnvRequest,
     DaemonEnvResponse,
@@ -54,6 +56,27 @@ def test_encode_decode_handshake_response_with_pid() -> None:
     assert decoded.ok is True
     assert decoded.daemon_version == "1.0.0"
     assert decoded.pid == 4242
+
+
+def test_decode_handshake_response_from_pre_0_2_38_daemon() -> None:
+    """A pre-0.2.38 daemon's handshake reply has no ``pid`` field; a newer
+    client must still decode it to reach the version-mismatch restart path
+    (issue #237).
+    """
+    old_reply = msgspec.msgpack.encode(
+        {
+            "type": "handshake",
+            "ok": False,
+            "daemon_version": "0.2.37",
+            "global_settings_mtime_us": 1234,
+            "warnings": [],
+        }
+    )
+    decoded = decode_response(old_reply)
+    assert isinstance(decoded, HandshakeResponse)
+    assert decoded.ok is False
+    assert decoded.pid is None
+    assert decoded.daemon_version == "0.2.37"
 
 
 def test_encode_decode_search_request_with_defaults() -> None:
