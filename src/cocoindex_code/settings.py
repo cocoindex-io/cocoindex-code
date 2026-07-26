@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -446,6 +447,34 @@ def _user_settings_to_dict(settings: UserSettings) -> dict[str, Any]:
     return d
 
 
+_ENV_PLACEHOLDER_RE = re.compile(r"\{env:([^}]+)\}")
+
+
+def _expand_env_placeholders(value: Any) -> Any:
+    """Recursively replace ``{env:VAR}`` in strings with ``os.environ[VAR]``.
+
+    Works on any nested structure of dicts, lists, and strings, so every
+    config value — model name, API key, base URL, etc. — can reference an
+    environment variable.  If the variable is unset the placeholder is
+    replaced with an empty string.  Non-string values are returned unchanged.
+
+    Example::
+
+        envs:
+          OPENAI_API_KEY: "{env:OPENAI_API_KEY}"
+          OPENAI_BASE_URL: "https://{env:MY_HOST}/v1"
+    """
+    if isinstance(value, str):
+        return _ENV_PLACEHOLDER_RE.sub(
+            lambda m: os.environ.get(m.group(1), ""), value
+        )
+    if isinstance(value, dict):
+        return {k: _expand_env_placeholders(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_env_placeholders(v) for v in value]
+    return value
+
+
 def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
     emb_dict = d.get("embedding")
     if not emb_dict or "model" not in emb_dict:
@@ -521,7 +550,7 @@ def load_user_settings() -> UserSettings:
             data = _yaml.safe_load(f)
         if not data:
             raise ValueError("File is empty")
-        return _user_settings_from_dict(data)
+        return _user_settings_from_dict(_expand_env_placeholders(data))
     except Exception as e:
         raise type(e)(f"Error loading {path}: {e}") from e
 
@@ -620,7 +649,7 @@ def load_project_settings(project_root: Path) -> ProjectSettings:
             data = _yaml.safe_load(f)
         if not data:
             return default_project_settings()
-        return _project_settings_from_dict(data)
+        return _project_settings_from_dict(_expand_env_placeholders(data))
     except Exception as e:
         raise type(e)(f"Error loading {path}: {e}") from e
 

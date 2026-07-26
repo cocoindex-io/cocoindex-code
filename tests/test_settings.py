@@ -684,3 +684,97 @@ def test_save_initial_writes_comment_template_for_unknown_litellm() -> None:
     # `dimensions` is intentionally NOT in the litellm template — it must be
     # the same on both sides, so we don't expose it as a per-side knob.
     assert "dimensions" not in content
+
+
+# ---------------------------------------------------------------------------
+# Environment variable interpolation ({env:VAR})
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_env_interpolation_in_envs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``{env:VAR}`` in envs values is replaced at load time."""
+    monkeypatch.setenv("MY_OPENAI_KEY", "sk-secret")
+    path = tmp_path / ".cocoindex_code" / "global_settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "embedding:\n  model: text-embedding-3-small\n"
+        "envs:\n  OPENAI_API_KEY: '{env:MY_OPENAI_KEY}'\n"
+    )
+    loaded = load_user_settings()
+    assert loaded.envs["OPENAI_API_KEY"] == "sk-secret"
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_env_interpolation_partial_string(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``{env:VAR}`` can be embedded inside a larger string."""
+    monkeypatch.setenv("MY_HOST", "my-llm-server.local")
+    path = tmp_path / ".cocoindex_code" / "global_settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "embedding:\n  model: openai/my-model\n"
+        "envs:\n  OPENAI_BASE_URL: 'https://{env:MY_HOST}/v1'\n"
+    )
+    loaded = load_user_settings()
+    assert loaded.envs["OPENAI_BASE_URL"] == "https://my-llm-server.local/v1"
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_env_interpolation_in_model_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Interpolation works on any config field, not just envs."""
+    monkeypatch.setenv("EMB_MODEL", "text-embedding-3-small")
+    path = tmp_path / ".cocoindex_code" / "global_settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("embedding:\n  model: '{env:EMB_MODEL}'\n")
+    loaded = load_user_settings()
+    assert loaded.embedding.model == "text-embedding-3-small"
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_env_interpolation_unset_var_becomes_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unset variables are replaced with an empty string (no error)."""
+    monkeypatch.delenv("DEFINITELY_UNSET_VAR", raising=False)
+    path = tmp_path / ".cocoindex_code" / "global_settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "embedding:\n  model: openai/my-model\n"
+        "envs:\n  OPENAI_BASE_URL: 'https://{env:DEFINITELY_UNSET_VAR}/v1'\n"
+    )
+    loaded = load_user_settings()
+    assert loaded.envs["OPENAI_BASE_URL"] == "https:///v1"
+
+
+@pytest.mark.usefixtures("_patch_user_dir")
+def test_env_interpolation_does_not_mutate_saved_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Saving settings after loading with interpolation writes expanded values."""
+    monkeypatch.setenv("MY_KEY", "expanded-value")
+    settings = UserSettings(
+        embedding=EmbeddingSettings(model="text-embedding-3-small"),
+        envs={"OPENAI_API_KEY": "{env:MY_KEY}"},
+    )
+    save_user_settings(settings)
+    loaded = load_user_settings()
+    assert loaded.envs["OPENAI_API_KEY"] == "expanded-value"
+
+
+def test_env_interpolation_in_project_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Project settings also support ``{env:VAR}`` interpolation."""
+    monkeypatch.setenv("MY_LANG", "php")
+    settings = ProjectSettings(
+        include_patterns=["**/*.py"],
+        exclude_patterns=[],
+        language_overrides=[LanguageOverride(ext="inc", lang="{env:MY_LANG}")],
+    )
+    save_project_settings(tmp_path, settings)
+    loaded = load_project_settings(tmp_path)
+    assert loaded.language_overrides[0].lang == "php"
