@@ -47,7 +47,7 @@ The daemon idle-exits after `daemon.idle_timeout_minutes` (default 180, 0 = neve
 
 **`settings.py`** — YAML config loading for both global (`~/.cocoindex_code/global_settings.yml`) and per-project (`.cocoindex_code/settings.yml`) settings. Also provides all path helpers (`cocoindex_db_path`, `target_sqlite_db_path`, `resolve_db_dir`, etc.) and host-path-mapping logic for Docker.
 
-**`server.py`** — FastMCP wrapper that delegates `search` calls to the daemon client. Also contains the legacy `main()` entry point (`cocoindex-code` command) for backward-compatible env-var-based configuration.
+**`server.py`** — MCPServer wrapper that delegates `search` calls to the daemon client. Also contains the legacy `main()` entry point (`cocoindex-code` command) for backward-compatible env-var-based configuration.
 
 **`cli.py`** — Typer app with `ccc` subcommands (`init`, `index`, `search`, `grep`, `status`, `reset`, `doctor`, `mcp`, `daemon status/restart/stop`). CLI logic only — delegates to `client.py` or `grep.py`.
 

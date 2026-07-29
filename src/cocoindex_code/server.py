@@ -14,7 +14,7 @@ import json
 import os
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from pydantic import BaseModel, Field
 
 from .settings import DaemonSettings, load_user_settings
@@ -58,9 +58,9 @@ class SearchResultModel(BaseModel):
 # === Daemon-backed MCP server factory ===
 
 
-def create_mcp_server(project_root: str) -> FastMCP:
+def create_mcp_server(project_root: str) -> MCPServer:
     """Create a lightweight MCP server that delegates to the daemon."""
-    mcp = FastMCP("cocoindex-code", instructions=_MCP_INSTRUCTIONS)
+    mcp = MCPServer("cocoindex-code", instructions=_MCP_INSTRUCTIONS)
 
     @mcp.tool(
         name="search",
@@ -201,7 +201,7 @@ async def run_heartbeat_loop() -> None:
 
 
 # Keep the old `mcp` global for backward compatibility in __init__.py
-mcp: FastMCP | None = None
+mcp: MCPServer | None = None
 
 
 # === Backward-compatible entry point ===
