@@ -253,6 +253,7 @@ The background daemon starts automatically on first use.
 | `ccc mcp` | Run as MCP server in stdio mode |
 | `ccc doctor` | Run diagnostics — checks settings, daemon, model, file matching, and index health |
 | `ccc reset` | Delete index databases. `--all` also removes settings. `-f` skips confirmation. |
+| `ccc version` | Print the CLI version |
 | `ccc daemon status` | Show daemon version, uptime, and loaded projects |
 | `ccc daemon restart` | Restart the background daemon |
 | `ccc daemon stop` | Stop the daemon |

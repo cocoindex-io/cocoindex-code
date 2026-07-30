@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         SearchResponse,
     )
 
+from ._version import __version__
 from .settings import (
     DEFAULT_ST_MODEL,
     EmbeddingSettings,
@@ -1118,6 +1119,12 @@ def daemon_stop() -> None:
         _typer.echo("Warning: daemon may not have stopped cleanly.", err=True)
     else:
         _typer.echo("Daemon stopped.")
+
+
+@app.command()
+def version() -> None:
+    """Print the CLI version."""
+    _typer.echo(__version__)
 
 
 @app.command("run-daemon", hidden=True)

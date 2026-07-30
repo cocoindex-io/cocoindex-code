@@ -289,6 +289,42 @@ def test_apply_host_cwd_noop_when_unset(
 
 
 # ---------------------------------------------------------------------------
+# ccc version
+# ---------------------------------------------------------------------------
+
+
+def test_version_prints_client_version() -> None:
+    """`ccc version` reports the client version and exits 0."""
+    from typer.testing import CliRunner
+
+    from cocoindex_code._version import __version__
+    from cocoindex_code.cli import app
+
+    result = CliRunner().invoke(app, ["version"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == __version__
+
+
+def test_version_works_outside_a_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No project discovery, no daemon, no settings needed."""
+    from typer.testing import CliRunner
+
+    from cocoindex_code._version import __version__
+    from cocoindex_code.cli import app
+
+    standalone = tmp_path / "not-a-project"
+    standalone.mkdir()
+    monkeypatch.chdir(standalone)
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(tmp_path / "no-such-home"))
+
+    result = CliRunner().invoke(app, ["version"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == __version__
+
+
+# ---------------------------------------------------------------------------
 # ccc init — auto-populate indexing_params / query_params from curated table
 # ---------------------------------------------------------------------------
 
