@@ -13,7 +13,8 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from multiprocessing.connection import Client, Connection
 from pathlib import Path
 from typing import NamedTuple
@@ -125,6 +126,49 @@ def _is_daemon_supervised() -> bool:
     return os.environ.get("COCOINDEX_CODE_DAEMON_SUPERVISED") == "1"
 
 
+@contextmanager
+def _daemon_start_lock() -> Iterator[None]:
+    """Serialize daemon startup across independent client processes.
+
+    Each MCP server is a separate process, so the process-local
+    ``_daemon_ensured`` flag cannot prevent a startup stampede. Keep the lock
+    file itself after releasing the OS lock: unlinking it would let a new
+    opener lock a different inode while another process still holds the old
+    one.
+    """
+    daemon_runtime_dir().mkdir(parents=True, exist_ok=True)
+    lock_path = daemon_runtime_dir() / "daemon-start.lock"
+
+    with open(lock_path, "a+b") as lock_file:
+        if sys.platform == "win32":
+            import msvcrt
+
+            lock_file.seek(0)
+            if lock_file.read(1) == b"":
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+        try:
+            yield
+        finally:
+            if sys.platform == "win32":
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def _connect_and_handshake() -> Connection:
     """Connect to the daemon and perform the version handshake.
 
@@ -142,6 +186,7 @@ def _connect_and_handshake() -> Connection:
     """
     global _daemon_ensured, _ensured_daemon_pid, _consecutive_crash_restarts  # noqa: PLW0603
 
+    startup_error: Exception
     try:
         result = _raw_connect_and_handshake()
         _daemon_ensured = True
@@ -149,44 +194,77 @@ def _connect_and_handshake() -> Connection:
         # The daemon answered without needing a restart — any crash streak is over.
         _consecutive_crash_restarts = 0
         return result.conn
-    except DaemonVersionError as e:
+    except DaemonVersionError as error:
+        startup_error = error
         # `resp.ok` is False only for a real version mismatch. Once we have
         # ensured a matching daemon, a fresh version mismatch means the binary
-        # was swapped under us — fail fast. A settings-only restart request
-        # (resp.ok True, but the loaded settings mtime moved) is expected;
-        # restart the daemon below so it reloads them. (stop_daemon sends a
-        # StopRequest, so this restart leaves a graceful-exit marker and the
-        # next connect stays silent.)
-        if _daemon_ensured and not e.resp.ok:
+        # was swapped under us — fail fast.
+        if _daemon_ensured and not error.resp.ok:
             raise
-        stop_daemon()
-    except DaemonProtocolError:
+    except DaemonProtocolError as error:
+        startup_error = error
         # The reply didn't even decode — a daemon whose wire protocol
         # drifted beyond what the version-mismatch path can express (e.g.
-        # still running a pre-upgrade binary). Same treatment as a version
-        # mismatch: restart it below; once a matching daemon was already
-        # ensured this cannot legitimately happen, so fail fast instead of
-        # looping on restarts.
+        # still running a pre-upgrade binary).
         if _daemon_ensured:
             raise
-        stop_daemon()
-    except (ConnectionRefusedError, OSError):
-        # No daemon answered. Normal on the first call of this process (start
-        # one below). If we had already ensured one, decide crash vs graceful
-        # exit — a crash restarts loudly and is capped, a graceful exit (e.g.
-        # a manual stop) restarts silently.
-        if _daemon_ensured:
-            _handle_vanished_daemon()
+    except (ConnectionRefusedError, OSError) as error:
+        startup_error = error
 
     if _is_daemon_supervised():
         # Supervisor is responsible for (re)starting the daemon — just wait
         # for the socket to reappear.
+        _prepare_daemon_restart(startup_error)
         _wait_for_daemon()
-    else:
+        return _connect_after_daemon_start()
+
+    # Multiple MCP servers can arrive here together. The first process starts
+    # the daemon while holding the OS lock. Every waiter rechecks after
+    # acquiring it and joins that daemon instead of starting another one.
+    with _daemon_start_lock():
+        try:
+            result = _raw_connect_and_handshake()
+        except (
+            DaemonVersionError,
+            DaemonProtocolError,
+            ConnectionRefusedError,
+            OSError,
+        ) as locked_error:
+            _prepare_daemon_restart(locked_error)
+        else:
+            _daemon_ensured = True
+            _ensured_daemon_pid = result.resp.pid
+            _consecutive_crash_restarts = 0
+            return result.conn
+
         proc = start_daemon()
         _wait_for_daemon(proc=proc)
+        return _connect_after_daemon_start()
 
-    # Verify the fresh daemon is reachable
+
+def _prepare_daemon_restart(error: Exception) -> None:
+    """Apply restart policy after a failed handshake has been confirmed."""
+    if isinstance(error, DaemonVersionError):
+        if _daemon_ensured and not error.resp.ok:
+            raise error
+        # A settings-only mismatch is expected. Stop the daemon so the new
+        # process reloads global_settings.yml.
+        stop_daemon()
+    elif isinstance(error, DaemonProtocolError):
+        if _daemon_ensured:
+            raise error
+        stop_daemon()
+    elif _daemon_ensured:
+        # No daemon answered. Decide crash vs graceful exit only after the
+        # startup lock recheck, so a transient backlog refusal is not reported
+        # as a crash.
+        _handle_vanished_daemon()
+
+
+def _connect_after_daemon_start() -> Connection:
+    """Wait for a newly started daemon to complete a real handshake."""
+    global _daemon_ensured, _ensured_daemon_pid  # noqa: PLW0603
+
     for _attempt in range(10):
         try:
             result = _raw_connect_and_handshake()

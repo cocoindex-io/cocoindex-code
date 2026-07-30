@@ -2,16 +2,99 @@
 
 from __future__ import annotations
 
+import multiprocessing
+import os
+import subprocess
 import tempfile
 from multiprocessing.connection import Connection
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
 from cocoindex_code import client
 from cocoindex_code._daemon_paths import LastExitMarker
 from cocoindex_code.protocol import HandshakeResponse
+
+
+def _concurrent_connect_worker(
+    runtime_dir: str,
+    barrier: Any,
+    starts_path: str,
+    ready_path: str,
+    result_queue: Any,
+) -> None:
+    """Run one isolated client process in the daemon-start stampede harness."""
+    os.environ["COCOINDEX_CODE_RUNTIME_DIR"] = runtime_dir
+
+    from cocoindex_code import client as worker_client
+
+    raw_calls = 0
+    sentinel_conn = cast(Connection, object())
+    ok_resp = HandshakeResponse(ok=True, daemon_version="test", pid=42)
+
+    def fake_raw() -> worker_client._HandshakeResult:
+        nonlocal raw_calls
+        raw_calls += 1
+        if raw_calls == 1:
+            barrier.wait(timeout=10)
+            raise ConnectionRefusedError("simultaneous initial miss")
+        if not Path(ready_path).exists():
+            raise ConnectionRefusedError("daemon is not ready")
+        return worker_client._HandshakeResult(conn=sentinel_conn, resp=ok_resp)
+
+    def fake_start() -> subprocess.Popen[bytes]:
+        with Path(starts_path).open("a") as starts_file:
+            starts_file.write(f"{os.getpid()}\n")
+        Path(ready_path).touch()
+        return cast(subprocess.Popen[bytes], object())
+
+    worker_client._raw_connect_and_handshake = fake_raw
+    worker_client.start_daemon = fake_start
+    worker_client._wait_for_daemon = lambda **_kwargs: None
+    worker_client._is_daemon_supervised = lambda: False
+    worker_client._daemon_ensured = False
+
+    try:
+        worker_client._connect_and_handshake()
+    except Exception as exc:
+        result_queue.put(f"{type(exc).__name__}: {exc}")
+    else:
+        result_queue.put(None)
+
+
+def test_concurrent_clients_start_only_one_daemon(tmp_path: Path) -> None:
+    """Independent MCP processes must serialize and deduplicate daemon startup."""
+    process_count = 6
+    ctx = multiprocessing.get_context("spawn")
+    barrier = ctx.Barrier(process_count)
+    result_queue = ctx.Queue()
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    starts_path = tmp_path / "starts"
+    ready_path = tmp_path / "ready"
+
+    processes = [
+        ctx.Process(
+            target=_concurrent_connect_worker,
+            args=(
+                str(runtime_dir),
+                barrier,
+                str(starts_path),
+                str(ready_path),
+                result_queue,
+            ),
+        )
+        for _ in range(process_count)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=15)
+
+    assert all(process.exitcode == 0 for process in processes)
+    assert [result_queue.get(timeout=1) for _ in processes] == [None] * process_count
+    assert len(starts_path.read_text().splitlines()) == 1
 
 
 def test_client_connect_refuses_when_no_daemon(
@@ -100,7 +183,7 @@ def test_connect_restarts_ensured_daemon_on_stale_settings(
 
     def fake_raw() -> client._HandshakeResult:
         calls["raw"] += 1
-        if calls["raw"] == 1:
+        if calls["raw"] <= 2:
             raise client.DaemonVersionError(
                 HandshakeResponse(ok=True, daemon_version="v1", pid=42, global_settings_mtime_us=1)
             )
@@ -117,7 +200,7 @@ def test_connect_restarts_ensured_daemon_on_stale_settings(
     assert conn is sentinel_conn
     assert calls["stop"] == 1  # old daemon stopped
     assert calls["start"] == 1  # fresh daemon started to reload settings
-    assert calls["raw"] == 2  # reconnected after restart
+    assert calls["raw"] == 3  # lock recheck, then reconnect after restart
 
 
 def test_connect_fails_fast_on_version_mismatch_after_ensured(
@@ -163,7 +246,7 @@ def test_connect_restarts_daemon_on_undecodable_handshake(
 
     def fake_raw() -> client._HandshakeResult:
         calls["raw"] += 1
-        if calls["raw"] == 1:
+        if calls["raw"] <= 2:
             raise client.DaemonProtocolError("Undecodable handshake reply from daemon")
         return client._HandshakeResult(conn=cast(Connection, sentinel_conn), resp=ok_resp)
 
@@ -178,7 +261,7 @@ def test_connect_restarts_daemon_on_undecodable_handshake(
     assert conn is sentinel_conn
     assert calls["stop"] == 1  # incompatible daemon stopped
     assert calls["start"] == 1  # fresh daemon started
-    assert calls["raw"] == 2  # reconnected after restart
+    assert calls["raw"] == 3  # lock recheck, then reconnect after restart
 
 
 def test_connect_fails_fast_on_undecodable_handshake_after_ensured(
@@ -257,7 +340,7 @@ def _setup_vanished_daemon(
 
     def fake_raw() -> client._HandshakeResult:
         calls["raw"] += 1
-        if calls["raw"] == 1:
+        if calls["raw"] <= 2:
             raise ConnectionRefusedError("daemon socket not found")
         return client._HandshakeResult(conn=cast(Connection, sentinel_conn), resp=ok_resp)
 
