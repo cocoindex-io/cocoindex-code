@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,37 @@ from cocoindex_code.cli import (
     require_project_root,
     resolve_default_path,
 )
+from cocoindex_code.protocol import SearchResponse, SearchResult
+
+
+def test_print_search_results_replaces_unencodable_console_characters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Search output stays usable when the console cannot encode a result."""
+    raw_output = io.BytesIO()
+    gbk_stdout = io.TextIOWrapper(raw_output, encoding="gbk", errors="strict")
+    monkeypatch.setattr(cli.sys, "stdout", gbk_stdout)
+    response = SearchResponse(
+        success=True,
+        results=[
+            SearchResult(
+                file_path="notes↔.md",
+                language="markdown",
+                content="可编码内容: left ↔ right",
+                start_line=1,
+                end_line=1,
+                score=0.9,
+            )
+        ],
+    )
+
+    cli.print_search_results(response)
+    gbk_stdout.flush()
+
+    output = raw_output.getvalue().decode("gbk")
+    assert "可编码内容" in output
+    assert "File: notes?.md" in output
+    assert "left ? right" in output
 
 
 def test_require_project_root_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
