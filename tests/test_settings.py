@@ -55,6 +55,11 @@ def test_default_user_settings() -> None:
     assert s.embedding.model == "Snowflake/snowflake-arctic-embed-xs"
     assert s.embedding.device is None
     assert s.embedding.min_interval_ms is None
+    assert s.embedding.batch_size is None
+    assert s.embedding.mps_memory_limit_ratio == 0.35
+    assert s.embedding.mps_low_watermark_ratio == 0.4
+    assert s.embedding.mps_high_watermark_ratio == 0.5
+    assert s.embedding.worker_timeout_seconds == 300.0
     assert s.envs == {}
 
 
@@ -77,6 +82,11 @@ def test_save_and_load_user_settings(tmp_path: Path) -> None:
             model="gemini/text-embedding-004",
             device="cpu",
             min_interval_ms=300,
+            batch_size=8,
+            mps_memory_limit_ratio=0.3,
+            mps_low_watermark_ratio=0.35,
+            mps_high_watermark_ratio=0.45,
+            worker_timeout_seconds=120.0,
         ),
         envs={"GEMINI_API_KEY": "test-key"},
     )
@@ -86,7 +96,51 @@ def test_save_and_load_user_settings(tmp_path: Path) -> None:
     assert loaded.embedding.model == settings.embedding.model
     assert loaded.embedding.device == settings.embedding.device
     assert loaded.embedding.min_interval_ms == settings.embedding.min_interval_ms
+    assert loaded.embedding.batch_size == settings.embedding.batch_size
+    assert loaded.embedding.mps_memory_limit_ratio == settings.embedding.mps_memory_limit_ratio
+    assert loaded.embedding.mps_low_watermark_ratio == settings.embedding.mps_low_watermark_ratio
+    assert loaded.embedding.mps_high_watermark_ratio == settings.embedding.mps_high_watermark_ratio
+    assert loaded.embedding.worker_timeout_seconds == settings.embedding.worker_timeout_seconds
     assert loaded.envs == settings.envs
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("batch_size", 0, "batch_size"),
+        ("batch_size", 3.5, "batch_size"),
+        ("batch_size", 65, "batch_size"),
+        ("mps_memory_limit_ratio", 0, "mps_memory_limit_ratio"),
+        ("mps_low_watermark_ratio", 0, "mps_low_watermark_ratio"),
+        ("mps_high_watermark_ratio", 1.1, "mps_high_watermark_ratio"),
+        ("worker_timeout_seconds", 0, "worker_timeout_seconds"),
+    ],
+)
+def test_embedding_safety_settings_reject_invalid_values(
+    field: str,
+    value: int | float,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        EmbeddingSettings(model="model", **{field: value})
+
+
+def test_embedding_safety_settings_require_ordered_mps_limits() -> None:
+    with pytest.raises(ValueError, match="mps_memory_limit_ratio"):
+        EmbeddingSettings(
+            model="model",
+            mps_memory_limit_ratio=0.45,
+            mps_low_watermark_ratio=0.4,
+            mps_high_watermark_ratio=0.5,
+        )
+
+    with pytest.raises(ValueError, match="mps_low_watermark_ratio"):
+        EmbeddingSettings(
+            model="model",
+            mps_memory_limit_ratio=0.3,
+            mps_low_watermark_ratio=0.6,
+            mps_high_watermark_ratio=0.5,
+        )
 
 
 def test_save_and_load_project_settings(tmp_path: Path) -> None:
@@ -361,6 +415,11 @@ def test_save_initial_user_settings_round_trip() -> None:
 
     # Hint comment and the four commented env-var examples.
     assert "ccc doctor" in content
+    assert "# batch_size: 8" in content
+    assert "# mps_memory_limit_ratio: 0.35" in content
+    assert "# mps_low_watermark_ratio: 0.4" in content
+    assert "# mps_high_watermark_ratio: 0.5" in content
+    assert "# worker_timeout_seconds: 300" in content
     assert "# envs:" in content
     for key in ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "VOYAGE_API_KEY"):
         assert f"#   {key}:" in content

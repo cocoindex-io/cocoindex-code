@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import numpy as np
 import pytest
 
 from cocoindex_code.litellm_embedder import PacedLiteLLMEmbedder
+from cocoindex_code.mps_embedder import MPSWorkerSentenceTransformerEmbedder
 from cocoindex_code.settings import EmbeddingSettings
 from cocoindex_code.shared import (
     check_embedding,
@@ -64,6 +66,51 @@ def test_create_embedder_sentence_transformers_ignores_indexing_params() -> None
     # No exception, and prompt_name is not stashed on the constructor —
     # it's a per-call argument supplied via the embed() call site.
     assert not isinstance(embedder, PacedLiteLLMEmbedder)
+
+
+def test_create_embedder_uses_isolated_worker_and_allocator_guards_for_mps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PYTORCH_MPS_HIGH_WATERMARK_RATIO", raising=False)
+    monkeypatch.delenv("PYTORCH_MPS_LOW_WATERMARK_RATIO", raising=False)
+
+    embedder = create_embedder(
+        EmbeddingSettings(
+            provider="sentence-transformers",
+            model="sentence-transformers/all-MiniLM-L6-v2",
+            device="mps",
+            batch_size=4,
+            mps_memory_limit_ratio=0.3,
+            mps_low_watermark_ratio=0.4,
+            mps_high_watermark_ratio=0.5,
+            worker_timeout_seconds=90,
+        )
+    )
+
+    assert isinstance(embedder, MPSWorkerSentenceTransformerEmbedder)
+    assert embedder.batch_size == 4
+    assert embedder.memory_limit_ratio == 0.3
+    assert embedder.worker_timeout_seconds == 90
+    assert os.environ["PYTORCH_MPS_LOW_WATERMARK_RATIO"] == "0.4"
+    assert os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] == "0.5"
+
+
+def test_explicit_mps_allocator_env_takes_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.25")
+    monkeypatch.setenv("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.3")
+
+    create_embedder(
+        EmbeddingSettings(
+            provider="sentence-transformers",
+            model="sentence-transformers/all-MiniLM-L6-v2",
+            device="mps",
+        )
+    )
+
+    assert os.environ["PYTORCH_MPS_LOW_WATERMARK_RATIO"] == "0.25"
+    assert os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] == "0.3"
 
 
 def test_is_sentence_transformers_installed_true_in_dev() -> None:

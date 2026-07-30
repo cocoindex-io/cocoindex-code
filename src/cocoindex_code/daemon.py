@@ -135,6 +135,7 @@ class ProjectRegistry:
 
     _projects: dict[str, Project]
     _embedder: Embedder | None
+    _indexing_gate: asyncio.Lock
     indexing_params: dict[str, Any]
     query_params: dict[str, Any]
 
@@ -146,6 +147,7 @@ class ProjectRegistry:
     ) -> None:
         self._projects = {}
         self._embedder = embedder
+        self._indexing_gate = asyncio.Lock()
         self.indexing_params = dict(indexing_params) if indexing_params else {}
         self.query_params = dict(query_params) if query_params else {}
 
@@ -165,6 +167,7 @@ class ProjectRegistry:
                 indexing_params=self.indexing_params,
                 query_params=self.query_params,
                 chunker_registry=chunker_registry,
+                indexing_gate=self._indexing_gate,
             )
             self._projects[project_root] = project
         return self._projects[project_root]
@@ -188,6 +191,10 @@ class ProjectRegistry:
         for project in self._projects.values():
             project.close()
         self._projects.clear()
+        if self._embedder is not None:
+            close = getattr(self._embedder, "close", None)
+            if callable(close):
+                close()
         gc.collect()
 
     def list_projects(self) -> list[DaemonProjectInfo]:

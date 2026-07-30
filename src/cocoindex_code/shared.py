@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import pathlib
+import sys
 import traceback as _tb
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Union
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
     from cocoindex.ops.litellm import LiteLLMEmbedder
     from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
+    from .mps_embedder import MPSWorkerSentenceTransformerEmbedder
+
 from .settings import EmbeddingSettings
 
 logger = logging.getLogger(__name__)
@@ -26,7 +29,11 @@ SBERT_PREFIX = "sbert/"
 DEFAULT_LITELLM_MIN_INTERVAL_MS = 5
 
 # Type alias
-Embedder = Union["SentenceTransformerEmbedder", "LiteLLMEmbedder"]
+Embedder = Union[
+    "SentenceTransformerEmbedder",
+    "MPSWorkerSentenceTransformerEmbedder",
+    "LiteLLMEmbedder",
+]
 
 # Context keys
 EMBEDDER = coco.ContextKey[Embedder]("embedder", detect_change=True)
@@ -100,6 +107,7 @@ def create_embedder(
     only and the indexing default is supplied at the call site via
     :data:`INDEXING_EMBED_PARAMS`.
     """
+    instance: Embedder
     if settings.provider == "sentence-transformers":
         from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
@@ -108,12 +116,40 @@ def create_embedder(
         if model_name.startswith(SBERT_PREFIX):
             model_name = model_name[len(SBERT_PREFIX) :]
 
-        instance: Embedder = SentenceTransformerEmbedder(
-            model_name,
-            device=settings.device,
-            trust_remote_code=True,
+        use_mps_worker = settings.device == "mps" or (
+            settings.device is None and sys.platform == "darwin"
         )
-        logger.info("Embedding model: %s | device: %s", settings.model, settings.device)
+        if use_mps_worker:
+            from .mps_embedder import (
+                MPSWorkerSentenceTransformerEmbedder,
+                apply_mps_allocator_guards,
+            )
+
+            apply_mps_allocator_guards(
+                low_watermark_ratio=settings.mps_low_watermark_ratio,
+                high_watermark_ratio=settings.mps_high_watermark_ratio,
+            )
+            instance = MPSWorkerSentenceTransformerEmbedder(
+                model_name,
+                device=settings.device,
+                trust_remote_code=True,
+                batch_size=settings.batch_size or 8,
+                memory_limit_ratio=settings.mps_memory_limit_ratio,
+                worker_timeout_seconds=settings.worker_timeout_seconds,
+            )
+            logger.info(
+                "Embedding model: %s | device: %s | isolated MPS worker | batch size: %d",
+                settings.model,
+                settings.device,
+                settings.batch_size or 8,
+            )
+        else:
+            instance = SentenceTransformerEmbedder(
+                model_name,
+                device=settings.device,
+                trust_remote_code=True,
+            )
+            logger.info("Embedding model: %s | device: %s", settings.model, settings.device)
     else:
         from .litellm_embedder import PacedLiteLLMEmbedder
 

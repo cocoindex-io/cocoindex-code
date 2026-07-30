@@ -47,7 +47,10 @@ class Project:
     _app: coco.App[[], None]
     _project_root: Path
     _index_lock: asyncio.Lock
+    _indexing_gate: asyncio.Lock
     _initial_index_done: asyncio.Event
+    _initial_index_task: asyncio.Task[None] | None
+    _initial_index_started: asyncio.Event | None
     _indexing_stats: IndexingProgress | None = None
 
     def close(self) -> None:
@@ -67,24 +70,26 @@ class Project:
         on_progress: Callable[[IndexingProgress], None] | None = None,
         on_started: asyncio.Event | None = None,
     ) -> None:
-        """Acquire the index lock, run indexing, and release.
+        """Acquire the project lock, queue on the daemon gate, run, and release.
 
-        If *on_started* is provided, it is set once the lock is acquired
-        (i.e. indexing has truly begun).  On completion (success or failure)
+        If *on_started* is provided, it is set once the project lock is
+        acquired. At that point indexing is either active or queued behind
+        another project. On completion (success or failure)
         ``_initial_index_done`` is set.
         """
         async with self._index_lock:
-            self._indexing_stats = IndexingProgress(
-                num_execution_starts=0,
-                num_unchanged=0,
-                num_adds=0,
-                num_deletes=0,
-                num_reprocesses=0,
-                num_errors=0,
-            )
             if on_started is not None:
                 on_started.set()
-            await self._run_index_inner(on_progress=on_progress)
+            async with self._indexing_gate:
+                self._indexing_stats = IndexingProgress(
+                    num_execution_starts=0,
+                    num_unchanged=0,
+                    num_adds=0,
+                    num_deletes=0,
+                    num_reprocesses=0,
+                    num_errors=0,
+                )
+                await self._run_index_inner(on_progress=on_progress)
 
     async def _run_index_inner(
         self,
@@ -113,16 +118,21 @@ class Project:
             self._indexing_stats = None
 
     async def ensure_indexing_started(self) -> None:
-        """Kick off background indexing and wait until it has actually started.
+        """Kick off background indexing and wait until it is active or queued.
 
-        Returns once the indexing task holds the lock.  Safe to call multiple
-        times — only the first call spawns a task; subsequent calls return
-        immediately.
+        Returns once the indexing task holds the project lock. Safe to call
+        multiple times — only the first call spawns a task; subsequent calls
+        return immediately.
         """
         if self._initial_index_done.is_set() or self._index_lock.locked():
             return
-        started = asyncio.Event()
-        asyncio.create_task(self.run_index(on_started=started))
+        if self._initial_index_task is None or self._initial_index_task.done():
+            self._initial_index_started = asyncio.Event()
+            self._initial_index_task = asyncio.create_task(
+                self.run_index(on_started=self._initial_index_started)
+            )
+        started = self._initial_index_started
+        assert started is not None
         await started.wait()
 
     async def stream_index(self) -> AsyncIterator[IndexStreamResponse]:
@@ -132,7 +142,7 @@ class Project:
         The actual indexing runs in a separate task so that client disconnects
         (``GeneratorExit``) do not abort the indexing.
         """
-        if self._index_lock.locked():
+        if self._index_lock.locked() or self._indexing_gate.locked():
             yield IndexWaitingNotice()
 
         progress_queue: asyncio.Queue[IndexingProgress] = asyncio.Queue()
@@ -263,6 +273,7 @@ class Project:
         indexing_params: dict[str, Any],
         query_params: dict[str, Any],
         chunker_registry: dict[str, ChunkerFn] | None = None,
+        indexing_gate: asyncio.Lock | None = None,
     ) -> Project:
         """Create a project with explicit embedder and per-call params.
 
@@ -281,6 +292,8 @@ class Project:
             chunker_registry: Optional mapping of file suffix (e.g. ``".toml"``)
                 to a ``ChunkerFn``. When a suffix matches, the registered
                 chunker is called instead of the built-in splitter.
+            indexing_gate: Daemon-wide lock shared by every loaded project.
+                When omitted, the project gets a private lock for standalone use.
         """
         settings_dir = project_root / ".cocoindex_code"
         settings_dir.mkdir(parents=True, exist_ok=True)
@@ -315,5 +328,8 @@ class Project:
         result._app = app
         result._project_root = project_root
         result._index_lock = asyncio.Lock()
+        result._indexing_gate = indexing_gate if indexing_gate is not None else asyncio.Lock()
         result._initial_index_done = asyncio.Event()
+        result._initial_index_task = None
+        result._initial_index_started = None
         return result
