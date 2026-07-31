@@ -523,6 +523,18 @@ daemon:
 
 > **Note:** The daemon inherits your shell environment. If an API key (e.g. `OPENAI_API_KEY`) is already set as an environment variable, you don't need to duplicate it in `envs`. The `envs` field is only for values that aren't in your environment.
 
+> **Environment variable interpolation:** Any string value in both global and project settings supports `{env:VAR_NAME}` placeholders, which are replaced with the corresponding environment variable at load time. This lets you keep secrets out of config files without relying solely on shell inheritance. For example:
+>
+> ```yaml
+> embedding:
+>   model: openai/your-model-name
+> envs:
+>   OPENAI_BASE_URL: "https://{env:MY_LLM_HOST}/v1"
+>   OPENAI_API_KEY: "{env:MY_OPENAI_API_KEY}"
+> ```
+>
+> Placeholders can appear anywhere in a string and work on every config field. If the referenced variable is unset, it's replaced with an empty string.
+
 > **Idle timeout:** the background daemon holds the embedding model in RAM, so it exits after `daemon.idle_timeout_minutes` without client activity and is restarted automatically on your next `ccc` command or MCP search. A live MCP session sends periodic heartbeats, so the daemon never idles out while your coding agent is connected. Set `0` to keep the daemon running forever.
 
 > **Custom location:** set `COCOINDEX_CODE_DIR` to place `global_settings.yml` somewhere other than `~/.cocoindex_code/` — useful if you want the file to live alongside your projects (e.g. on a synced folder).
