@@ -387,6 +387,8 @@ def search(
     query: str,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
+    exclude_paths: list[str] | None = None,
+    mode: str = "semantic",
     limit: int = 5,
     offset: int = 0,
     on_waiting: Callable[[], None] | None = None,
@@ -407,6 +409,8 @@ def search(
                     query=query,
                     languages=languages,
                     paths=paths,
+                    exclude_paths=exclude_paths,
+                    mode=mode,
                     limit=limit,
                     offset=offset,
                 )

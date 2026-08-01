@@ -119,6 +119,20 @@ def create_mcp_server(project_root: str) -> FastMCP:
                 " Example: ['src/utils/*', '*.py']"
             ),
         ),
+        exclude_paths: list[str] | None = Field(
+            default=None,
+            description=(
+                "Exclude file path pattern(s) using GLOB wildcards (* and ?)."
+                " Example: ['tests/*', 'vendor/*']"
+            ),
+        ),
+        mode: str = Field(
+            default="semantic",
+            description=(
+                "Search mode: 'semantic' (vector similarity, default)"
+                " or 'hybrid' (combines vector + keyword search with RRF)."
+            ),
+        ),
     ) -> SearchResultModel:
         """Query the codebase index via the daemon."""
         from . import client as _client
@@ -134,6 +148,8 @@ def create_mcp_server(project_root: str) -> FastMCP:
                     query=query,
                     languages=languages,
                     paths=paths,
+                    exclude_paths=exclude_paths,
+                    mode=mode,
                     limit=limit,
                     offset=offset,
                 ),

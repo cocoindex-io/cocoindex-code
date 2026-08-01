@@ -271,6 +271,8 @@ def _search_with_wait_spinner(
     query: str,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
+    exclude_paths: list[str] | None = None,
+    mode: str = "semantic",
     limit: int = 10,
     offset: int = 0,
 ) -> SearchResponse:
@@ -296,6 +298,8 @@ def _search_with_wait_spinner(
             query=query,
             languages=languages,
             paths=paths,
+            exclude_paths=exclude_paths,
+            mode=mode,
             limit=limit,
             offset=offset,
             on_waiting=_on_waiting,
@@ -661,6 +665,8 @@ def search(
     query: list[str] = _typer.Argument(..., help="Search query"),
     lang: list[str] = _typer.Option([], "--lang", help="Filter by language"),
     path: str | None = _typer.Option(None, "--path", help="Filter by file path glob"),
+    exclude: list[str] = _typer.Option([], "--exclude", help="Exclude file path glob"),
+    mode: str = _typer.Option("semantic", "--mode", help="Search mode: 'semantic' or 'hybrid'"),
     offset: int = _typer.Option(0, "--offset", help="Number of results to skip"),
     limit: int = _typer.Option(10, "--limit", help="Maximum results to return"),
     refresh: bool = _typer.Option(False, "--refresh", help="Refresh index before searching"),
@@ -669,6 +675,10 @@ def search(
     """Semantic search across the codebase."""
     project_root = str(require_project_root())
     query_str = " ".join(query)
+
+    if mode not in ("semantic", "hybrid"):
+        _typer.echo(f"Error: invalid mode '{mode}'. Must be 'semantic' or 'hybrid'.", err=True)
+        raise SystemExit(1)
 
     if refresh:
         _run_index_with_progress(project_root)
@@ -687,6 +697,8 @@ def search(
         query=query_str,
         languages=lang or None,
         paths=paths,
+        exclude_paths=exclude or None,
+        mode=mode,
         limit=limit,
         offset=offset,
     )
