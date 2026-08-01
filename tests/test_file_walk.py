@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from cocoindex.resources.file import FilePathMatcher
+
 from cocoindex_code.file_walk import build_matcher, iter_included_files
 
 
@@ -49,8 +51,8 @@ def test_max_file_size_excludes_large_files(tmp_path: Path) -> None:
     unlimited = build_matcher(tmp_path, ["**/*.py"], [])
     capped = build_matcher(tmp_path, ["**/*.py"], [], max_file_size=100)
 
-    def walked(matcher: object) -> set[str]:
-        return {rel.as_posix() for _abs, rel in iter_included_files(tmp_path, tmp_path, matcher)}  # type: ignore[arg-type]
+    def walked(matcher: FilePathMatcher) -> set[str]:
+        return {rel.as_posix() for _abs, rel in iter_included_files(tmp_path, tmp_path, matcher)}
 
     assert walked(unlimited) == {"small.py", "bundle.py"}
     assert walked(capped) == {"small.py"}
