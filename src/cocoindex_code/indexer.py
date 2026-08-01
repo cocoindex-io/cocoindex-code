@@ -110,7 +110,9 @@ async def indexer_main() -> None:
         ),
     )
 
-    matcher = build_matcher(project_root, ps.include_patterns, ps.exclude_patterns)
+    matcher = build_matcher(
+        project_root, ps.include_patterns, ps.exclude_patterns, ps.max_file_size
+    )
 
     files = localfs.walk_dir(
         CODEBASE_DIR,

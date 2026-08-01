@@ -30,6 +30,7 @@ from cocoindex_code.settings import (
     load_project_settings,
     load_user_settings,
     normalize_input_path,
+    parse_file_size,
     resolve_db_dir,
     save_project_settings,
     save_user_settings,
@@ -684,3 +685,41 @@ def test_save_initial_writes_comment_template_for_unknown_litellm() -> None:
     # `dimensions` is intentionally NOT in the litellm template — it must be
     # the same on both sides, so we don't expose it as a per-side knob.
     assert "dimensions" not in content
+
+
+def test_parse_file_size_accepts_units_and_plain_bytes() -> None:
+    cases = [
+        (1048576, 1048576),
+        ("2048", 2048),
+        ("500KB", 500 * 1024),
+        ("500 kb", 500 * 1024),
+        ("1MB", 1024**2),
+        ("1.5MB", int(1.5 * 1024**2)),
+        ("2GB", 2 * 1024**3),
+        ("512B", 512),
+    ]
+    for raw, expected in cases:
+        assert parse_file_size(raw) == expected, raw
+
+
+def test_parse_file_size_rejects_invalid_values() -> None:
+    for raw in ["", "   ", "abc", "10XB", 0, -1, True, None, []]:
+        with pytest.raises(ValueError):
+            parse_file_size(raw)
+
+
+def test_project_settings_round_trip_max_file_size(tmp_path: Path) -> None:
+    save_project_settings(tmp_path, ProjectSettings(max_file_size=500 * 1024))
+    assert load_project_settings(tmp_path).max_file_size == 500 * 1024
+
+
+def test_project_settings_max_file_size_defaults_to_none(tmp_path: Path) -> None:
+    """Omitting the key keeps the previous behavior of indexing every size."""
+    save_project_settings(tmp_path, ProjectSettings())
+    assert load_project_settings(tmp_path).max_file_size is None
+
+
+def test_project_settings_parses_human_readable_max_file_size(tmp_path: Path) -> None:
+    path = save_project_settings(tmp_path, ProjectSettings())
+    path.write_text(path.read_text() + "\nmax_file_size: 500KB\n")
+    assert load_project_settings(tmp_path).max_file_size == 500 * 1024

@@ -137,6 +137,8 @@ class ProjectSettings:
     exclude_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDED_PATTERNS))
     language_overrides: list[LanguageOverride] = field(default_factory=list)
     chunkers: list[ChunkerMapping] = field(default_factory=list)
+    #: Files larger than this many bytes are excluded. ``None`` means no limit.
+    max_file_size: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -476,11 +478,57 @@ def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
     return UserSettings(embedding=embedding, envs=envs, daemon=daemon)
 
 
+_SIZE_UNITS: dict[str, int] = {
+    "B": 1,
+    "KB": 1024,
+    "MB": 1024**2,
+    "GB": 1024**3,
+}
+
+
+def parse_file_size(value: Any) -> int:
+    """Parse a ``max_file_size`` value into bytes.
+
+    Accepts a plain number of bytes (``1048576``) or a string with an optional
+    unit suffix (``500KB``, ``1.5 MB``, ``2048``). Units are binary (1KB = 1024
+    bytes) and case-insensitive.
+    """
+    if isinstance(value, bool):  # bool is an int subclass; reject it explicitly.
+        raise ValueError(f"invalid max_file_size: {value!r}")
+    if isinstance(value, int):
+        size = value
+    elif isinstance(value, float):
+        size = int(value)
+    elif isinstance(value, str):
+        text = value.strip().upper()
+        if not text:
+            raise ValueError("invalid max_file_size: empty value")
+        for suffix in ("GB", "MB", "KB", "B"):
+            if text.endswith(suffix):
+                number = text[: -len(suffix)].strip()
+                multiplier = _SIZE_UNITS[suffix]
+                break
+        else:
+            number, multiplier = text, 1
+        try:
+            size = int(float(number) * multiplier)
+        except ValueError as exc:
+            raise ValueError(f"invalid max_file_size: {value!r}") from exc
+    else:
+        raise ValueError(f"invalid max_file_size: {value!r}")
+
+    if size <= 0:
+        raise ValueError(f"max_file_size must be positive, got {value!r}")
+    return size
+
+
 def _project_settings_to_dict(settings: ProjectSettings) -> dict[str, Any]:
     d: dict[str, Any] = {
         "include_patterns": settings.include_patterns,
         "exclude_patterns": settings.exclude_patterns,
     }
+    if settings.max_file_size is not None:
+        d["max_file_size"] = settings.max_file_size
     if settings.language_overrides:
         d["language_overrides"] = [
             {"ext": lo.ext, "lang": lo.lang} for lo in settings.language_overrides
@@ -495,11 +543,14 @@ def _project_settings_from_dict(d: dict[str, Any]) -> ProjectSettings:
         LanguageOverride(ext=lo["ext"], lang=lo["lang"]) for lo in d.get("language_overrides", [])
     ]
     chunkers = [ChunkerMapping(ext=cm["ext"], module=cm["module"]) for cm in d.get("chunkers", [])]
+    raw_max_size = d.get("max_file_size")
+    max_file_size = None if raw_max_size is None else parse_file_size(raw_max_size)
     return ProjectSettings(
         include_patterns=d.get("include_patterns", list(DEFAULT_INCLUDED_PATTERNS)),
         exclude_patterns=d.get("exclude_patterns", list(DEFAULT_EXCLUDED_PATTERNS)),
         language_overrides=overrides,
         chunkers=chunkers,
+        max_file_size=max_file_size,
     )
 
 

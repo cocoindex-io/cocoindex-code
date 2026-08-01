@@ -571,6 +571,8 @@ exclude_patterns:
   - "**/dist"
   # ...
 
+max_file_size: 500KB       # skip files larger than this (default: no limit)
+
 language_overrides:
   - ext: inc               # treat .inc files as PHP
     lang: php
@@ -582,7 +584,14 @@ chunkers:
 
 > `.cocoindex_code/` is automatically added to `.gitignore` during init.
 
-After editing `include_patterns`, `exclude_patterns`, or `language_overrides`:
+`max_file_size` keeps bundled or generated files out of the index without having
+to enumerate them in `exclude_patterns`. It accepts a plain byte count
+(`1048576`) or a size with a binary unit suffix: `B`, `KB`, `MB`, `GB`
+(case-insensitive, so `500KB` and `500 kb` are the same). The limit is
+inclusive, and omitting the key indexes files of any size. It applies wherever
+project file matching does, so `ccc grep` skips the same files.
+
+After editing `include_patterns`, `exclude_patterns`, `max_file_size`, or `language_overrides`:
 
 - Run `ccc doctor` to preview which files match.
 - Run `ccc index` or `ccc search --refresh ...` to update the existing index.
