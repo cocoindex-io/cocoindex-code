@@ -54,14 +54,18 @@ Indexing speed depends on **both parameter count and model architecture**:
 
 For encoder models at medium or large sizes, a GPU will still accelerate indexing. Add `device: cuda` (or `mps` on Mac) to `global_settings.yml`.
 
-On Apple Silicon, the default MPS policy uses inner batches of 8, asks PyTorch
-to begin allocator cleanup at 40% of its recommended memory, and enforces a
-hard allocator limit at 50%. The embedding worker is recycled if driver-owned
-memory remains above 35% after cache cleanup. These values can be tuned under
-`embedding` with `batch_size`, `mps_memory_limit_ratio`,
-`mps_low_watermark_ratio`, `mps_high_watermark_ratio`, and
-`worker_timeout_seconds`. Keep the recycle ratio below the low watermark and
-the low watermark at or below the high watermark.
+On Apple Silicon, SentenceTransformer calls run through [CocoIndex's isolated
+GPU subprocess](https://github.com/cocoindex-io/cocoindex/blob/v1.0.18/python/cocoindex/_internal/runner.py).
+This keeps the model warm across batches while separating Metal allocations
+from the daemon. cocoindex-code configures PyTorch to begin adaptive allocation
+cleanup at 40% of its recommended maximum working set and to enforce a hard
+limit at 50%; tune these values with `mps_low_watermark_ratio` and
+`mps_high_watermark_ratio`. At the end of each index run, unused allocator cache
+is released inside the GPU subprocess. CocoIndex also [retries MPS OOM failures
+with smaller batches](https://github.com/cocoindex-io/cocoindex/blob/v1.0.18/python/cocoindex/ops/sentence_transformers.py).
+See the [PyTorch MPS environment variable reference](https://docs.pytorch.org/docs/stable/mps_environment_variables.html)
+for the allocator semantics. Explicit environment variables take precedence
+over the YAML defaults.
 
 ---
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import os
 import pathlib
 import sys
 import traceback as _tb
@@ -19,8 +20,6 @@ if TYPE_CHECKING:
     from cocoindex.ops.litellm import LiteLLMEmbedder
     from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
-    from .mps_embedder import MPSWorkerSentenceTransformerEmbedder
-
 from .settings import EmbeddingSettings
 
 logger = logging.getLogger(__name__)
@@ -31,7 +30,6 @@ DEFAULT_LITELLM_MIN_INTERVAL_MS = 5
 # Type alias
 Embedder = Union[
     "SentenceTransformerEmbedder",
-    "MPSWorkerSentenceTransformerEmbedder",
     "LiteLLMEmbedder",
 ]
 
@@ -50,6 +48,46 @@ def is_sentence_transformers_installed() -> bool:
     torch-loading import as a side effect of the check.
     """
     return importlib.util.find_spec("sentence_transformers") is not None
+
+
+def configure_mps_environment(settings: EmbeddingSettings) -> bool:
+    """Install MPS safety defaults before CocoIndex's first GPU invocation.
+
+    CocoIndex reads ``COCOINDEX_RUN_GPU_IN_SUBPROCESS`` lazily on the first
+    ``coco.GPU`` call, while PyTorch reads the allocator watermarks when the
+    child initializes MPS. Explicit user environment variables always win.
+
+    Returns whether this embedding configuration uses the guarded MPS path.
+    """
+
+    use_mps = settings.provider == "sentence-transformers" and (
+        settings.device == "mps" or (settings.device is None and sys.platform == "darwin")
+    )
+    if not use_mps:
+        return False
+
+    os.environ.setdefault("COCOINDEX_RUN_GPU_IN_SUBPROCESS", "1")
+    os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", str(settings.mps_low_watermark_ratio))
+    os.environ.setdefault(
+        "PYTORCH_MPS_HIGH_WATERMARK_RATIO", str(settings.mps_high_watermark_ratio)
+    )
+    return os.environ.get("COCOINDEX_RUN_GPU_IN_SUBPROCESS") == "1"
+
+
+@coco.fn.as_async(runner=coco.GPU)
+def clear_mps_allocator_cache() -> None:
+    """Release unused MPS allocator cache inside CocoIndex's GPU child."""
+
+    import gc
+
+    import torch
+
+    if not torch.backends.mps.is_available():
+        return
+    torch.mps.synchronize()
+    gc.collect()
+    torch.mps.empty_cache()
+    torch.mps.synchronize()
 
 
 class EmbeddingCheckResult(NamedTuple):
@@ -116,40 +154,12 @@ def create_embedder(
         if model_name.startswith(SBERT_PREFIX):
             model_name = model_name[len(SBERT_PREFIX) :]
 
-        use_mps_worker = settings.device == "mps" or (
-            settings.device is None and sys.platform == "darwin"
+        instance = SentenceTransformerEmbedder(
+            model_name,
+            device=settings.device,
+            trust_remote_code=True,
         )
-        if use_mps_worker:
-            from .mps_embedder import (
-                MPSWorkerSentenceTransformerEmbedder,
-                apply_mps_allocator_guards,
-            )
-
-            apply_mps_allocator_guards(
-                low_watermark_ratio=settings.mps_low_watermark_ratio,
-                high_watermark_ratio=settings.mps_high_watermark_ratio,
-            )
-            instance = MPSWorkerSentenceTransformerEmbedder(
-                model_name,
-                device=settings.device,
-                trust_remote_code=True,
-                batch_size=settings.batch_size or 8,
-                memory_limit_ratio=settings.mps_memory_limit_ratio,
-                worker_timeout_seconds=settings.worker_timeout_seconds,
-            )
-            logger.info(
-                "Embedding model: %s | device: %s | isolated MPS worker | batch size: %d",
-                settings.model,
-                settings.device,
-                settings.batch_size or 8,
-            )
-        else:
-            instance = SentenceTransformerEmbedder(
-                model_name,
-                device=settings.device,
-                trust_remote_code=True,
-            )
-            logger.info("Embedding model: %s | device: %s", settings.model, settings.device)
+        logger.info("Embedding model: %s | device: %s", settings.model, settings.device)
     else:
         from .litellm_embedder import PacedLiteLLMEmbedder
 

@@ -98,15 +98,9 @@ class EmbeddingSettings:
     provider: str = "litellm"
     device: str | None = None
     min_interval_ms: int | None = None
-    # SentenceTransformer safety controls.  ``batch_size=None`` resolves to 8
-    # on MPS and keeps the upstream default on other devices.
-    batch_size: int | None = None
-    # Recycle the isolated MPS embedding worker before allocator pressure
-    # reaches PyTorch's soft/hard watermarks.
-    mps_memory_limit_ratio: float = 0.35
+    # PyTorch MPS allocator limits used by CocoIndex's isolated GPU runner.
     mps_low_watermark_ratio: float = 0.4
     mps_high_watermark_ratio: float = 0.5
-    worker_timeout_seconds: float = 300.0
     # Extra kwargs spread into ``embedder.embed()`` during indexing/query.
     # ``None`` means the user did not set the key; ``{}`` is an explicit empty
     # dict (used to opt out of the legacy-bridge warning).
@@ -114,15 +108,7 @@ class EmbeddingSettings:
     query_params: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
-        if self.batch_size is not None and (
-            not isinstance(self.batch_size, int)
-            or isinstance(self.batch_size, bool)
-            or not 1 <= self.batch_size <= 64
-        ):
-            raise ValueError("embedding.batch_size must be an integer between 1 and 64")
-
         ratios = (
-            ("mps_memory_limit_ratio", self.mps_memory_limit_ratio),
             ("mps_low_watermark_ratio", self.mps_low_watermark_ratio),
             ("mps_high_watermark_ratio", self.mps_high_watermark_ratio),
         )
@@ -130,18 +116,11 @@ class EmbeddingSettings:
             if isinstance(value, bool) or not 0 < value <= 1:
                 raise ValueError(f"embedding.{name} must be greater than 0 and at most 1")
 
-        if self.mps_memory_limit_ratio >= self.mps_low_watermark_ratio:
-            raise ValueError(
-                "embedding.mps_memory_limit_ratio must be lower than "
-                "embedding.mps_low_watermark_ratio"
-            )
         if self.mps_low_watermark_ratio > self.mps_high_watermark_ratio:
             raise ValueError(
                 "embedding.mps_low_watermark_ratio must be at most "
                 "embedding.mps_high_watermark_ratio"
             )
-        if isinstance(self.worker_timeout_seconds, bool) or self.worker_timeout_seconds <= 0:
-            raise ValueError("embedding.worker_timeout_seconds must be greater than 0")
 
 
 @dataclass
@@ -469,17 +448,11 @@ def _embedding_settings_to_dict(embedding: EmbeddingSettings) -> dict[str, Any]:
         d["device"] = embedding.device
     if embedding.min_interval_ms is not None:
         d["min_interval_ms"] = embedding.min_interval_ms
-    if embedding.batch_size is not None:
-        d["batch_size"] = embedding.batch_size
     defaults = EmbeddingSettings(model=embedding.model)
-    if embedding.mps_memory_limit_ratio != defaults.mps_memory_limit_ratio:
-        d["mps_memory_limit_ratio"] = embedding.mps_memory_limit_ratio
     if embedding.mps_low_watermark_ratio != defaults.mps_low_watermark_ratio:
         d["mps_low_watermark_ratio"] = embedding.mps_low_watermark_ratio
     if embedding.mps_high_watermark_ratio != defaults.mps_high_watermark_ratio:
         d["mps_high_watermark_ratio"] = embedding.mps_high_watermark_ratio
-    if embedding.worker_timeout_seconds != defaults.worker_timeout_seconds:
-        d["worker_timeout_seconds"] = embedding.worker_timeout_seconds
     if embedding.indexing_params is not None:
         d["indexing_params"] = dict(embedding.indexing_params)
     if embedding.query_params is not None:
@@ -508,16 +481,10 @@ def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
         emb_kwargs["device"] = emb_dict["device"]
     if "min_interval_ms" in emb_dict:
         emb_kwargs["min_interval_ms"] = emb_dict["min_interval_ms"]
-    if "batch_size" in emb_dict:
-        emb_kwargs["batch_size"] = emb_dict["batch_size"]
-    if "mps_memory_limit_ratio" in emb_dict:
-        emb_kwargs["mps_memory_limit_ratio"] = float(emb_dict["mps_memory_limit_ratio"])
     if "mps_low_watermark_ratio" in emb_dict:
         emb_kwargs["mps_low_watermark_ratio"] = float(emb_dict["mps_low_watermark_ratio"])
     if "mps_high_watermark_ratio" in emb_dict:
         emb_kwargs["mps_high_watermark_ratio"] = float(emb_dict["mps_high_watermark_ratio"])
-    if "worker_timeout_seconds" in emb_dict:
-        emb_kwargs["worker_timeout_seconds"] = float(emb_dict["worker_timeout_seconds"])
     # indexing_params / query_params: missing → None (dataclass default);
     # present-but-null → {} (treat the same as an empty dict, since both mean
     # "user acknowledged the key and wants no extra kwargs").
@@ -635,12 +602,9 @@ _PARAMS_COMMENT_BY_PROVIDER: dict[str, str] = {
 
 _MPS_SAFETY_COMMENT = (
     "  #\n"
-    "  # Apple Silicon MPS safety defaults. The model runs in a recyclable worker.\n"
-    "  # batch_size: 8\n"
-    "  # mps_memory_limit_ratio: 0.35\n"
+    "  # Apple Silicon MPS allocator limits for CocoIndex's GPU subprocess.\n"
     "  # mps_low_watermark_ratio: 0.4\n"
     "  # mps_high_watermark_ratio: 0.5\n"
-    "  # worker_timeout_seconds: 300\n"
 )
 
 

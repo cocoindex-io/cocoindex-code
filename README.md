@@ -505,11 +505,8 @@ embedding:
   model: Snowflake/snowflake-arctic-embed-xs
   device: mps                                        # optional: cpu, cuda, mps (auto-detected if omitted)
   min_interval_ms: 300                               # optional: pace LiteLLM embedding requests to reduce 429s; defaults to 5 for LiteLLM
-  batch_size: 8                                      # optional: local MPS inner batch size (default 8)
-  mps_memory_limit_ratio: 0.35                       # recycle the MPS worker above 35% of PyTorch's recommended memory
-  mps_low_watermark_ratio: 0.4                       # PyTorch allocator soft limit
-  mps_high_watermark_ratio: 0.5                      # PyTorch allocator hard limit
-  worker_timeout_seconds: 300                        # replace an unresponsive embedding worker
+  mps_low_watermark_ratio: 0.4                       # optional: PyTorch allocator soft limit
+  mps_high_watermark_ratio: 0.5                      # optional: PyTorch allocator hard limit
 
   # Optional extra kwargs passed to the embedder, separately for indexing vs query.
   # `ccc init` auto-populates these for known models (e.g. Cohere, Voyage, Nvidia NIM,
@@ -528,9 +525,9 @@ daemon:
 
 > **Note:** The daemon inherits your shell environment. If an API key (e.g. `OPENAI_API_KEY`) is already set as an environment variable, you don't need to duplicate it in `envs`. The `envs` field is only for values that aren't in your environment.
 
-> **Apple Silicon memory safety:** MPS SentenceTransformer models run in a child process so Metal driver allocations can be reclaimed without restarting the daemon. The worker clears cached allocations at the configured memory threshold and is replaced if memory remains high. MPS out-of-memory errors retry with progressively smaller batches. Explicit `PYTORCH_MPS_LOW_WATERMARK_RATIO` or `PYTORCH_MPS_HIGH_WATERMARK_RATIO` environment variables take precedence over the YAML defaults.
+> **Apple Silicon memory safety:** MPS SentenceTransformer calls use [CocoIndex's isolated GPU subprocess](https://github.com/cocoindex-io/cocoindex/blob/v1.0.18/python/cocoindex/_internal/runner.py), keeping the model loaded while isolating Metal allocations from the daemon. The low and high watermarks are ratios of PyTorch's recommended maximum working set; they default here to `0.4` and `0.5`. CocoIndex retries MPS out-of-memory failures with progressively smaller batches, and cocoindex-code [releases unused allocator cache](https://docs.pytorch.org/docs/stable/generated/torch.mps.empty_cache.html) after each index run. Explicit `COCOINDEX_RUN_GPU_IN_SUBPROCESS`, `PYTORCH_MPS_LOW_WATERMARK_RATIO`, and `PYTORCH_MPS_HIGH_WATERMARK_RATIO` environment variables take precedence over these defaults.
 
-> **Indexing concurrency:** A daemon indexes one project at a time. Requests for other projects queue behind the active project, which prevents multiple local embedding workloads from competing for unified memory. Search requests continue to use the shared daemon and wait only when their project still needs its initial index.
+> **Indexing concurrency:** Multiple projects may prepare indexes concurrently, while CocoIndex serializes their GPU calls through its single MPS subprocess. A search waits only when its own project still needs the initial index.
 
 > **Idle timeout:** the background daemon holds the embedding model in RAM, so it exits after `daemon.idle_timeout_minutes` without client activity and is restarted automatically on your next `ccc` command or MCP search. A live MCP session sends periodic heartbeats, so the daemon never idles out while your coding agent is connected. Set `0` to keep the daemon running forever.
 
