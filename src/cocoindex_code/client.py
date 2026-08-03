@@ -143,10 +143,8 @@ def _daemon_start_lock() -> Iterator[None]:
         if sys.platform == "win32":
             import msvcrt
 
-            lock_file.seek(0)
-            if lock_file.read(1) == b"":
-                lock_file.write(b"\0")
-                lock_file.flush()
+            # Windows permits locking past EOF. Do not read or initialize the
+            # lock byte here: another process may already have it locked.
             lock_file.seek(0)
             while True:
                 try:
