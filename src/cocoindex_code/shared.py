@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import os
 import pathlib
+import sys
 import traceback as _tb
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Union
@@ -26,7 +28,10 @@ SBERT_PREFIX = "sbert/"
 DEFAULT_LITELLM_MIN_INTERVAL_MS = 5
 
 # Type alias
-Embedder = Union["SentenceTransformerEmbedder", "LiteLLMEmbedder"]
+Embedder = Union[
+    "SentenceTransformerEmbedder",
+    "LiteLLMEmbedder",
+]
 
 # Context keys
 EMBEDDER = coco.ContextKey[Embedder]("embedder", detect_change=True)
@@ -43,6 +48,46 @@ def is_sentence_transformers_installed() -> bool:
     torch-loading import as a side effect of the check.
     """
     return importlib.util.find_spec("sentence_transformers") is not None
+
+
+def configure_mps_environment(settings: EmbeddingSettings) -> bool:
+    """Install MPS safety defaults before CocoIndex's first GPU invocation.
+
+    CocoIndex reads ``COCOINDEX_RUN_GPU_IN_SUBPROCESS`` lazily on the first
+    ``coco.GPU`` call, while PyTorch reads the allocator watermarks when the
+    child initializes MPS. Explicit user environment variables always win.
+
+    Returns whether this embedding configuration uses the guarded MPS path.
+    """
+
+    use_mps = settings.provider == "sentence-transformers" and (
+        settings.device == "mps" or (settings.device is None and sys.platform == "darwin")
+    )
+    if not use_mps:
+        return False
+
+    os.environ.setdefault("COCOINDEX_RUN_GPU_IN_SUBPROCESS", "1")
+    os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", str(settings.mps_low_watermark_ratio))
+    os.environ.setdefault(
+        "PYTORCH_MPS_HIGH_WATERMARK_RATIO", str(settings.mps_high_watermark_ratio)
+    )
+    return os.environ.get("COCOINDEX_RUN_GPU_IN_SUBPROCESS") == "1"
+
+
+@coco.fn.as_async(runner=coco.GPU)
+def clear_mps_allocator_cache() -> None:
+    """Release unused MPS allocator cache inside CocoIndex's GPU child."""
+
+    import gc
+
+    import torch
+
+    if not torch.backends.mps.is_available():
+        return
+    torch.mps.synchronize()
+    gc.collect()
+    torch.mps.empty_cache()
+    torch.mps.synchronize()
 
 
 class EmbeddingCheckResult(NamedTuple):
@@ -100,6 +145,7 @@ def create_embedder(
     only and the indexing default is supplied at the call site via
     :data:`INDEXING_EMBED_PARAMS`.
     """
+    instance: Embedder
     if settings.provider == "sentence-transformers":
         from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
@@ -108,7 +154,7 @@ def create_embedder(
         if model_name.startswith(SBERT_PREFIX):
             model_name = model_name[len(SBERT_PREFIX) :]
 
-        instance: Embedder = SentenceTransformerEmbedder(
+        instance = SentenceTransformerEmbedder(
             model_name,
             device=settings.device,
             trust_remote_code=True,

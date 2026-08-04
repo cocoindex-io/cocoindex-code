@@ -120,6 +120,33 @@ class GitignoreAwareMatcher(FilePathMatcher):
         return self._delegate.is_file_included(path)
 
 
+class SizeLimitedMatcher(FilePathMatcher):
+    """Wraps another matcher and drops files larger than ``max_bytes``.
+
+    The matcher protocol only sees paths relative to the project root, so this
+    resolves each candidate against ``project_root`` to stat it. Files that
+    cannot be stat'd (a broken symlink, a race with a delete) are left to the
+    delegate rather than silently dropped, since a size limit should not be the
+    thing that decides an unreadable file's fate.
+    """
+
+    def __init__(self, delegate: FilePathMatcher, project_root: Path, max_bytes: int) -> None:
+        self._delegate = delegate
+        self._root = project_root
+        self._max_bytes = max_bytes
+
+    def is_dir_included(self, path: PurePath) -> bool:
+        return self._delegate.is_dir_included(path)
+
+    def is_file_included(self, path: PurePath) -> bool:
+        if not self._delegate.is_file_included(path):
+            return False
+        try:
+            return (self._root / path).stat().st_size <= self._max_bytes
+        except OSError:
+            return True
+
+
 def find_git_root(start: Path) -> Path | None:
     """Walk up from ``start`` to the nearest directory holding a ``.git`` entry — a
     directory for a normal repo, or a *file* for a submodule or linked worktree.
@@ -140,14 +167,21 @@ def build_matcher(
     project_root: Path,
     included_patterns: list[str],
     excluded_patterns: list[str],
+    max_file_size: int | None = None,
 ) -> FilePathMatcher:
     """Build the project's file matcher: include/exclude globs plus nested
-    ``.gitignore`` awareness anchored at ``project_root``."""
+    ``.gitignore`` awareness anchored at ``project_root``, and an optional
+    ``max_file_size`` cap in bytes."""
     base_matcher = PatternFilePathMatcher(
         included_patterns=included_patterns,
         excluded_patterns=excluded_patterns,
     )
-    return GitignoreAwareMatcher(base_matcher, load_gitignore_spec(project_root), project_root)
+    matcher: FilePathMatcher = GitignoreAwareMatcher(
+        base_matcher, load_gitignore_spec(project_root), project_root
+    )
+    if max_file_size is not None:
+        matcher = SizeLimitedMatcher(matcher, project_root, max_file_size)
+    return matcher
 
 
 def iter_included_files(

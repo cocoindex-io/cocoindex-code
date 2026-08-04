@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,37 @@ from cocoindex_code.cli import (
     require_project_root,
     resolve_default_path,
 )
+from cocoindex_code.protocol import SearchResponse, SearchResult
+
+
+def test_print_search_results_replaces_unencodable_console_characters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Search output stays usable when the console cannot encode a result."""
+    raw_output = io.BytesIO()
+    gbk_stdout = io.TextIOWrapper(raw_output, encoding="gbk", errors="strict")
+    monkeypatch.setattr(cli.sys, "stdout", gbk_stdout)
+    response = SearchResponse(
+        success=True,
+        results=[
+            SearchResult(
+                file_path="notes↔.md",
+                language="markdown",
+                content="可编码内容: left ↔ right",
+                start_line=1,
+                end_line=1,
+                score=0.9,
+            )
+        ],
+    )
+
+    cli.print_search_results(response)
+    gbk_stdout.flush()
+
+    output = raw_output.getvalue().decode("gbk")
+    assert "可编码内容" in output
+    assert "File: notes?.md" in output
+    assert "left ? right" in output
 
 
 def test_require_project_root_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -286,6 +318,42 @@ def test_apply_host_cwd_noop_when_unset(
 
     assert Path.cwd() == original_cwd
     assert capsys.readouterr().err == ""
+
+
+# ---------------------------------------------------------------------------
+# ccc version
+# ---------------------------------------------------------------------------
+
+
+def test_version_prints_client_version() -> None:
+    """`ccc version` reports the client version and exits 0."""
+    from typer.testing import CliRunner
+
+    from cocoindex_code._version import __version__
+    from cocoindex_code.cli import app
+
+    result = CliRunner().invoke(app, ["version"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == __version__
+
+
+def test_version_works_outside_a_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No project discovery, no daemon, no settings needed."""
+    from typer.testing import CliRunner
+
+    from cocoindex_code._version import __version__
+    from cocoindex_code.cli import app
+
+    standalone = tmp_path / "not-a-project"
+    standalone.mkdir()
+    monkeypatch.chdir(standalone)
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(tmp_path / "no-such-home"))
+
+    result = CliRunner().invoke(app, ["version"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == __version__
 
 
 # ---------------------------------------------------------------------------

@@ -73,7 +73,7 @@ from .settings import (
     target_sqlite_db_path,
     user_settings_path,
 )
-from .shared import Embedder, check_embedding, create_embedder
+from .shared import Embedder, check_embedding, configure_mps_environment, create_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +135,7 @@ class ProjectRegistry:
 
     _projects: dict[str, Project]
     _embedder: Embedder | None
+    _clear_mps_cache_after_index: bool
     indexing_params: dict[str, Any]
     query_params: dict[str, Any]
 
@@ -143,9 +144,11 @@ class ProjectRegistry:
         embedder: Embedder | None,
         indexing_params: dict[str, Any] | None = None,
         query_params: dict[str, Any] | None = None,
+        clear_mps_cache_after_index: bool = False,
     ) -> None:
         self._projects = {}
         self._embedder = embedder
+        self._clear_mps_cache_after_index = clear_mps_cache_after_index
         self.indexing_params = dict(indexing_params) if indexing_params else {}
         self.query_params = dict(query_params) if query_params else {}
 
@@ -165,6 +168,7 @@ class ProjectRegistry:
                 indexing_params=self.indexing_params,
                 query_params=self.query_params,
                 chunker_registry=chunker_registry,
+                clear_mps_cache_after_index=self._clear_mps_cache_after_index,
             )
             self._projects[project_root] = project
         return self._projects[project_root]
@@ -636,6 +640,7 @@ def run_daemon(
     embedder: Embedder | None
     indexing_params: dict[str, Any] = {}
     query_params: dict[str, Any] = {}
+    clear_mps_cache_after_index = False
     handshake_warnings: list[str] = []
     daemon_settings = DaemonSettings()
     if user_settings_path().is_file():
@@ -644,6 +649,7 @@ def run_daemon(
         settings_env_keys = list(user_settings.envs.keys())
         for key, value in user_settings.envs.items():
             os.environ[key] = value
+        clear_mps_cache_after_index = configure_mps_environment(user_settings.embedding)
         # Resolve params BEFORE constructing the embedder so invalid configs
         # fail fast without paying the model-load cost.
         try:
@@ -684,6 +690,7 @@ def run_daemon(
         embedder,
         indexing_params=indexing_params,
         query_params=query_params,
+        clear_mps_cache_after_index=clear_mps_cache_after_index,
     )
 
     sock_path = daemon_socket_path()

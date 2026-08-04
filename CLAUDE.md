@@ -49,7 +49,7 @@ The daemon idle-exits after `daemon.idle_timeout_minutes` (default 180, 0 = neve
 
 **`server.py`** — MCPServer wrapper that delegates `search` calls to the daemon client. Also contains the legacy `main()` entry point (`cocoindex-code` command) for backward-compatible env-var-based configuration.
 
-**`cli.py`** — Typer app with `ccc` subcommands (`init`, `index`, `search`, `grep`, `status`, `reset`, `doctor`, `mcp`, `daemon status/restart/stop`). CLI logic only — delegates to `client.py` or `grep.py`.
+**`cli.py`** — Typer app with `ccc` subcommands (`init`, `index`, `search`, `grep`, `status`, `reset`, `doctor`, `mcp`, `version`, `daemon status/restart/stop`). CLI logic only — delegates to `client.py` or `grep.py`.
 
 **`grep.py`** — Structural code search (`ccc grep`) using CocoIndex's `code_match`. Runs entirely locally with no daemon or index. Matches in parallel, streams results per file.
 

@@ -21,7 +21,7 @@
 
 | Path | Best For... | Key Advantage | Trade-off |
 | :--- | :--- | :--- | :--- |
-| **Local Sentence-Transformers** | Most users, laptops, quick setup. | **Fastest** (in-process), private, offline. | Larger initial pip install (`[full]`). |
+| **Local Sentence-Transformers** | Most users, laptops, quick setup. | **Fastest**, private, offline. | Larger initial pip install (`[full]`). |
 | **Cloud LiteLLM Remote** | Large codebases, weak local hardware. | Top performance, zero local resource usage. | Per-token costs, data leaves machine. |
 | **Local LiteLLM** | Power users, shared GPU resources. | Flexibility, unified model management. | Requires managing a separate server. |
 
@@ -31,7 +31,7 @@
 
 ### Speed & Latency
 
-- **Local Sentence-Transformers**: Typically the **fastest** option for small-to-medium **encoder** models. Because it runs directly inside the `cocoindex-code` process, it avoids the network latency of Cloud APIs and the communication overhead of Local Servers (Ollama). Decoder-based models (e.g. `harrier-oss-v1`) are also in-process, but process tokens sequentially — expect 3–10× slower indexing per chunk on CPU unless you have a GPU.
+- **Local Sentence-Transformers**: Typically the **fastest** option for small-to-medium **encoder** models. It avoids network latency and the server overhead of Local Servers (Ollama). On Apple Silicon, MPS inference runs in a supervised child process so Metal allocations can be reclaimed independently; other devices use the normal in-process path. Decoder-based models (e.g. `harrier-oss-v1`) process tokens sequentially — expect 3–10× slower indexing per chunk on CPU unless you have a GPU.
 - **Local Servers (Ollama)**: Ideal for running **heavy models** (like `mxbai-embed-large`) on a GPU. While it has slight overhead compared to in-process execution, it is much faster than running large models on a CPU.
 - **Cloud APIs**: Slower per-request due to network latency, but highly parallel. Best for the initial indexing of massive repositories.
 
@@ -53,6 +53,19 @@ Indexing speed depends on **both parameter count and model architecture**:
 - **Decoder models** (LLM-based, e.g. `harrier-oss-v1`): Process tokens sequentially, making them **3–10× slower** than an encoder of comparable parameter count on CPU. A GPU is strongly recommended to achieve acceptable indexing throughput with these models.
 
 For encoder models at medium or large sizes, a GPU will still accelerate indexing. Add `device: cuda` (or `mps` on Mac) to `global_settings.yml`.
+
+On Apple Silicon, SentenceTransformer calls run through [CocoIndex's isolated
+GPU subprocess](https://github.com/cocoindex-io/cocoindex/blob/v1.0.18/python/cocoindex/_internal/runner.py).
+This keeps the model warm across batches while separating Metal allocations
+from the daemon. cocoindex-code configures PyTorch to begin adaptive allocation
+cleanup at 40% of its recommended maximum working set and to enforce a hard
+limit at 50%; tune these values with `mps_low_watermark_ratio` and
+`mps_high_watermark_ratio`. At the end of each index run, unused allocator cache
+is released inside the GPU subprocess. CocoIndex also [retries MPS OOM failures
+with smaller batches](https://github.com/cocoindex-io/cocoindex/blob/v1.0.18/python/cocoindex/ops/sentence_transformers.py).
+See the [PyTorch MPS environment variable reference](https://docs.pytorch.org/docs/stable/mps_environment_variables.html)
+for the allocator semantics. Explicit environment variables take precedence
+over the YAML defaults.
 
 ---
 

@@ -21,6 +21,7 @@ from cocoindex_code.settings import (
     UserSettings,
     _reset_db_path_mapping_cache,
     _reset_host_path_mapping_cache,
+    _user_settings_from_dict,
     default_project_settings,
     default_user_settings,
     find_parent_with_marker,
@@ -30,6 +31,7 @@ from cocoindex_code.settings import (
     load_project_settings,
     load_user_settings,
     normalize_input_path,
+    parse_file_size,
     resolve_db_dir,
     save_project_settings,
     save_user_settings,
@@ -55,6 +57,8 @@ def test_default_user_settings() -> None:
     assert s.embedding.model == "Snowflake/snowflake-arctic-embed-xs"
     assert s.embedding.device is None
     assert s.embedding.min_interval_ms is None
+    assert s.embedding.mps_low_watermark_ratio == 0.4
+    assert s.embedding.mps_high_watermark_ratio == 0.5
     assert s.envs == {}
 
 
@@ -77,6 +81,8 @@ def test_save_and_load_user_settings(tmp_path: Path) -> None:
             model="gemini/text-embedding-004",
             device="cpu",
             min_interval_ms=300,
+            mps_low_watermark_ratio=0.35,
+            mps_high_watermark_ratio=0.45,
         ),
         envs={"GEMINI_API_KEY": "test-key"},
     )
@@ -86,7 +92,51 @@ def test_save_and_load_user_settings(tmp_path: Path) -> None:
     assert loaded.embedding.model == settings.embedding.model
     assert loaded.embedding.device == settings.embedding.device
     assert loaded.embedding.min_interval_ms == settings.embedding.min_interval_ms
+    assert loaded.embedding.mps_low_watermark_ratio == settings.embedding.mps_low_watermark_ratio
+    assert loaded.embedding.mps_high_watermark_ratio == settings.embedding.mps_high_watermark_ratio
     assert loaded.envs == settings.envs
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("mps_low_watermark_ratio", 0, "mps_low_watermark_ratio"),
+        ("mps_high_watermark_ratio", 1.1, "mps_high_watermark_ratio"),
+    ],
+)
+def test_embedding_safety_settings_reject_invalid_values(
+    field: str,
+    value: int | float,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        EmbeddingSettings(model="model", **{field: value})
+
+
+def test_embedding_safety_settings_require_ordered_mps_limits() -> None:
+    with pytest.raises(ValueError, match="mps_low_watermark_ratio"):
+        EmbeddingSettings(
+            model="model",
+            mps_low_watermark_ratio=0.6,
+            mps_high_watermark_ratio=0.5,
+        )
+
+
+def test_removed_custom_mps_worker_settings_are_ignored() -> None:
+    settings = _user_settings_from_dict(
+        {
+            "embedding": {
+                "provider": "sentence-transformers",
+                "model": "model",
+                "batch_size": 8,
+                "mps_memory_limit_ratio": 0.35,
+                "worker_timeout_seconds": 300,
+            }
+        }
+    )
+
+    assert settings.embedding.mps_low_watermark_ratio == 0.4
+    assert settings.embedding.mps_high_watermark_ratio == 0.5
 
 
 def test_save_and_load_project_settings(tmp_path: Path) -> None:
@@ -359,8 +409,11 @@ def test_save_initial_user_settings_round_trip() -> None:
     path = save_initial_user_settings(emb, defaults_applied=False)
     content = path.read_text()
 
-    # Hint comment and the four commented env-var examples.
+    # Hint comment, MPS allocator defaults, and env-var examples.
     assert "ccc doctor" in content
+    assert "# mps_low_watermark_ratio: 0.4" in content
+    assert "# mps_high_watermark_ratio: 0.5" in content
+    assert "CocoIndex's GPU subprocess" in content
     assert "# envs:" in content
     for key in ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "VOYAGE_API_KEY"):
         assert f"#   {key}:" in content
@@ -684,3 +737,41 @@ def test_save_initial_writes_comment_template_for_unknown_litellm() -> None:
     # `dimensions` is intentionally NOT in the litellm template — it must be
     # the same on both sides, so we don't expose it as a per-side knob.
     assert "dimensions" not in content
+
+
+def test_parse_file_size_accepts_units_and_plain_bytes() -> None:
+    cases = [
+        (1048576, 1048576),
+        ("2048", 2048),
+        ("500KB", 500 * 1024),
+        ("500 kb", 500 * 1024),
+        ("1MB", 1024**2),
+        ("1.5MB", int(1.5 * 1024**2)),
+        ("2GB", 2 * 1024**3),
+        ("512B", 512),
+    ]
+    for raw, expected in cases:
+        assert parse_file_size(raw) == expected, raw
+
+
+def test_parse_file_size_rejects_invalid_values() -> None:
+    for raw in ["", "   ", "abc", "10XB", 0, -1, True, None, []]:
+        with pytest.raises(ValueError):
+            parse_file_size(raw)
+
+
+def test_project_settings_round_trip_max_file_size(tmp_path: Path) -> None:
+    save_project_settings(tmp_path, ProjectSettings(max_file_size=500 * 1024))
+    assert load_project_settings(tmp_path).max_file_size == 500 * 1024
+
+
+def test_project_settings_max_file_size_defaults_to_none(tmp_path: Path) -> None:
+    """Omitting the key keeps the previous behavior of indexing every size."""
+    save_project_settings(tmp_path, ProjectSettings())
+    assert load_project_settings(tmp_path).max_file_size is None
+
+
+def test_project_settings_parses_human_readable_max_file_size(tmp_path: Path) -> None:
+    path = save_project_settings(tmp_path, ProjectSettings())
+    path.write_text(path.read_text() + "\nmax_file_size: 500KB\n")
+    assert load_project_settings(tmp_path).max_file_size == 500 * 1024

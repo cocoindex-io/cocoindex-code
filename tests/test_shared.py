@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import numpy as np
 import pytest
+from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
 from cocoindex_code.litellm_embedder import PacedLiteLLMEmbedder
 from cocoindex_code.settings import EmbeddingSettings
 from cocoindex_code.shared import (
     check_embedding,
+    configure_mps_environment,
     create_embedder,
     is_sentence_transformers_installed,
 )
@@ -64,6 +67,93 @@ def test_create_embedder_sentence_transformers_ignores_indexing_params() -> None
     # No exception, and prompt_name is not stashed on the constructor —
     # it's a per-call argument supplied via the embed() call site.
     assert not isinstance(embedder, PacedLiteLLMEmbedder)
+
+
+def test_create_embedder_uses_cocoindex_sentence_transformer_for_mps() -> None:
+    embedder = create_embedder(
+        EmbeddingSettings(
+            provider="sentence-transformers",
+            model="sentence-transformers/all-MiniLM-L6-v2",
+            device="mps",
+        )
+    )
+
+    assert isinstance(embedder, SentenceTransformerEmbedder)
+
+
+def test_configure_mps_environment_enables_cocoindex_gpu_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("COCOINDEX_RUN_GPU_IN_SUBPROCESS", raising=False)
+    monkeypatch.delenv("PYTORCH_MPS_HIGH_WATERMARK_RATIO", raising=False)
+    monkeypatch.delenv("PYTORCH_MPS_LOW_WATERMARK_RATIO", raising=False)
+
+    enabled = configure_mps_environment(
+        EmbeddingSettings(
+            provider="sentence-transformers",
+            model="sentence-transformers/all-MiniLM-L6-v2",
+            device="mps",
+        )
+    )
+
+    assert enabled is True
+    assert os.environ["COCOINDEX_RUN_GPU_IN_SUBPROCESS"] == "1"
+    assert os.environ["PYTORCH_MPS_LOW_WATERMARK_RATIO"] == "0.4"
+    assert os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] == "0.5"
+
+
+def test_explicit_mps_allocator_env_takes_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COCOINDEX_RUN_GPU_IN_SUBPROCESS", "0")
+    monkeypatch.setenv("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.25")
+    monkeypatch.setenv("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.3")
+
+    enabled = configure_mps_environment(
+        EmbeddingSettings(
+            provider="sentence-transformers",
+            model="sentence-transformers/all-MiniLM-L6-v2",
+            device="mps",
+        )
+    )
+
+    assert enabled is False
+    assert os.environ["COCOINDEX_RUN_GPU_IN_SUBPROCESS"] == "0"
+    assert os.environ["PYTORCH_MPS_LOW_WATERMARK_RATIO"] == "0.25"
+    assert os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] == "0.3"
+
+
+def test_configure_mps_environment_does_not_change_non_mps_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("COCOINDEX_RUN_GPU_IN_SUBPROCESS", raising=False)
+    monkeypatch.delenv("PYTORCH_MPS_HIGH_WATERMARK_RATIO", raising=False)
+    monkeypatch.delenv("PYTORCH_MPS_LOW_WATERMARK_RATIO", raising=False)
+
+    enabled = configure_mps_environment(
+        EmbeddingSettings(provider="litellm", model="text-embedding-3-small")
+    )
+
+    assert enabled is False
+    assert "COCOINDEX_RUN_GPU_IN_SUBPROCESS" not in os.environ
+    assert "PYTORCH_MPS_LOW_WATERMARK_RATIO" not in os.environ
+    assert "PYTORCH_MPS_HIGH_WATERMARK_RATIO" not in os.environ
+
+
+def test_configure_mps_environment_auto_detects_macos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("cocoindex_code.shared.sys.platform", "darwin")
+    monkeypatch.delenv("COCOINDEX_RUN_GPU_IN_SUBPROCESS", raising=False)
+
+    enabled = configure_mps_environment(
+        EmbeddingSettings(
+            provider="sentence-transformers",
+            model="sentence-transformers/all-MiniLM-L6-v2",
+        )
+    )
+
+    assert enabled is True
 
 
 def test_is_sentence_transformers_installed_true_in_dev() -> None:

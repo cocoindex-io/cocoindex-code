@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         SearchResponse,
     )
 
+from ._version import __version__
 from .settings import (
     DEFAULT_ST_MODEL,
     EmbeddingSettings,
@@ -195,6 +196,15 @@ def print_index_stats(status: ProjectStatusResponse) -> None:
             _typer.echo(f"    {lang}: {count} chunks")
 
 
+def _echo_search_text(text: str) -> None:
+    """Echo result text, replacing characters unsupported by the console codec."""
+    try:
+        _typer.echo(text)
+    except UnicodeEncodeError as error:
+        safe_text = text.encode(error.encoding, errors="replace").decode(error.encoding)
+        _typer.echo(safe_text)
+
+
 def print_search_results(response: SearchResponse) -> None:
     """Print formatted search results."""
     if not response.success:
@@ -207,8 +217,8 @@ def print_search_results(response: SearchResponse) -> None:
 
     for i, r in enumerate(response.results, 1):
         _typer.echo(f"\n--- Result {i} (score: {r.score:.3f}) ---")
-        _typer.echo(f"File: {r.file_path}:{r.start_line}-{r.end_line} [{r.language}]")
-        _typer.echo(r.content)
+        _echo_search_text(f"File: {r.file_path}:{r.start_line}-{r.end_line} [{r.language}]")
+        _echo_search_text(r.content)
 
 
 def _run_index_with_progress(project_root: str) -> None:
@@ -1118,6 +1128,12 @@ def daemon_stop() -> None:
         _typer.echo("Warning: daemon may not have stopped cleanly.", err=True)
     else:
         _typer.echo("Daemon stopped.")
+
+
+@app.command()
+def version() -> None:
+    """Print the CLI version."""
+    _typer.echo(__version__)
 
 
 @app.command("run-daemon", hidden=True)
