@@ -2,6 +2,7 @@ import pytest
 from mcp import Client
 
 from cocoindex_code import client as daemon_client
+from cocoindex_code._version import __version__
 from cocoindex_code.protocol import SearchResponse
 from cocoindex_code.server import create_mcp_server
 
@@ -29,3 +30,12 @@ async def test_mcp_server_uses_v2_protocol(monkeypatch: pytest.MonkeyPatch) -> N
         "offset": 0,
         "message": None,
     }
+
+
+async def test_mcp_server_reports_own_version() -> None:
+    """The handshake advertises our version, not the SDK's or an empty string."""
+    server = create_mcp_server(".")
+    async with Client(server, raise_exceptions=True) as client:
+        assert client.server_info is not None
+        assert client.server_info.name == "cocoindex-code"
+        assert client.server_info.version == __version__

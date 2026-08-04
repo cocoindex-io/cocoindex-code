@@ -17,6 +17,7 @@ from pathlib import Path
 from mcp.server.mcpserver import MCPServer
 from pydantic import BaseModel, Field
 
+from ._version import __version__
 from .settings import DaemonSettings, load_user_settings
 
 _MCP_INSTRUCTIONS = (
@@ -60,7 +61,7 @@ class SearchResultModel(BaseModel):
 
 def create_mcp_server(project_root: str) -> MCPServer:
     """Create a lightweight MCP server that delegates to the daemon."""
-    mcp = MCPServer("cocoindex-code", instructions=_MCP_INSTRUCTIONS)
+    mcp = MCPServer("cocoindex-code", instructions=_MCP_INSTRUCTIONS, version=__version__)
 
     @mcp.tool(
         name="search",
