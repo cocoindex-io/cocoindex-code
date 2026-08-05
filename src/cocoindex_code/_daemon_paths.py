@@ -6,14 +6,21 @@ can import these without pulling in the full daemon stack.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from .settings import user_settings_dir
+
+# Max bytes in sockaddr_un.sun_path, including the NUL terminator: 104 on the
+# BSDs (incl. macOS), 108 on Linux. Exceeding it makes bind() fail with
+# "AF_UNIX path too long" — unlike ordinary files, which get PATH_MAX (~1024).
+_SUN_PATH_MAX = 104 if sys.platform == "darwin" else 108
 
 
 def daemon_runtime_dir() -> Path:
@@ -39,18 +46,37 @@ def connection_family() -> str:
     return "AF_PIPE" if sys.platform == "win32" else "AF_UNIX"
 
 
-def daemon_socket_path() -> str:
-    """Return the daemon socket/pipe address."""
-    if sys.platform == "win32":
-        import hashlib
+def _runtime_dir_hash() -> str:
+    """Stable short id for the current runtime dir.
 
-        # Hash the runtime dir so COCOINDEX_CODE_RUNTIME_DIR (or the
-        # COCOINDEX_CODE_DIR fallback) overrides produce unique pipe names,
-        # preventing conflicts between different daemon instances (tests,
-        # users, etc.)
-        dir_hash = hashlib.md5(str(daemon_runtime_dir()).encode()).hexdigest()[:12]
-        return rf"\\.\pipe\cocoindex_code_{dir_hash}"
-    return str(daemon_runtime_dir() / "daemon.sock")
+    Distinguishes daemon instances that differ only by
+    ``COCOINDEX_CODE_RUNTIME_DIR`` / ``COCOINDEX_CODE_DIR``, so tests, users,
+    and containers never collide on one address.
+    """
+    return hashlib.md5(str(daemon_runtime_dir()).encode()).hexdigest()[:12]
+
+
+def daemon_socket_path() -> str:
+    """Return the daemon socket/pipe address.
+
+    Normally ``<runtime dir>/daemon.sock``. When that exceeds the platform's
+    ``sun_path`` limit — a deep ``$HOME``, a sandbox, a container path — it
+    would fail at bind() with a message that reads like a broken install, so
+    fall back to a short path under the temp dir keyed by the runtime dir.
+    Client and daemon both resolve through here, so they agree either way.
+    """
+    if sys.platform == "win32":
+        return rf"\\.\pipe\cocoindex_code_{_runtime_dir_hash()}"
+
+    path = daemon_runtime_dir() / "daemon.sock"
+    if len(str(path).encode()) < _SUN_PATH_MAX:
+        return str(path)
+
+    # gettempdir() honors $TMPDIR, which is per-user and private on macOS; on
+    # Linux it is usually shared /tmp, so include the uid to avoid a foreign
+    # socket sitting at our address.
+    short = Path(tempfile.gettempdir()) / f"ccc-{os.getuid()}-{_runtime_dir_hash()}.sock"
+    return str(short)
 
 
 def daemon_pid_path() -> Path:

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
+import sys
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -633,6 +636,66 @@ def test_daemon_runtime_dir_falls_back_to_user_settings_dir(
     monkeypatch.delenv("COCOINDEX_CODE_RUNTIME_DIR", raising=False)
     monkeypatch.setenv("COCOINDEX_CODE_DIR", str(settings_dir))
     assert daemon_runtime_dir() == settings_dir
+
+
+# ---------------------------------------------------------------------------
+# daemon_socket_path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="named pipes have no length limit")
+def test_daemon_socket_path_uses_runtime_dir_when_short(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The common case is unchanged: socket sits in the runtime dir.
+
+    Deliberately not pytest's ``tmp_path`` — on macOS that is ~118 bytes, past
+    sun_path already, which is how routine this overflow is.
+    """
+    from cocoindex_code._daemon_paths import daemon_socket_path
+
+    short_dir = tempfile.mkdtemp(prefix="ccc", dir=tempfile.gettempdir())
+    try:
+        monkeypatch.setenv("COCOINDEX_CODE_RUNTIME_DIR", short_dir)
+        assert daemon_socket_path() == str(Path(short_dir) / "daemon.sock")
+    finally:
+        shutil.rmtree(short_dir, ignore_errors=True)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="named pipes have no length limit")
+def test_daemon_socket_path_falls_back_when_over_sun_path_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deep runtime dir must not produce an unbindable socket address.
+
+    bind() fails with "AF_UNIX path too long" past sun_path (104 bytes on
+    macOS), which surfaces as a generic daemon-startup failure. Seen in the
+    wild under sandboxes and containers with long $HOME paths.
+    """
+    from cocoindex_code._daemon_paths import _SUN_PATH_MAX, daemon_socket_path
+
+    deep = tmp_path / ("d" * 80) / ("e" * 80)
+    monkeypatch.setenv("COCOINDEX_CODE_RUNTIME_DIR", str(deep))
+
+    path = daemon_socket_path()
+    assert not path.startswith(str(deep))
+    assert len(path.encode()) < _SUN_PATH_MAX
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="named pipes have no length limit")
+def test_daemon_socket_path_fallback_is_unique_per_runtime_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two over-long runtime dirs must not collide on one socket address."""
+    from cocoindex_code._daemon_paths import daemon_socket_path
+
+    long_a = tmp_path / ("a" * 80) / ("x" * 80)
+    long_b = tmp_path / ("b" * 80) / ("y" * 80)
+
+    monkeypatch.setenv("COCOINDEX_CODE_RUNTIME_DIR", str(long_a))
+    first = daemon_socket_path()
+    monkeypatch.setenv("COCOINDEX_CODE_RUNTIME_DIR", str(long_b))
+    second = daemon_socket_path()
+
+    assert first != second
 
 
 # ---------------------------------------------------------------------------
