@@ -174,23 +174,26 @@ def heartbeat_interval_s(idle_timeout_minutes: int) -> int:
 
 async def run_heartbeat_loop() -> None:
     """Periodically heartbeat the daemon so it never idle-exits under this
-    live MCP session; when this process dies (even SIGKILL) the heartbeats
-    stop and the daemon exits on its normal idle timeout.
+    live MCP session when ``daemon.keep_alive_with_mcp`` is enabled. When the
+    option is disabled, the daemon may idle-exit and the next real request
+    restarts it transparently. When this process dies (even SIGKILL), the
+    heartbeats stop and the daemon exits on its normal idle timeout.
 
     Reads the timeout from the same ``global_settings.yml`` the daemon reads
     (dataclass default when the file is missing or invalid). Returns
-    immediately when the timeout is 0 (daemon never idle-exits). The
-    heartbeat itself never starts or restarts a daemon — see
-    ``client.send_heartbeat``.
+    immediately when the timeout is 0 (daemon never idle-exits) or MCP
+    keep-alive is disabled. The heartbeat itself never starts or restarts a
+    daemon — see ``client.send_heartbeat``.
     """
-    from .client import send_heartbeat
-
     try:
-        timeout_minutes = load_user_settings().daemon.idle_timeout_minutes
+        daemon_settings = load_user_settings().daemon
     except (FileNotFoundError, ValueError):
-        timeout_minutes = DaemonSettings().idle_timeout_minutes
-    if timeout_minutes <= 0:
+        daemon_settings = DaemonSettings()
+    timeout_minutes = daemon_settings.idle_timeout_minutes
+    if timeout_minutes <= 0 or not daemon_settings.keep_alive_with_mcp:
         return
+
+    from .client import send_heartbeat
 
     interval = heartbeat_interval_s(timeout_minutes)
     loop = asyncio.get_event_loop()

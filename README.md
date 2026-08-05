@@ -521,6 +521,7 @@ envs:                                                # extra environment variabl
 
 daemon:
   idle_timeout_minutes: 180                          # optional: exit the daemon after this long without client activity (default 180, 0 = never)
+  keep_alive_with_mcp: true                          # optional: keep the daemon warm while an MCP client is connected (default true)
 ```
 
 > **Note:** The daemon inherits your shell environment. If an API key (e.g. `OPENAI_API_KEY`) is already set as an environment variable, you don't need to duplicate it in `envs`. The `envs` field is only for values that aren't in your environment.
@@ -529,7 +530,7 @@ daemon:
 
 > **Indexing concurrency:** Multiple projects may prepare indexes concurrently, while CocoIndex serializes their GPU calls through its single MPS subprocess. A search waits only when its own project still needs the initial index.
 
-> **Idle timeout:** the background daemon holds the embedding model in RAM, so it exits after `daemon.idle_timeout_minutes` without client activity and is restarted automatically on your next `ccc` command or MCP search. A live MCP session sends periodic heartbeats, so the daemon never idles out while your coding agent is connected. Set `0` to keep the daemon running forever.
+> **Idle timeout:** the background daemon holds the embedding model in RAM, so it exits after `daemon.idle_timeout_minutes` without client activity and is restarted automatically on your next `ccc` command or MCP search. By default, a live MCP session sends periodic heartbeats so the daemon remains warm while your coding agent is connected. Set `daemon.keep_alive_with_mcp: false` to let the daemon idle-exit during long-lived MCP sessions and release the model between real requests. Set `idle_timeout_minutes: 0` to keep the daemon running forever.
 
 > **Custom location:** set `COCOINDEX_CODE_DIR` to place `global_settings.yml` somewhere other than `~/.cocoindex_code/` — useful if you want the file to live alongside your projects (e.g. on a synced folder).
 

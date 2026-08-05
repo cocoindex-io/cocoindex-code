@@ -15,6 +15,10 @@ embedding:
 
 envs:                               # extra environment variables for the daemon
   OPENAI_API_KEY: your-key          # only needed if not already in the shell environment
+
+daemon:
+  idle_timeout_minutes: 180         # 0 keeps the daemon running forever
+  keep_alive_with_mcp: true         # false allows idle exit during live MCP sessions
 ```
 
 ### Fields
@@ -26,6 +30,8 @@ envs:                               # extra environment variables for the daemon
 | `embedding.device` | Optional. `cpu`, `cuda`, or `mps`. Auto-detected if omitted. Only relevant for `sentence-transformers`. |
 | `embedding.min_interval_ms` | Optional. Minimum delay between LiteLLM embedding requests in milliseconds. Defaults to `5` for LiteLLM and is ignored by `sentence-transformers`. Set explicitly to override the default. |
 | `envs` | Key-value map of environment variables injected into the daemon. Use for API keys not already in the shell environment. |
+| `daemon.idle_timeout_minutes` | Minutes without client activity before the daemon exits. Defaults to `180`; use `0` to disable idle exit. |
+| `daemon.keep_alive_with_mcp` | Whether a live MCP session keeps the daemon and embedding model warm. Defaults to `true`; set to `false` to release them after the normal idle timeout between real requests. |
 
 ### Embedding Model Examples
 

@@ -128,6 +128,8 @@ class DaemonSettings:
     # Minutes without client activity before the daemon exits (0 = never exit).
     # Clients auto-restart the daemon on the next request, so exiting is cheap.
     idle_timeout_minutes: int = 180
+    # Keep the daemon warm while a long-lived MCP client is connected.
+    keep_alive_with_mcp: bool = True
 
 
 @dataclass
@@ -466,8 +468,14 @@ def _user_settings_to_dict(settings: UserSettings) -> dict[str, Any]:
     d: dict[str, Any] = {"embedding": _embedding_settings_to_dict(settings.embedding)}
     if settings.envs:
         d["envs"] = dict(settings.envs)
-    if settings.daemon != DaemonSettings():
-        d["daemon"] = {"idle_timeout_minutes": settings.daemon.idle_timeout_minutes}
+    daemon_defaults = DaemonSettings()
+    daemon_dict: dict[str, Any] = {}
+    if settings.daemon.idle_timeout_minutes != daemon_defaults.idle_timeout_minutes:
+        daemon_dict["idle_timeout_minutes"] = settings.daemon.idle_timeout_minutes
+    if settings.daemon.keep_alive_with_mcp != daemon_defaults.keep_alive_with_mcp:
+        daemon_dict["keep_alive_with_mcp"] = settings.daemon.keep_alive_with_mcp
+    if daemon_dict:
+        d["daemon"] = daemon_dict
     return d
 
 
@@ -501,6 +509,11 @@ def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
     daemon_kwargs: dict[str, Any] = {}
     if "idle_timeout_minutes" in daemon_dict:
         daemon_kwargs["idle_timeout_minutes"] = int(daemon_dict["idle_timeout_minutes"])
+    if "keep_alive_with_mcp" in daemon_dict:
+        keep_alive_with_mcp = daemon_dict["keep_alive_with_mcp"]
+        if not isinstance(keep_alive_with_mcp, bool):
+            raise ValueError("daemon.keep_alive_with_mcp must be a boolean")
+        daemon_kwargs["keep_alive_with_mcp"] = keep_alive_with_mcp
     daemon = DaemonSettings(**daemon_kwargs)
     return UserSettings(embedding=embedding, envs=envs, daemon=daemon)
 

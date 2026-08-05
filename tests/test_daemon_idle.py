@@ -106,6 +106,24 @@ def test_heartbeat_interval_is_a_third_of_the_timeout_clamped() -> None:
     assert heartbeat_interval_s(180) == 300  # 3600 s → clamped down to 300 s
 
 
+@pytest.mark.asyncio
+async def test_heartbeat_loop_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    import cocoindex_code.server as server
+    from cocoindex_code.settings import DaemonSettings, EmbeddingSettings, UserSettings
+
+    settings = UserSettings(
+        embedding=EmbeddingSettings(provider="litellm", model="m"),
+        daemon=DaemonSettings(keep_alive_with_mcp=False),
+    )
+    monkeypatch.setattr(server, "load_user_settings", lambda: settings)
+
+    def unexpected_heartbeat() -> bool:
+        pytest.fail("disabled MCP keep-alive sent a heartbeat")
+
+    monkeypatch.setattr("cocoindex_code.client.send_heartbeat", unexpected_heartbeat)
+    await server.run_heartbeat_loop()
+
+
 # ---------------------------------------------------------------------------
 # In-process daemon E2E
 # ---------------------------------------------------------------------------
