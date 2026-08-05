@@ -1,3 +1,5 @@
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fcocoindex-io%2Fcocoindex-code.svg)](https://mcptoplist.com/server/glama%2Fcocoindex-io%2Fcocoindex-code)
+
 <p align="center">
 <img width="2428" alt="cocoindex code" src="https://github.com/user-attachments/assets/d05961b4-0b7b-42ea-834a-59c3c01717ca" />
 </p>
