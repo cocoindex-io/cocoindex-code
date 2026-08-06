@@ -228,6 +228,19 @@ def _handle_vanished_daemon() -> None:
     )
 
 
+def _daemon_error(resp: ErrorResponse) -> RuntimeError:
+    """Build the exception for an ``ErrorResponse`` from the daemon.
+
+    The daemon-side traceback is appended when present: without it the caller
+    only ever sees the client's own re-raise frames, which says nothing about
+    where the failure actually happened (issue #270).
+    """
+    detail = f"Daemon error: {resp.message}"
+    if resp.traceback:
+        detail += f"\n{resp.traceback}"
+    return RuntimeError(detail)
+
+
 class _HandshakeResult(NamedTuple):
     conn: Connection
     resp: HandshakeResponse
@@ -261,7 +274,7 @@ def _raw_connect_and_handshake() -> _HandshakeResult:
         raise DaemonProtocolError(f"Undecodable handshake reply from daemon: {e}") from e
     if isinstance(resp, ErrorResponse):
         conn.close()
-        raise RuntimeError(f"Daemon error: {resp.message}")
+        raise _daemon_error(resp)
     if not isinstance(resp, HandshakeResponse):
         conn.close()
         raise RuntimeError(f"Unexpected handshake response: {type(resp).__name__}")
@@ -340,7 +353,7 @@ def _send(req: Request) -> Response:
         conn.close()
     resp = decode_response(data)
     if isinstance(resp, ErrorResponse):
-        raise RuntimeError(f"Daemon error: {resp.message}")
+        raise _daemon_error(resp)
     return resp
 
 
@@ -366,7 +379,7 @@ def index(
                 raise RuntimeError("Connection to daemon lost during indexing")
             resp = decode_response(data)
             if isinstance(resp, ErrorResponse):
-                raise RuntimeError(f"Daemon error: {resp.message}")
+                raise _daemon_error(resp)
             if isinstance(resp, IndexWaitingNotice):
                 if on_waiting is not None:
                     on_waiting()
@@ -419,7 +432,7 @@ def search(
                 raise RuntimeError("Connection to daemon lost during search")
             resp = decode_response(data)
             if isinstance(resp, ErrorResponse):
-                raise RuntimeError(f"Daemon error: {resp.message}")
+                raise _daemon_error(resp)
             if isinstance(resp, IndexWaitingNotice):
                 if on_waiting is not None:
                     on_waiting()
@@ -496,10 +509,7 @@ def doctor(
                 raise RuntimeError("Connection to daemon lost during doctor checks")
             resp = decode_response(data)
             if isinstance(resp, ErrorResponse):
-                detail = f"Daemon error: {resp.message}"
-                if resp.traceback:
-                    detail += f"\n{resp.traceback}"
-                raise RuntimeError(detail)
+                raise _daemon_error(resp)
             if isinstance(resp, DoctorResponse):
                 results.append(resp.result)
                 if on_result is not None:

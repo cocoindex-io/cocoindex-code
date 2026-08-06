@@ -387,3 +387,22 @@ def test_daemon_version_error_message_reflects_cause() -> None:
     )
     assert "stale global settings" in str(settings_err)
     assert "version mismatch" not in str(settings_err)
+
+
+def test_daemon_error_carries_daemon_side_traceback() -> None:
+    """Daemon-side tracebacks reach the caller — the client frames alone say nothing.
+
+    Regression guard for issue #270, where a daemon search crash surfaced as a
+    bare `Daemon error: <message>` and the reporter had no frame pointing at the
+    code that actually failed.
+    """
+    from cocoindex_code.protocol import ErrorResponse
+
+    err = client._daemon_error(ErrorResponse(message="boom", traceback="Traceback: frame\nfoo"))
+    assert "Daemon error: boom" in str(err)
+    assert "Traceback: frame\nfoo" in str(err)
+
+    # No traceback recorded (e.g. a deliberate ErrorResponse, not an exception):
+    # the message stands alone, with no trailing noise.
+    plain = client._daemon_error(ErrorResponse(message="run `ccc init` first"))
+    assert str(plain) == "Daemon error: run `ccc init` first"

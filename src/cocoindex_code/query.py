@@ -16,6 +16,33 @@ def _l2_to_score(distance: float) -> float:
     return 1.0 - distance * distance / 2.0
 
 
+def _checked(rows: list[tuple[Any, ...]], query_shape: str) -> list[tuple[Any, ...]]:
+    """Return *rows*, failing loudly if any of them carries a NULL distance.
+
+    ``code_chunks_vec`` is a vec0 virtual table whose ``distance`` is a *hidden*
+    column: sqlite-vec populates it only under the KNN query plan and yields
+    NULL for it on a plain full scan.  A NULL therefore means the plan we asked
+    for is not the plan we got, which is a bug worth reporting rather than a
+    result worth ranking.  Left unchecked, the NULL flows into ``_l2_to_score``
+    and surfaces as an unrelated-looking ``TypeError: unsupported operand
+    type(s) for *: 'NoneType' and 'NoneType'`` (issue #270).
+
+    Only KNN queries need this guard: ``_full_scan_query`` computes its own
+    ``vec_distance_L2(...)``, which works under any plan and raises (never
+    returns NULL) on bad input.
+    """
+    bad = next((row for row in rows if row[5] is None), None)
+    if bad is not None:
+        raise RuntimeError(
+            f"Vector index returned a row with no distance ({query_shape}, "
+            f"file_path={bad[0]!r}) — the sqlite-vec KNN query plan was not "
+            "used. Please report this at "
+            "https://github.com/cocoindex-io/cocoindex-code/issues along with "
+            "the output of `ccc doctor`."
+        )
+    return rows
+
+
 def _knn_query(
     conn: sqlite3.Connection,
     embedding_bytes: bytes,
@@ -24,24 +51,30 @@ def _knn_query(
 ) -> list[tuple[Any, ...]]:
     """Run a vec0 KNN query, optionally constrained to a language partition."""
     if language is not None:
-        return conn.execute(
+        return _checked(
+            conn.execute(
+                """
+                SELECT file_path, language, content, start_line, end_line, distance
+                FROM code_chunks_vec
+                WHERE embedding MATCH ? AND k = ? AND language = ?
+                ORDER BY distance
+                """,
+                (embedding_bytes, k, language),
+            ).fetchall(),
+            f"knn language={language!r}",
+        )
+    return _checked(
+        conn.execute(
             """
             SELECT file_path, language, content, start_line, end_line, distance
             FROM code_chunks_vec
-            WHERE embedding MATCH ? AND k = ? AND language = ?
+            WHERE embedding MATCH ? AND k = ?
             ORDER BY distance
             """,
-            (embedding_bytes, k, language),
-        ).fetchall()
-    return conn.execute(
-        """
-        SELECT file_path, language, content, start_line, end_line, distance
-        FROM code_chunks_vec
-        WHERE embedding MATCH ? AND k = ?
-        ORDER BY distance
-        """,
-        (embedding_bytes, k),
-    ).fetchall()
+            (embedding_bytes, k),
+        ).fetchall(),
+        "knn unfiltered",
+    )
 
 
 def _full_scan_query(

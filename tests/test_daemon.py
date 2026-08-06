@@ -357,3 +357,36 @@ def test_daemon_search_waits_for_load_time_indexing(daemon_sock: str) -> None:
     assert isinstance(resp2, SearchResponse)
     assert resp2.success is True
     conn2.close()
+
+
+async def test_search_failure_reports_daemon_side_traceback() -> None:
+    """A crash inside search reaches the client with the daemon's own frames.
+
+    Without this the client sees only `Daemon error: <str(exc)>` and its own
+    re-raise frames, which is why issue #270 arrived with nothing pointing at
+    the code that actually failed.
+    """
+    from typing import Any, cast
+
+    from cocoindex_code.daemon import _search_with_wait
+    from cocoindex_code.project import Project
+    from cocoindex_code.protocol import ErrorResponse, SearchRequest
+
+    class _FailingProject:
+        async def wait_for_indexing_done(self) -> None:
+            return None
+
+        async def search(self, **_kwargs: Any) -> None:
+            raise RuntimeError("simulated query failure")
+
+    req = SearchRequest(project_root="/tmp/whatever", query="anything")
+    responses = [resp async for resp in _search_with_wait(cast(Project, _FailingProject()), req)]
+
+    error = responses[-1]
+    assert isinstance(error, ErrorResponse)
+    assert error.message == "simulated query failure"
+    assert error.traceback is not None
+    assert "simulated query failure" in error.traceback
+    # The daemon-side frames, not just the exception text.
+    assert "_search_with_wait" in error.traceback
+    assert "in search" in error.traceback

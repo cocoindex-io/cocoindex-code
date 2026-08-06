@@ -346,7 +346,8 @@ async def _search_with_wait(
             offset=req.offset,
         )
     except Exception as e:
-        yield ErrorResponse(message=str(e))
+        logger.exception("Error handling search request")
+        yield ErrorResponse(message=str(e), traceback=traceback.format_exc())
 
 
 async def _handle_doctor(
@@ -605,7 +606,7 @@ async def _dispatch(
         return ErrorResponse(message=f"Unknown request type: {type(req).__name__}")
     except Exception as e:
         logger.exception("Error dispatching request")
-        return ErrorResponse(message=str(e))
+        return ErrorResponse(message=str(e), traceback=traceback.format_exc())
 
 
 # ---------------------------------------------------------------------------
