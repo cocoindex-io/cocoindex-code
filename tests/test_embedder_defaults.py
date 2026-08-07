@@ -35,6 +35,12 @@ def test_lookup_defaults_regex_match_voyage() -> None:
     assert query == {"input_type": "query"}
 
 
+def test_lookup_defaults_regex_match_mongodb_voyage() -> None:
+    indexing, query = lookup_defaults("litellm", "mongodb/voyage-4")
+    assert indexing == {"input_type": "document"}
+    assert query == {"input_type": "query"}
+
+
 def test_lookup_defaults_regex_match_cohere() -> None:
     indexing, query = lookup_defaults("litellm", "cohere/embed-english-v3.0")
     assert indexing == {"input_type": "search_document"}

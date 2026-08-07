@@ -94,3 +94,27 @@ async def test_run_embedding_request_omits_encoding_format_for_native_providers(
 
     assert "encoding_format" not in seen_kwargs
     assert "drop_params" not in seen_kwargs
+
+
+@pytest.mark.asyncio
+async def test_mongodb_model_routes_to_voyage_with_atlas_api_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_model: list[str] = []
+    seen_kwargs: dict[str, Any] = {}
+
+    async def fake_aembedding(*, model: str, input: list[str], **kwargs: Any) -> Any:
+        seen_model.append(model)
+        seen_kwargs.update(kwargs)
+        return SimpleNamespace(data=[{"embedding": [1.0, 2.0]}])
+
+    monkeypatch.setattr("cocoindex_code.litellm_embedder.litellm.aembedding", fake_aembedding)
+
+    embedder = PacedLiteLLMEmbedder("mongodb/voyage-4")
+    await embedder.run_embedding_request(input=["hello"])
+
+    assert seen_model == ["voyage/voyage-4"]
+    assert seen_kwargs["api_base"] == "https://ai.mongodb.com/v1"
+    # Routed as a native Voyage provider, so encoding_format is not forced.
+    assert "encoding_format" not in seen_kwargs
+    assert "drop_params" not in seen_kwargs
