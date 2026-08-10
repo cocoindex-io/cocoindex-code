@@ -438,7 +438,9 @@ async def _check_file_walk(project_root_str: str) -> DoctorCheckResult:
     except FileNotFoundError as e:
         return DoctorCheckResult(name="File Walk", ok=False, details=[], errors=[str(e)])
 
-    matcher = build_matcher(project_root, ps.include_patterns, ps.exclude_patterns)
+    matcher = build_matcher(
+        project_root, ps.include_patterns, ps.exclude_patterns, ps.max_file_size
+    )
 
     counts_by_ext: dict[str, int] = {}
     gitignore_dirs: list[str] = []
