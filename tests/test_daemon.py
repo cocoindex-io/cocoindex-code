@@ -11,8 +11,10 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterator
+from datetime import timedelta
 from multiprocessing.connection import Client, Connection
 from pathlib import Path
+from typing import cast
 
 import pytest
 from conftest import make_test_user_settings
@@ -27,6 +29,7 @@ from cocoindex_code.protocol import (
     IndexResponse,
     IndexWaitingNotice,
     ProjectStatusRequest,
+    ProjectStatusResponse,
     RemoveProjectRequest,
     Response,
     SearchRequest,
@@ -150,6 +153,7 @@ def test_daemon_starts_and_accepts_handshake(daemon_sock: str) -> None:
     assert resp.pid == os.getpid()
     # The session daemon uses a non-legacy model so no warnings expected.
     assert resp.warnings == []
+    assert "member-readonly-v1" in resp.capabilities
     conn.close()
 
 
@@ -357,6 +361,111 @@ def test_daemon_search_waits_for_load_time_indexing(daemon_sock: str) -> None:
     assert isinstance(resp2, SearchResponse)
     assert resp2.success is True
     conn2.close()
+
+
+async def test_member_search_bypasses_project_and_indexing() -> None:
+    """A request-scoped member policy must work even in a leader-started daemon."""
+    import cocoindex_code.daemon as dm
+
+    class _ReadonlyRegistry:
+        readonly_calls = 0
+        last_kwargs: dict[str, object] | None = None
+
+        async def search_readonly(self, **kwargs: object) -> list[object]:
+            self.readonly_calls += 1
+            self.last_kwargs = kwargs
+            return []
+
+        async def get_project(self, _project_root: str) -> object:
+            pytest.fail("member search must not construct an indexing Project")
+
+    raw_registry = _ReadonlyRegistry()
+    registry = cast(dm.ProjectRegistry, raw_registry)
+    response = await dm._dispatch(
+        SearchRequest(
+            project_root="/project",
+            query="authentication",
+            allow_indexing=False,
+            index_db_path="/shared/target_sqlite.db",
+        ),
+        registry,
+        start_time=time.monotonic(),
+        on_shutdown=lambda: None,
+        settings_env_names=[],
+        reaper=dm.IdleReaper(timedelta(minutes=1), supervised=False),
+    )
+
+    assert isinstance(response, SearchResponse)
+    assert response.success is True
+    assert raw_registry.readonly_calls == 1
+    assert raw_registry.last_kwargs is not None
+    assert raw_registry.last_kwargs["index_db_path"] == "/shared/target_sqlite.db"
+
+
+async def test_member_status_bypasses_project_and_indexing() -> None:
+    """Member status must inspect the snapshot without constructing a Project."""
+    import cocoindex_code.daemon as dm
+
+    class _ReadonlyRegistry:
+        status_calls = 0
+
+        def get_status_readonly(self, index_db_path: str) -> ProjectStatusResponse:
+            self.status_calls += 1
+            assert index_db_path == "/shared/target_sqlite.db"
+            return ProjectStatusResponse(
+                indexing=False,
+                total_chunks=3,
+                total_files=2,
+                languages={"python": 3},
+                index_exists=True,
+            )
+
+        async def get_project(self, _project_root: str) -> object:
+            pytest.fail("member status must not construct an indexing Project")
+
+    raw_registry = _ReadonlyRegistry()
+    response = await dm._dispatch(
+        ProjectStatusRequest(
+            project_root="/project",
+            allow_indexing=False,
+            index_db_path="/shared/target_sqlite.db",
+        ),
+        cast(dm.ProjectRegistry, raw_registry),
+        start_time=time.monotonic(),
+        on_shutdown=lambda: None,
+        settings_env_names=[],
+        reaper=dm.IdleReaper(timedelta(minutes=1), supervised=False),
+    )
+
+    assert isinstance(response, ProjectStatusResponse)
+    assert response.index_exists is True
+    assert response.indexing is False
+    assert raw_registry.status_calls == 1
+
+
+async def test_readonly_search_without_index_path_does_not_load_project() -> None:
+    import cocoindex_code.daemon as dm
+    from cocoindex_code.protocol import ErrorResponse
+
+    class _ReadonlyRegistry:
+        async def get_project(self, _project_root: str) -> object:
+            pytest.fail("missing snapshot path must not construct an indexing Project")
+
+    response = await dm._dispatch(
+        SearchRequest(
+            project_root="/project",
+            query="authentication",
+            allow_indexing=False,
+        ),
+        cast(dm.ProjectRegistry, _ReadonlyRegistry()),
+        start_time=time.monotonic(),
+        on_shutdown=lambda: None,
+        settings_env_names=[],
+        reaper=dm.IdleReaper(timedelta(minutes=1), supervised=False),
+    )
+
+    assert isinstance(response, ErrorResponse)
+    assert "explicit index database path" in response.message
 
 
 async def test_search_failure_reports_daemon_side_traceback() -> None:

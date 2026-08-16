@@ -3,6 +3,7 @@ from mcp import Client
 
 from cocoindex_code import client as daemon_client
 from cocoindex_code._version import __version__
+from cocoindex_code.cli import _bg_index
 from cocoindex_code.protocol import SearchResponse
 from cocoindex_code.server import create_mcp_server
 
@@ -30,6 +31,36 @@ async def test_mcp_server_uses_v2_protocol(monkeypatch: pytest.MonkeyPatch) -> N
         "offset": 0,
         "message": None,
     }
+
+
+async def test_member_mcp_default_search_never_refreshes_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COCOINDEX_CODE_INDEXING_ROLE", "member")
+    index_calls = 0
+
+    def _unexpected_index(_project_root: str) -> None:
+        nonlocal index_calls
+        index_calls += 1
+
+    monkeypatch.setattr(daemon_client, "index", _unexpected_index)
+    monkeypatch.setattr(
+        daemon_client,
+        "search",
+        lambda **kwargs: SearchResponse(success=True, offset=kwargs["offset"]),
+    )
+
+    await _bg_index(".")
+    server = create_mcp_server(".")
+    async with Client(server, raise_exceptions=True) as client:
+        result = await client.call_tool("search", {"query": "authentication"})
+        explicit_refresh = await client.call_tool(
+            "search", {"query": "authorization", "refresh_index": True}
+        )
+
+    assert result.structured_content["success"] is True
+    assert explicit_refresh.structured_content["success"] is True
+    assert index_calls == 0
 
 
 async def test_mcp_server_reports_own_version() -> None:

@@ -50,12 +50,18 @@ def test_encode_decode_handshake_request() -> None:
 
 
 def test_encode_decode_handshake_response_with_pid() -> None:
-    resp = HandshakeResponse(ok=True, daemon_version="1.0.0", pid=4242)
+    resp = HandshakeResponse(
+        ok=True,
+        daemon_version="1.0.0",
+        pid=4242,
+        capabilities=["member-readonly-v1"],
+    )
     decoded = decode_response(encode_response(resp))
     assert isinstance(decoded, HandshakeResponse)
     assert decoded.ok is True
     assert decoded.daemon_version == "1.0.0"
     assert decoded.pid == 4242
+    assert decoded.capabilities == ["member-readonly-v1"]
 
 
 def test_decode_handshake_response_from_pre_0_2_38_daemon() -> None:
@@ -77,6 +83,7 @@ def test_decode_handshake_response_from_pre_0_2_38_daemon() -> None:
     assert decoded.ok is False
     assert decoded.pid is None
     assert decoded.daemon_version == "0.2.37"
+    assert decoded.capabilities == []
 
 
 def test_encode_decode_search_request_with_defaults() -> None:
@@ -87,6 +94,35 @@ def test_encode_decode_search_request_with_defaults() -> None:
     assert decoded.languages is None
     assert decoded.limit == 5
     assert decoded.offset == 0
+    assert decoded.allow_indexing is True
+    assert decoded.index_db_path is None
+
+
+def test_decode_search_request_from_pre_member_client() -> None:
+    """Older clients omit the member-policy fields; defaults keep load-time indexing."""
+    old_request = msgspec.msgpack.encode(
+        {
+            "type": "search",
+            "project_root": "/tmp",
+            "query": "authentication",
+            "languages": None,
+            "paths": None,
+            "limit": 5,
+            "offset": 0,
+        }
+    )
+    decoded = decode_request(old_request)
+    assert isinstance(decoded, SearchRequest)
+    assert decoded.allow_indexing is True
+    assert decoded.index_db_path is None
+
+
+def test_decode_project_status_request_from_pre_member_client() -> None:
+    old_request = msgspec.msgpack.encode({"type": "project_status", "project_root": "/tmp"})
+    decoded = decode_request(old_request)
+    assert isinstance(decoded, ProjectStatusRequest)
+    assert decoded.allow_indexing is True
+    assert decoded.index_db_path is None
 
 
 def test_encode_decode_search_request_with_all_fields() -> None:
@@ -97,6 +133,8 @@ def test_encode_decode_search_request_with_all_fields() -> None:
         paths=["src/*"],
         limit=20,
         offset=5,
+        allow_indexing=False,
+        index_db_path="/shared/index/target_sqlite.db",
     )
     data = encode_request(req)
     decoded = decode_request(data)
@@ -107,6 +145,8 @@ def test_encode_decode_search_request_with_all_fields() -> None:
     assert decoded.paths == ["src/*"]
     assert decoded.limit == 20
     assert decoded.offset == 5
+    assert decoded.allow_indexing is False
+    assert decoded.index_db_path == "/shared/index/target_sqlite.db"
 
 
 def test_encode_decode_search_response_with_results() -> None:

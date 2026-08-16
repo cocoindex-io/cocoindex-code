@@ -19,6 +19,7 @@ from cocoindex_code.settings import (
     ChunkerMapping,
     DaemonSettings,
     EmbeddingSettings,
+    IndexingRole,
     LanguageOverride,
     ProjectSettings,
     UserSettings,
@@ -31,11 +32,13 @@ from cocoindex_code.settings import (
     find_project_root,
     format_path_for_display,
     get_host_path_mappings,
+    get_indexing_role,
     load_project_settings,
     load_user_settings,
     normalize_input_path,
     parse_file_size,
     resolve_db_dir,
+    resolve_mapped_db_dir,
     save_project_settings,
     save_user_settings,
 )
@@ -70,6 +73,28 @@ def test_default_project_settings() -> None:
     assert s.include_patterns == DEFAULT_INCLUDED_PATTERNS
     assert s.exclude_patterns == DEFAULT_EXCLUDED_PATTERNS
     assert s.language_overrides == []
+
+
+def test_indexing_role_defaults_to_leader(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("COCOINDEX_CODE_INDEXING_ROLE", raising=False)
+    assert get_indexing_role() is IndexingRole.LEADER
+
+
+def test_indexing_role_reads_member_case_insensitively(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COCOINDEX_CODE_INDEXING_ROLE", " Member ")
+    assert get_indexing_role() is IndexingRole.MEMBER
+
+
+def test_indexing_role_rejects_unknown_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COCOINDEX_CODE_INDEXING_ROLE", "reader")
+    with pytest.raises(ValueError, match="leader, member"):
+        get_indexing_role()
+
+
+def test_indexing_role_rejects_empty_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COCOINDEX_CODE_INDEXING_ROLE", "   ")
+    with pytest.raises(ValueError, match="leader, member"):
+        get_indexing_role()
 
 
 def test_default_included_patterns_cover_dart() -> None:
@@ -301,12 +326,14 @@ class TestResolveDbDir:
 
     def test_no_mapping(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
+        assert resolve_mapped_db_dir(project) is None
         assert resolve_db_dir(project) == project / ".cocoindex_code"
 
     def test_single_mapping_match(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         src = tmp_path / "workspace"
         dst = tmp_path / "db-files"
         monkeypatch.setenv("COCOINDEX_CODE_DB_PATH_MAPPING", f"{src}={dst}")
+        assert resolve_mapped_db_dir(src / "myproject") == dst / "myproject"
         assert resolve_db_dir(src / "myproject") == dst / "myproject"
 
     def test_exact_root_match(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -30,6 +30,7 @@ from ._daemon_paths import (
 )
 from ._version import __version__
 from .protocol import (
+    MEMBER_READONLY_CAPABILITY,
     DaemonEnvRequest,
     DaemonEnvResponse,
     DaemonStatusResponse,
@@ -59,7 +60,13 @@ from .protocol import (
     decode_response,
     encode_request,
 )
-from .settings import normalize_input_path
+from .settings import (
+    IndexingRole,
+    get_indexing_role,
+    normalize_input_path,
+    resolve_mapped_db_dir,
+    target_sqlite_db_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +288,14 @@ def _raw_connect_and_handshake() -> _HandshakeResult:
     if not resp.ok or _needs_restart(resp):
         conn.close()
         raise DaemonVersionError(resp)
+    if (
+        get_indexing_role() is IndexingRole.MEMBER
+        and MEMBER_READONLY_CAPABILITY not in resp.capabilities
+    ):
+        conn.close()
+        raise DaemonProtocolError(
+            "Daemon does not support request-scoped member read-only searches; restart required"
+        )
     _print_handshake_warnings(resp)
     return _HandshakeResult(conn=conn, resp=resp)
 
@@ -362,12 +377,40 @@ def _send(req: Request) -> Response:
 # ---------------------------------------------------------------------------
 
 
+class IndexingDisabledError(RuntimeError):
+    """Raised when a member runtime attempts an indexing operation."""
+
+
+def ensure_indexing_allowed() -> None:
+    """Reject indexing before connecting to (or auto-starting) the daemon."""
+    if get_indexing_role() is IndexingRole.MEMBER:
+        raise IndexingDisabledError(
+            "Indexing is disabled because COCOINDEX_CODE_INDEXING_ROLE=member. "
+            "Ask the team leader to publish a new shared index snapshot."
+        )
+
+
+def _request_index_policy(project_root: str) -> tuple[bool, str | None]:
+    """Return request-scoped indexing permission and member snapshot path."""
+    if get_indexing_role() is IndexingRole.LEADER:
+        return True, None
+
+    root = Path(project_root)
+    if resolve_mapped_db_dir(root) is None:
+        raise RuntimeError(
+            "COCOINDEX_CODE_INDEXING_ROLE=member requires a matching "
+            "COCOINDEX_CODE_DB_PATH_MAPPING entry; refusing to fall back to a local index."
+        )
+    return False, str(target_sqlite_db_path(root))
+
+
 def index(
     project_root: str,
     on_progress: Callable[[IndexingProgress], None] | None = None,
     on_waiting: Callable[[], None] | None = None,
 ) -> IndexResponse:
     """Request indexing with streaming progress. Blocks until complete."""
+    ensure_indexing_allowed()
     project_root = normalize_input_path(project_root)
     conn = _connect_and_handshake()
     try:
@@ -411,6 +454,7 @@ def search(
     until the final ``SearchResponse``.
     """
     project_root = normalize_input_path(project_root)
+    allow_indexing, index_db_path = _request_index_policy(project_root)
     conn = _connect_and_handshake()
     try:
         conn.send_bytes(
@@ -422,6 +466,8 @@ def search(
                     paths=paths,
                     limit=limit,
                     offset=offset,
+                    allow_indexing=allow_indexing,
+                    index_db_path=index_db_path,
                 )
             )
         )
@@ -445,7 +491,15 @@ def search(
 
 
 def project_status(project_root: str) -> ProjectStatusResponse:
-    return _send(ProjectStatusRequest(project_root=normalize_input_path(project_root)))  # type: ignore[return-value]
+    project_root = normalize_input_path(project_root)
+    allow_indexing, index_db_path = _request_index_policy(project_root)
+    return _send(  # type: ignore[return-value]
+        ProjectStatusRequest(
+            project_root=project_root,
+            allow_indexing=allow_indexing,
+            index_db_path=index_db_path,
+        )
+    )
 
 
 def daemon_status() -> DaemonStatusResponse:

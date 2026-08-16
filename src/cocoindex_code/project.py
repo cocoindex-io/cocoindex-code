@@ -203,10 +203,16 @@ class Project:
     ) -> list[SearchResult]:
         """Search within this project."""
         target_db = _target_sqlite_db_path(self._project_root)
+        if not target_db.is_file():
+            raise RuntimeError(
+                f"Index database not found at {target_db}. "
+                "Please refresh the index before searching."
+            )
         results = await query_codebase(
             query=query,
-            target_sqlite_db_path=target_db,
-            env=self._env,
+            db=self._env.get_context(SQLITE_DB),
+            embedder=self._env.get_context(EMBEDDER),
+            query_params=self._env.get_context(QUERY_EMBED_PARAMS),
             limit=limit,
             offset=offset,
             languages=languages,

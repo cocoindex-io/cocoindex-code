@@ -221,6 +221,17 @@ def print_search_results(response: SearchResponse) -> None:
         _echo_search_text(r.content)
 
 
+def _require_indexing_allowed() -> None:
+    """Render member-mode indexing rejection as a normal CLI error."""
+    from . import client as _client
+
+    try:
+        _client.ensure_indexing_allowed()
+    except (ValueError, _client.IndexingDisabledError) as exc:
+        _typer.echo(f"Error: {exc}", err=True)
+        raise _typer.Exit(code=1)
+
+
 def _run_index_with_progress(project_root: str) -> None:
     """Run indexing with streaming progress display. Exits on failure."""
     from rich.console import Console as _Console
@@ -649,6 +660,9 @@ def index() -> None:
     """Create/update index for the codebase."""
     from . import client as _client
 
+    # Check before auto-init so a member command cannot write project settings
+    # as a side effect of an indexing operation that will ultimately be denied.
+    _require_indexing_allowed()
     project_root = str(require_project_root(auto_init=True))
     print_project_header(project_root)
     _run_index_with_progress(project_root)
@@ -671,6 +685,9 @@ def search(
     query_str = " ".join(query)
 
     if refresh:
+        # Same fail-closed message as `ccc index` / `ccc reset`. Do not fall
+        # through to `_client.index()`, which would wrap this as "Indexing failed".
+        _require_indexing_allowed()
         _run_index_with_progress(project_root)
 
     # Default path filter from CWD
@@ -797,6 +814,9 @@ def reset(
     force: bool = _typer.Option(False, "-f", "--force", help="Skip confirmation"),
 ) -> None:
     """Reset project databases and optionally remove settings."""
+    # A mapped member DB is the team's published snapshot. Treat deletion as
+    # an index write and reject it before resolving or touching any paths.
+    _require_indexing_allowed()
     project_root = require_project_root()
     cocoindex_dir = project_root / ".cocoindex_code"
     db_dir = resolve_db_dir(project_root)
@@ -1032,16 +1052,23 @@ def mcp() -> None:
     """Run as MCP server (stdio mode)."""
     import asyncio
 
+    from .settings import IndexingRole, get_indexing_role
+
+    try:
+        role = get_indexing_role()
+    except ValueError as exc:
+        _typer.echo(f"Error: {exc}", err=True)
+        raise _typer.Exit(code=1)
+
     project_root = str(require_project_root())
 
     async def _run_mcp() -> None:
         from .server import create_mcp_server, run_heartbeat_loop
 
         mcp_server = create_mcp_server(project_root)
-        background_tasks = {
-            asyncio.create_task(_bg_index(project_root)),
-            asyncio.create_task(run_heartbeat_loop()),
-        }
+        background_tasks = {asyncio.create_task(run_heartbeat_loop())}
+        if role is IndexingRole.LEADER:
+            background_tasks.add(asyncio.create_task(_bg_index(project_root)))
         try:
             await mcp_server.run_stdio_async()
         finally:
@@ -1052,10 +1079,14 @@ def mcp() -> None:
 
 
 async def _bg_index(project_root: str) -> None:
-    """Index in background. Each call opens its own daemon connection."""
+    """Index in background unless this MCP runtime is a read-only member."""
     import asyncio
 
     from . import client as _client
+    from .settings import IndexingRole, get_indexing_role
+
+    if get_indexing_role() is IndexingRole.MEMBER:
+        return
 
     loop = asyncio.get_event_loop()
     try:

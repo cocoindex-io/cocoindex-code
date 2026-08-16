@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -202,6 +203,74 @@ def test_session_happy_path(e2e_project: Path) -> None:
     result = runner.invoke(app, ["daemon", "status"], catch_exceptions=False)
     assert result.exit_code == 0, result.output
     assert "Daemon version:" in result.output
+
+
+def test_member_searches_published_snapshot_without_local_indexing(e2e_project: Path) -> None:
+    """A member request uses its mapped snapshot even with a leader-started daemon."""
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    indexed = runner.invoke(app, ["index"], catch_exceptions=False)
+    assert indexed.exit_code == 0, indexed.output
+
+    shared_dir = e2e_project.parent / "shared-index" / "project"
+    shared_dir.mkdir(parents=True)
+    shutil.copy2(
+        e2e_project / ".cocoindex_code" / "target_sqlite.db",
+        shared_dir / "target_sqlite.db",
+    )
+
+    member_project = e2e_project.parent / "member-project"
+    member_project.mkdir()
+    save_project_settings(member_project, default_project_settings())
+
+    old_role = os.environ.get("COCOINDEX_CODE_INDEXING_ROLE")
+    old_mapping = os.environ.get("COCOINDEX_CODE_DB_PATH_MAPPING")
+    try:
+        os.environ["COCOINDEX_CODE_INDEXING_ROLE"] = "member"
+        os.environ["COCOINDEX_CODE_DB_PATH_MAPPING"] = f"{member_project}={shared_dir}"
+        _reset_db_path_mapping_cache()
+        os.chdir(member_project)
+
+        result = runner.invoke(app, ["search", "fibonacci"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        assert "main.py" in result.output
+
+        status = runner.invoke(app, ["status"], catch_exceptions=False)
+        assert status.exit_code == 0, status.output
+        assert "Chunks:" in status.output
+
+        # The already-running daemon must not create either indexing database
+        # for the fresh member project.
+        assert not (member_project / ".cocoindex_code" / "cocoindex.db").exists()
+        assert not (member_project / ".cocoindex_code" / "target_sqlite.db").exists()
+
+        snapshot = shared_dir / "target_sqlite.db"
+        snapshot_bytes = snapshot.read_bytes()
+
+        rejected = runner.invoke(app, ["index"], catch_exceptions=False)
+        assert rejected.exit_code == 1
+        assert rejected.output.startswith("Error: Indexing is disabled")
+
+        refresh = runner.invoke(app, ["search", "fibonacci", "--refresh"], catch_exceptions=False)
+        assert refresh.exit_code == 1
+        assert refresh.output.startswith("Error: Indexing is disabled")
+        assert "Indexing failed" not in refresh.output
+
+        reset = runner.invoke(app, ["reset", "--force"], catch_exceptions=False)
+        assert reset.exit_code == 1
+        assert reset.output.startswith("Error: Indexing is disabled")
+        assert snapshot.is_file()
+        assert snapshot.read_bytes() == snapshot_bytes
+    finally:
+        os.chdir(e2e_project)
+        if old_role is None:
+            os.environ.pop("COCOINDEX_CODE_INDEXING_ROLE", None)
+        else:
+            os.environ["COCOINDEX_CODE_INDEXING_ROLE"] = old_role
+        if old_mapping is None:
+            os.environ.pop("COCOINDEX_CODE_DB_PATH_MAPPING", None)
+        else:
+            os.environ["COCOINDEX_CODE_DB_PATH_MAPPING"] = old_mapping
+        _reset_db_path_mapping_cache()
 
 
 def test_session_incremental_index(e2e_project: Path) -> None:
