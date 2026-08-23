@@ -138,6 +138,19 @@ mcps = false
 mcps = false
 ```
 
+#### Oh My Pi plugin
+
+[Oh My Pi](https://github.com/can1357/oh-my-pi) reads `.omp-plugin/marketplace.json` (preferred) and falls back to `.claude-plugin/marketplace.json`.
+
+```bash
+omp plugin marketplace add cocoindex-io/cocoindex-code
+omp plugin install cocoindex-code@cocoindex-code --scope project
+```
+
+Then `/reload-plugins` (or restart the session). The plugin loads the `ccc` skill and the bundled MCP server (`ccc mcp`). Requires `ccc` on `PATH` (`uv tool install --upgrade 'cocoindex-code[full]'`).
+
+Skill-only (no MCP): install the skill via `npx skills add cocoindex-io/cocoindex-code`, or run `ccc search` / `ccc index` from the shell.
+
 ### MCP Server
 
 Alternatively, use `ccc mcp` to run as an MCP server:
@@ -196,6 +209,23 @@ Add a local MCP server in `~/.config/kilo/kilo.jsonc`, `kilo.jsonc`, or `.kilo/k
       "type": "local",
       "command": ["ccc", "mcp"],
       "enabled": true
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary>Oh My Pi</summary>
+
+Prefer the marketplace install above. Manual project MCP (`.omp/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "cocoindex-code": {
+      "command": "ccc",
+      "args": ["mcp"]
     }
   }
 }
