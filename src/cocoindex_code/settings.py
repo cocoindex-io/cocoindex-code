@@ -38,6 +38,8 @@ DEFAULT_INCLUDED_PATTERNS: list[str] = [
     "**/*.hh",  # C++ headers
     "**/*.cs",  # C#
     "**/*.dart",  # Dart
+    "**/*.ex",  # Elixir
+    "**/*.exs",  # Elixir scripts
     "**/*.sql",  # SQL
     "**/*.sh",  # Shell
     "**/*.bash",  # Bash

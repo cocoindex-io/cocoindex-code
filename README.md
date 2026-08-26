@@ -836,6 +836,7 @@ embedding:
 | css | | `.css`, `.scss` |
 | dart | | `.dart` |
 | dtd | | `.dtd` |
+| elixir | | `.ex`, `.exs` |
 | fortran | f, f90, f95, f03 | `.f`, `.f90`, `.f95`, `.f03` |
 | go | golang | `.go` |
 | html | | `.html`, `.htm` |
