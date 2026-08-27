@@ -11,7 +11,15 @@ import pytest
 
 from cocoindex_code import client
 from cocoindex_code._daemon_paths import LastExitMarker
-from cocoindex_code.protocol import HandshakeResponse
+from cocoindex_code.protocol import (
+    HandshakeResponse,
+    ProjectStatusRequest,
+    ProjectStatusResponse,
+    SearchRequest,
+    SearchResponse,
+    decode_request,
+    encode_response,
+)
 
 
 def test_client_connect_refuses_when_no_daemon(
@@ -23,6 +31,149 @@ def test_client_connect_refuses_when_no_daemon(
 
     with pytest.raises(ConnectionRefusedError):
         client._raw_connect_and_handshake()
+
+
+def test_member_index_is_rejected_before_daemon_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COCOINDEX_CODE_INDEXING_ROLE", "member")
+    monkeypatch.setattr(
+        client,
+        "_connect_and_handshake",
+        lambda: pytest.fail("member indexing must not connect to the daemon"),
+    )
+
+    with pytest.raises(client.IndexingDisabledError, match="team leader"):
+        client.index("/tmp/project")
+
+
+def test_member_search_sends_readonly_snapshot_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COCOINDEX_CODE_INDEXING_ROLE", "member")
+    snapshot = tmp_path / "shared" / "target_sqlite.db"
+    monkeypatch.setattr(client, "resolve_mapped_db_dir", lambda _root: snapshot.parent)
+    monkeypatch.setattr(client, "target_sqlite_db_path", lambda _root: snapshot)
+
+    class _FakeConnection:
+        sent: bytes | None = None
+
+        def send_bytes(self, data: bytes) -> None:
+            self.sent = data
+
+        def recv_bytes(self) -> bytes:
+            return cast(bytes, encode_response(SearchResponse(success=True)))
+
+        def close(self) -> None:
+            pass
+
+    conn = _FakeConnection()
+    monkeypatch.setattr(client, "_connect_and_handshake", lambda: cast(Connection, conn))
+
+    response = client.search("/tmp/project", "authentication")
+
+    assert response.success is True
+    assert conn.sent is not None
+    request = decode_request(conn.sent)
+    assert isinstance(request, SearchRequest)
+    assert request.allow_indexing is False
+    assert request.index_db_path == str(snapshot)
+
+
+def test_member_search_refuses_local_db_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COCOINDEX_CODE_INDEXING_ROLE", "member")
+    monkeypatch.setattr(client, "resolve_mapped_db_dir", lambda _root: None)
+    monkeypatch.setattr(
+        client,
+        "_connect_and_handshake",
+        lambda: pytest.fail("invalid member configuration must not connect"),
+    )
+
+    with pytest.raises(RuntimeError, match="refusing to fall back to a local index"):
+        client.search("/tmp/project", "authentication")
+
+
+def test_member_project_status_sends_readonly_snapshot_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COCOINDEX_CODE_INDEXING_ROLE", "member")
+    snapshot = tmp_path / "shared" / "target_sqlite.db"
+    monkeypatch.setattr(client, "resolve_mapped_db_dir", lambda _root: snapshot.parent)
+    monkeypatch.setattr(client, "target_sqlite_db_path", lambda _root: snapshot)
+
+    class _FakeConnection:
+        sent: bytes | None = None
+
+        def send_bytes(self, data: bytes) -> None:
+            self.sent = data
+
+        def recv_bytes(self) -> bytes:
+            return cast(
+                bytes,
+                encode_response(
+                    ProjectStatusResponse(
+                        indexing=False,
+                        total_chunks=0,
+                        total_files=0,
+                        languages={},
+                        index_exists=False,
+                    )
+                ),
+            )
+
+        def close(self) -> None:
+            pass
+
+    conn = _FakeConnection()
+    monkeypatch.setattr(client, "_connect_and_handshake", lambda: cast(Connection, conn))
+
+    response = client.project_status("/tmp/project")
+
+    assert response.index_exists is False
+    assert conn.sent is not None
+    request = decode_request(conn.sent)
+    assert isinstance(request, ProjectStatusRequest)
+    assert request.allow_indexing is False
+    assert request.index_db_path == str(snapshot)
+
+
+def test_member_rejects_same_version_daemon_without_readonly_capability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COCOINDEX_CODE_INDEXING_ROLE", "member")
+    socket_path = tmp_path / "daemon.sock"
+    socket_path.touch()
+    monkeypatch.setattr(client, "daemon_socket_path", lambda: str(socket_path))
+    monkeypatch.setattr("cocoindex_code.settings.global_settings_mtime_us", lambda: None)
+
+    class _OldDaemonConnection:
+        closed = False
+
+        def send_bytes(self, _data: bytes) -> None:
+            pass
+
+        def recv_bytes(self) -> bytes:
+            return cast(
+                bytes,
+                encode_response(
+                    HandshakeResponse(
+                        ok=True,
+                        daemon_version=client.__version__,
+                        pid=42,
+                        global_settings_mtime_us=None,
+                    )
+                ),
+            )
+
+        def close(self) -> None:
+            self.closed = True
+
+    conn = _OldDaemonConnection()
+    monkeypatch.setattr(client, "Client", lambda *_args, **_kwargs: cast(Connection, conn))
+
+    with pytest.raises(client.DaemonProtocolError, match="restart required"):
+        client._raw_connect_and_handshake()
+    assert conn.closed is True
 
 
 def test_is_daemon_supervised_reads_env_var(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import io
+import json
+import os
+import stat
+import subprocess
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from cocoindex_code import cli
 from cocoindex_code.cli import (
     add_to_gitignore,
+    app,
     remove_from_gitignore,
     require_project_root,
     resolve_default_path,
@@ -550,3 +556,88 @@ def test_resolve_embedding_choice_validates_st_model(
     assert callable(validate)
     assert validate("ollama/nomic-embed-text") is not True  # rejected (returns message)
     assert validate("Snowflake/snowflake-arctic-embed-xs") is True
+
+
+def test_member_index_is_rejected_before_auto_init(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    standalone = tmp_path / "standalone"
+    standalone.mkdir()
+    monkeypatch.chdir(standalone)
+    settings_dir = tmp_path / "ccc_home"
+    settings_dir.mkdir()
+    (settings_dir / "global_settings.yml").write_text(
+        "embedding:\n  model: test\n  provider: litellm\n"
+    )
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(settings_dir))
+    monkeypatch.setenv("COCOINDEX_CODE_INDEXING_ROLE", "member")
+    monkeypatch.setattr(
+        cli,
+        "require_project_root",
+        lambda **_kwargs: pytest.fail("member index must not auto-init a project"),
+    )
+
+    result = CliRunner().invoke(app, ["index"], catch_exceptions=False)
+
+    assert result.exit_code == 1
+    assert "Indexing is disabled" in result.output
+    assert not (standalone / ".cocoindex_code").exists()
+
+
+def test_member_search_refresh_uses_the_same_indexing_disabled_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    (project / ".cocoindex_code").mkdir(parents=True)
+    (project / ".cocoindex_code" / "settings.yml").write_text("include_patterns: []\n")
+    monkeypatch.chdir(project)
+    settings_dir = tmp_path / "ccc_home"
+    settings_dir.mkdir()
+    (settings_dir / "global_settings.yml").write_text(
+        "embedding:\n  model: test\n  provider: litellm\n"
+    )
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", str(settings_dir))
+    monkeypatch.setenv("COCOINDEX_CODE_INDEXING_ROLE", "member")
+    monkeypatch.setattr(
+        cli,
+        "_run_index_with_progress",
+        lambda _project_root: pytest.fail("member search --refresh must not index"),
+    )
+
+    result = CliRunner().invoke(
+        app, ["search", "authentication", "--refresh"], catch_exceptions=False
+    )
+
+    assert result.exit_code == 1
+    assert result.output.startswith("Error: Indexing is disabled")
+    assert "Indexing failed" not in result.output
+
+
+def test_session_start_hook_skips_member_role(tmp_path: Path) -> None:
+    hooks = json.loads((Path(__file__).resolve().parents[1] / "hooks" / "hooks.json").read_text())
+    command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    assert "COCOINDEX_CODE_INDEXING_ROLE" in command
+    assert "ccc index" in command
+
+    project = tmp_path / "project"
+    (project / ".cocoindex_code").mkdir(parents=True)
+    marker = tmp_path / "indexed"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_ccc = fake_bin / "ccc"
+    fake_ccc.write_text('#!/bin/sh\nprintf indexed > "$MARKER"\n')
+    fake_ccc.chmod(fake_ccc.stat().st_mode | stat.S_IEXEC)
+
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+        "CLAUDE_PROJECT_DIR": str(project),
+        "MARKER": str(marker),
+        "COCOINDEX_CODE_INDEXING_ROLE": "member",
+    }
+    subprocess.run(["sh", "-c", command], check=True, env=env)
+    assert not marker.exists()
+
+    env["COCOINDEX_CODE_INDEXING_ROLE"] = "leader"
+    subprocess.run(["sh", "-c", command], check=True, env=env)
+    assert marker.read_text() == "indexed"

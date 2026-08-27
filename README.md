@@ -97,8 +97,8 @@ For [Grok](https://github.com/xai-org/grok) users, install via Grok's plugin sys
 | Component | Purpose |
 |-----------|---------|
 | **Skill** (`skills/ccc/`) | Agent runs `ccc search` / `ccc index` via the CLI (same as Claude Code above) |
-| **Hook** (`hooks/hooks.json`) | `SessionStart` → incremental `ccc index` when `.cocoindex_code/` exists |
-| **MCP** (`.mcp.json`) | `ccc mcp` stdio server — `search` tool with `refresh_index=true` by default |
+| **Hook** (`hooks/hooks.json`) | `SessionStart` → incremental `ccc index` when `.cocoindex_code/` exists. Skips when the parent process has `COCOINDEX_CODE_INDEXING_ROLE=member`. |
+| **MCP** (`.mcp.json`) | `ccc mcp` stdio server — `search` tool. Leader default is `refresh_index=true`; member default is `false` and `true` is ignored. |
 
 Grok does **not** import Claude's `enabledPlugins` or plugin cache; install separately even if you already use cocoindex in Claude Code.
 
@@ -248,7 +248,7 @@ search(
     query: str,                          # Natural language query or code snippet
     limit: int = 5,                      # Maximum results (1-100)
     offset: int = 0,                     # Pagination offset
-    refresh_index: bool = True,          # Refresh index before querying
+    refresh_index: bool = True,          # Leader default. Member default False; True is ignored
     languages: list[str] | None = None,  # Filter by language (e.g. ["python", "typescript"])
     paths: list[str] | None = None,      # Filter by path glob (e.g. ["src/utils/*"])
 )
@@ -883,6 +883,105 @@ COCOINDEX_CODE_DB_PATH_MAPPING=/workspace=/db-files,/workspace2=/db-files2
 ```
 
 Both source and target must be absolute paths. If no mapping matches, the default location is used.
+
+### One-writer team snapshots (experimental)
+
+A team can designate one machine as the index writer and let everyone else search a
+published `target_sqlite.db` snapshot. This is useful when source changes do not need to
+be indexed on every developer machine.
+
+> Mounted filesystems such as SMB are not the recommended database backend for
+> CocoIndex. The snapshot workflow below avoids updating a live shared SQLite/LMDB
+> database, but the share must support atomic same-directory replacement. Test this
+> with your SMB server and client versions before relying on it.
+
+#### Member MCP configuration
+
+Set the indexing role and map the member's local project path to the directory containing
+the published snapshot. `leader` is the default, so existing configurations keep their
+current behavior.
+
+```json
+{
+  "mcpServers": {
+    "cocoindex-code": {
+      "command": "ccc",
+      "args": ["mcp"],
+      "env": {
+        "COCOINDEX_CODE_INDEXING_ROLE": "member",
+        "COCOINDEX_CODE_DB_PATH_MAPPING": "/Users/bob/src/myrepo=/Volumes/team/ccc-indexes/myrepo"
+      }
+    }
+  }
+}
+```
+
+In `member` mode:
+
+- MCP startup does not run background indexing.
+- MCP searches never refresh or trigger load-time indexing, even if
+  `refresh_index=true` is requested.
+- The published SQLite snapshot is opened read-only with a fresh connection for each
+  query, so the next query observes an atomically replaced snapshot.
+- `ccc index`, `ccc search --refresh`, and `ccc reset` are rejected **when that command
+  process also has** `COCOINDEX_CODE_INDEXING_ROLE=member`.
+- A missing or unreadable snapshot returns an error instead of creating a local index.
+
+The role is process-local. An `env` block in `.mcp.json` affects the MCP process only;
+it does not affect `ccc` commands launched from a shell. The bundled `SessionStart`
+hook inherits the parent agent environment and skips `ccc index` when that process has
+`COCOINDEX_CODE_INDEXING_ROLE=member`. Export the variable there, or disable the hook
+and install only the skill plus a manually configured MCP server. Filesystem write
+permissions on the published directory are still recommended as a second safety layer.
+
+Member mode requires a matching `COCOINDEX_CODE_DB_PATH_MAPPING` entry and refuses to
+fall back to a project-local index. All members must use the same embedding provider,
+model, and query parameters as the leader. Each member may have a different local source
+path; map that path to the same
+published directory on every machine. The member sends the resolved snapshot path with
+each request, so the policy still works if its long-lived daemon was started before the
+MCP process.
+
+#### Leader: index locally, then publish
+
+Keep both working databases on a leader-local filesystem. `cocoindex.db` is CocoIndex's
+incremental state and should **not** be published or opened over SMB. After the daily
+incremental run completes, make a consistent backup of `target_sqlite.db` into a temporary
+file on the share and atomically replace the published snapshot:
+
+```bash
+ccc index
+
+export CCC_SOURCE_DB="$PWD/.cocoindex_code/target_sqlite.db"
+export CCC_SHARED_DB="/Volumes/team/ccc-indexes/myrepo/target_sqlite.db"
+python3 - <<'PY'
+import os
+import sqlite3
+from pathlib import Path
+
+source = Path(os.environ["CCC_SOURCE_DB"])
+destination = Path(os.environ["CCC_SHARED_DB"])
+destination.parent.mkdir(parents=True, exist_ok=True)
+staged = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+staged.unlink(missing_ok=True)
+
+try:
+    source_uri = f"{source.resolve().as_uri()}?mode=ro"
+    with sqlite3.connect(source_uri, uri=True) as source_db:
+        with sqlite3.connect(staged) as staged_db:
+            source_db.backup(staged_db)
+    # The temporary file and destination must be on the same mounted filesystem.
+    os.replace(staged, destination)
+finally:
+    staged.unlink(missing_ok=True)
+PY
+```
+
+Schedule the combined index-and-publish job daily on the leader. Do not copy directly
+over `target_sqlite.db`: readers could otherwise observe a partial file. A query already
+in progress during `os.replace` finishes against its previously opened complete snapshot;
+the next member query opens the newly published one. Exact replacement semantics remain
+dependent on the mounted filesystem.
 
 ## Troubleshooting
 

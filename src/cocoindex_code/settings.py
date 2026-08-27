@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -194,6 +195,29 @@ _USER_SETTINGS_FILE_NAME = "global_settings.yml"  # user-level
 
 _ENV_DB_PATH_MAPPING = "COCOINDEX_CODE_DB_PATH_MAPPING"
 _ENV_HOST_PATH_MAPPING = "COCOINDEX_CODE_HOST_PATH_MAPPING"
+_ENV_INDEXING_ROLE = "COCOINDEX_CODE_INDEXING_ROLE"
+
+
+class IndexingRole(StrEnum):
+    """Whether this client runtime may update indexes."""
+
+    LEADER = "leader"
+    MEMBER = "member"
+
+
+def get_indexing_role() -> IndexingRole:
+    """Read the per-process indexing role (default: ``leader``).
+
+    The role deliberately comes from the process environment rather than a
+    project or user settings file: an MCP entry can be read-only without
+    changing the shared project configuration or other local invocations.
+    """
+    raw = os.environ.get(_ENV_INDEXING_ROLE, IndexingRole.LEADER.value).strip().lower()
+    try:
+        return IndexingRole(raw)
+    except ValueError as exc:
+        choices = ", ".join(role.value for role in IndexingRole)
+        raise ValueError(f"{_ENV_INDEXING_ROLE} must be one of: {choices}; got {raw!r}") from exc
 
 
 @dataclass
@@ -255,12 +279,8 @@ _db_path_mapping: list[PathMapping] | None = None
 _host_path_mapping: list[PathMapping] | None = None
 
 
-def resolve_db_dir(project_root: Path) -> Path:
-    """Return the directory for database files given a project root.
-
-    Applies ``COCOINDEX_CODE_DB_PATH_MAPPING`` if set, otherwise falls back
-    to ``project_root / ".cocoindex_code"``.
-    """
+def resolve_mapped_db_dir(project_root: Path) -> Path | None:
+    """Return the explicitly mapped DB directory, or ``None`` if unmatched."""
     global _db_path_mapping  # noqa: PLW0603
     if _db_path_mapping is None:
         _db_path_mapping = _parse_path_mapping(_ENV_DB_PATH_MAPPING)
@@ -270,7 +290,16 @@ def resolve_db_dir(project_root: Path) -> Path:
         if resolved == mapping.source or resolved.is_relative_to(mapping.source):
             rel = resolved.relative_to(mapping.source)
             return mapping.target / rel
-    return project_root / _SETTINGS_DIR_NAME
+    return None
+
+
+def resolve_db_dir(project_root: Path) -> Path:
+    """Return the directory for database files given a project root.
+
+    Applies ``COCOINDEX_CODE_DB_PATH_MAPPING`` if set, otherwise falls back
+    to ``project_root / ".cocoindex_code"``.
+    """
+    return resolve_mapped_db_dir(project_root) or project_root / _SETTINGS_DIR_NAME
 
 
 def get_db_path_mappings() -> list[PathMapping]:

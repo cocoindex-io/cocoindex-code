@@ -7,8 +7,11 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from cocoindex.connectors import sqlite as coco_sqlite
+from cocoindex.connectors.sqlite import ManagedConnection
+
 from .schema import QueryResult
-from .shared import EMBEDDER, QUERY_EMBED_PARAMS, SQLITE_DB
+from .shared import Embedder
 
 
 def _l2_to_score(distance: float) -> float:
@@ -117,31 +120,20 @@ def _full_scan_query(
 
 async def query_codebase(
     query: str,
-    target_sqlite_db_path: Path,
-    env: Any,
+    db: ManagedConnection,
+    embedder: Embedder,
+    query_params: dict[str, Any],
     limit: int = 10,
     offset: int = 0,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
 ) -> list[QueryResult]:
+    """Perform vector similarity search using vec0 KNN index.
+
+    Database and embedding dependencies are explicit so member-mode searches
+    can use a short-lived read-only SQLite connection without constructing a
+    CocoIndex app or opening its LMDB state database.
     """
-    Perform vector similarity search using vec0 KNN index.
-
-    Uses sqlite-vec's vec0 virtual table for indexed nearest-neighbor search.
-    Language filtering uses vec0 partition keys for exact index-level filtering.
-    Path filtering triggers a full scan with distance computation.
-    """
-    if not target_sqlite_db_path.exists():
-        raise RuntimeError(
-            f"Index database not found at {target_sqlite_db_path}. "
-            "Please run a query with refresh_index=True first."
-        )
-
-    db = env.get_context(SQLITE_DB)
-    embedder = env.get_context(EMBEDDER)
-    query_params = env.get_context(QUERY_EMBED_PARAMS)
-
-    # Generate query embedding.
     query_embedding = await embedder.embed(query, **query_params)
 
     embedding_bytes = query_embedding.astype("float32").tobytes()
@@ -178,3 +170,56 @@ async def query_codebase(
         )
         for file_path, language, content, start_line, end_line, distance in rows
     ]
+
+
+def open_readonly_index(path: Path) -> ManagedConnection:
+    """Open an existing index without creating or modifying any DB files."""
+    if not path.is_file():
+        raise RuntimeError(
+            f"Shared index database not found at {path}. Indexing is disabled for this "
+            "member runtime; ask the team leader to publish an index snapshot."
+        )
+
+    # `mode=ro` is enforced by SQLite itself. A fresh connection per request
+    # also means an atomically replaced snapshot is observed on the next query
+    # instead of keeping the old file handle cached in the daemon.
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    db: ManagedConnection | None = None
+    try:
+        db = coco_sqlite.connect(uri, uri=True, load_vec=True)
+        with db.readonly() as conn:
+            conn.execute("PRAGMA query_only = ON")
+        return db
+    except Exception as exc:
+        if db is not None:
+            db.close()
+        raise RuntimeError(
+            f"Unable to open shared index database read-only at {path}: {exc}"
+        ) from exc
+
+
+async def query_codebase_readonly(
+    query: str,
+    target_sqlite_db_path: Path,
+    embedder: Embedder,
+    query_params: dict[str, Any],
+    limit: int = 10,
+    offset: int = 0,
+    languages: list[str] | None = None,
+    paths: list[str] | None = None,
+) -> list[QueryResult]:
+    """Search a published snapshot through a fresh read-only connection."""
+    db = open_readonly_index(target_sqlite_db_path)
+    try:
+        return await query_codebase(
+            query=query,
+            db=db,
+            embedder=embedder,
+            query_params=query_params,
+            limit=limit,
+            offset=offset,
+            languages=languages,
+            paths=paths,
+        )
+    finally:
+        db.close()
