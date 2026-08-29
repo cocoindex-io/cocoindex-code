@@ -714,6 +714,24 @@ Don't append `/embeddings` to the base URL — LiteLLM handles that.
 </details>
 
 <details>
+<summary>OrcaRouter</summary>
+
+[OrcaRouter](https://www.orcarouter.ai) is an OpenAI-compatible AI gateway that exposes provider-prefixed model names (`openai/…`, `google/…`, …) across many models. Point `OPENAI_BASE_URL` at OrcaRouter and set the model to `openai/<model-id>` — LiteLLM strips the leading `openai/` and forwards the OrcaRouter model id (e.g. `openai/text-embedding-3-small`) untouched:
+
+```yaml
+embedding:
+  model: openai/openai/text-embedding-3-small
+  min_interval_ms: 300                               # optional: pace requests to stay within your plan
+envs:
+  OPENAI_BASE_URL: https://api.orcarouter.ai/v1
+  OPENAI_API_KEY: your-api-key
+```
+
+The double `openai/` prefix is intentional: LiteLLM removes one `openai/` and OrcaRouter resolves the remaining provider-qualified id (`openai/text-embedding-3-small`). Any OrcaRouter embedding model works the same way, e.g. `openai/google/gemini-embedding-001`.
+
+</details>
+
+<details>
 <summary>Azure OpenAI</summary>
 
 ```yaml
