@@ -198,6 +198,7 @@ class Project:
         query: str,
         languages: list[str] | None = None,
         paths: list[str] | None = None,
+        exclude_paths: list[str] | None = None,
         limit: int = 5,
         offset: int = 0,
     ) -> list[SearchResult]:
@@ -211,6 +212,7 @@ class Project:
             offset=offset,
             languages=languages,
             paths=paths,
+            exclude_paths=exclude_paths,
         )
         return [
             SearchResult(

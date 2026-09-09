@@ -120,6 +120,13 @@ def create_mcp_server(project_root: str) -> MCPServer:
                 " Example: ['src/utils/*', '*.py']"
             ),
         ),
+        exclude_paths: list[str] | None = Field(
+            default=None,
+            description=(
+                "Exclude file path pattern(s) using GLOB wildcards (* and ?)."
+                " Example: ['i18n/locales/*', '*.min.js']"
+            ),
+        ),
     ) -> SearchResultModel:
         """Query the codebase index via the daemon."""
         from . import client as _client
@@ -135,6 +142,7 @@ def create_mcp_server(project_root: str) -> MCPServer:
                     query=query,
                     languages=languages,
                     paths=paths,
+                    exclude_paths=exclude_paths,
                     limit=limit,
                     offset=offset,
                 ),
