@@ -641,8 +641,9 @@ After editing `include_patterns`, `exclude_patterns`, `max_file_size`, or `langu
 - Run `ccc doctor` to preview which files match.
 - Run `ccc index` or `ccc search --refresh ...` to update the existing index.
 - You do not need to delete the index or restart the daemon for these file-matching changes.
+- Files whose content did not change are re-chunked when a `language_overrides` entry that applies to them changed; the run reports them as reprocessed.
 
-If you add or change custom `chunkers`, restart the daemon first so the chunker registry is reloaded, then run `ccc index`.
+If you add or change custom `chunkers`, restart the daemon first so the chunker registry is reloaded, then run `ccc index`. That run re-chunks the files affected by the new registry even if their content did not change. The same applies after editing the source of a chunker module.
 
 Use `chunkers` when you want to control how a file type is split into chunks before indexing.
 

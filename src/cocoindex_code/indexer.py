@@ -11,7 +11,7 @@ from cocoindex.ops.text import RecursiveSplitter, detect_code_language
 from cocoindex.resources.chunk import Chunk
 from cocoindex.resources.id import IdGenerator
 
-from .chunking import CHUNKER_REGISTRY
+from .chunking import CHUNKER_REGISTRY, chunking_fingerprint
 from .file_walk import build_matcher
 from .settings import load_project_settings
 from .shared import (
@@ -35,8 +35,14 @@ splitter = RecursiveSplitter()
 async def process_file(
     file: localfs.File,
     table: sqlite.TableTarget[CodeChunk],
+    chunking_config: str = "",
 ) -> None:
-    """Process a single file: chunk, embed, and store."""
+    """Process a single file: chunk, embed, and store.
+
+    ``chunking_config`` is not read here; it is part of the memo key so that a
+    change to ``language_overrides`` or to the custom chunkers re-processes
+    files whose content did not change (see ``chunking_fingerprint``).
+    """
     embedder = coco.use_context(EMBEDDER)
     indexing_params = coco.use_context(INDEXING_EMBED_PARAMS)
 
@@ -120,6 +126,13 @@ async def indexer_main() -> None:
         path_matcher=matcher,
     )
 
+    chunking_config = chunking_fingerprint(
+        ps.language_overrides, coco.use_context(CHUNKER_REGISTRY)
+    )
     await coco.mount_each(
-        coco.component_subpath(coco.Symbol("process_file")), process_file, files.items(), table
+        coco.component_subpath(coco.Symbol("process_file")),
+        process_file,
+        files.items(),
+        table,
+        chunking_config,
     )
