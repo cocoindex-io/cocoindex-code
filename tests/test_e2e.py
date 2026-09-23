@@ -21,6 +21,7 @@ from typer.testing import CliRunner
 
 from cocoindex_code.cli import app
 from cocoindex_code.client import stop_daemon
+from cocoindex_code.indexer import CHUNK_SIZE
 from cocoindex_code.settings import (
     _reset_db_path_mapping_cache,
     default_project_settings,
@@ -342,6 +343,35 @@ def test_session_respects_gitignore(e2e_project: Path) -> None:
     assert "ignored.py" not in file_paths
     assert "ignored_dir/nested.py" not in file_paths
     assert "important.py" in file_paths
+
+
+def test_session_caps_oversized_chunks(e2e_project: Path) -> None:
+    """A line the splitter cannot divide must not reach the embedder whole.
+
+    `chunk_size` is a target, not a bound: a line with no separator comes back
+    as one chunk. Feeding a 58k-character chunk to a long-context embedder is
+    quadratic in attention and took a daemon to 106 GB of commit before it was
+    killed, so the row that lands in the index is the thing worth asserting on.
+    """
+    packed = ",".join(str(i % 97) for i in range(20_000))
+    (e2e_project / "packed.py").write_text(f'PACKED = "{packed}"\n')
+
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    result = runner.invoke(app, ["index"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+    db_path = e2e_project / ".cocoindex_code" / "target_sqlite.db"
+    conn = coco_sqlite.connect(str(db_path), load_vec=True)
+    try:
+        with conn.readonly() as db:
+            longest = db.execute(
+                "SELECT MAX(LENGTH(content)) FROM code_chunks_vec WHERE file_path = 'packed.py'"
+            ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert longest is not None, "the file with the long line was not indexed at all"
+    assert longest <= CHUNK_SIZE
 
 
 @pytest.mark.usefixtures("e2e_project")
