@@ -28,6 +28,7 @@ from cocoindex_code.settings import (
     load_user_settings,
     save_project_settings,
     save_user_settings,
+    target_sqlite_db_path,
     user_settings_path,
 )
 
@@ -221,6 +222,37 @@ def test_session_incremental_index(e2e_project: Path) -> None:
     result = runner.invoke(app, ["search", "handleRequest"], catch_exceptions=False)
     assert result.exit_code == 0, result.output
     assert "app.js" in result.output
+
+
+def test_session_index_dry_lists_changes_without_indexing(e2e_project: Path) -> None:
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    result = runner.invoke(app, ["index"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+    (e2e_project / "app.js").write_text(SAMPLE_APP_JS)
+    (e2e_project / "empty.py").write_text("")
+    (e2e_project / "main.py").write_text(SAMPLE_MAIN_PY.replace("World", "Nautilus"))
+    (e2e_project / "utils.py").unlink()
+
+    first = runner.invoke(app, ["index", "--dry"], catch_exceptions=False)
+    second = runner.invoke(app, ["index", "--dry"], catch_exceptions=False)
+
+    assert first.exit_code == 0, first.output
+    assert first.output == second.output
+    assert "Files to add (2):\n  app.js\n  empty.py\n" in first.output
+    assert "Files to update (1):\n  main.py\n" in first.output
+    assert "Files to delete (1):\n  utils.py\n" in first.output
+
+    conn = coco_sqlite.connect(str(target_sqlite_db_path(e2e_project)), load_vec=True)
+    try:
+        with conn.readonly() as db:
+            indexed_paths = {
+                row[0] for row in db.execute("SELECT DISTINCT file_path FROM code_chunks_vec")
+            }
+    finally:
+        conn.close()
+
+    assert indexed_paths == {"lib/database.py", "main.py", "utils.py"}
 
 
 def test_session_reset_databases(e2e_project: Path) -> None:

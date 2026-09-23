@@ -24,6 +24,7 @@ from .settings import EmbeddingSettings
 
 logger = logging.getLogger(__name__)
 
+APP_NAME = "CocoIndexCode"
 SBERT_PREFIX = "sbert/"
 DEFAULT_LITELLM_MIN_INTERVAL_MS = 5
 

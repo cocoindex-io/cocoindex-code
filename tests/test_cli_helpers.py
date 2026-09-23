@@ -6,6 +6,8 @@ import io
 from pathlib import Path
 
 import pytest
+from click import unstyle
+from typer.testing import CliRunner
 
 from cocoindex_code import cli
 from cocoindex_code.cli import (
@@ -196,6 +198,13 @@ def test_resolve_default_path_outside_project(
     monkeypatch.chdir(other)
     result = resolve_default_path(project_root)
     assert result is None
+
+
+def test_index_help_includes_dry_option() -> None:
+    result = CliRunner().invoke(cli.app, ["index", "--help"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert "--dry" in unstyle(result.output)
 
 
 # ---------------------------------------------------------------------------

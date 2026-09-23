@@ -271,6 +271,7 @@ You can also use the CLI directly — useful for manual control, running indexin
 
 ```bash
 ccc init                                # initialize project (creates settings)
+ccc index --dry                         # preview added, updated, and deleted files
 ccc index                               # build the index
 ccc search "authentication logic"       # search!
 ```
@@ -284,6 +285,7 @@ The background daemon starts automatically on first use.
 | Command | Description |
 |---------|-------------|
 | `ccc init` | Initialize a project — creates settings files, adds `.cocoindex_code/` to `.gitignore` |
+| `ccc index --dry` | Preview added, updated, and deleted files |
 | `ccc index` | Build or update the index (auto-inits if needed). Shows streaming progress. |
 | `ccc search <query>` | Semantic search across the codebase |
 | `ccc grep <pattern> [path]` | Structural code search by example (no index needed) |

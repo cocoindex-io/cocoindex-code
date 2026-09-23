@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import os
 import sys
@@ -645,14 +646,46 @@ def init(
 
 @app.command()
 @_catch_daemon_start_error
-def index() -> None:
+def index(
+    dry: bool = _typer.Option(
+        False,
+        "--dry",
+        help="List files to add, update, or delete without indexing.",
+    ),
+) -> None:
     """Create/update index for the codebase."""
+    project_root = require_project_root(auto_init=not dry)
+    print_project_header(str(project_root))
+    if dry:
+        from .index_changes import find_index_changes
+
+        changes = asyncio.run(find_index_changes(project_root))
+        _print_index_changes(changes.added, changes.updated, changes.deleted)
+        return
+
     from . import client as _client
 
-    project_root = str(require_project_root(auto_init=True))
-    print_project_header(project_root)
-    _run_index_with_progress(project_root)
-    print_index_stats(_client.project_status(project_root))
+    _run_index_with_progress(str(project_root))
+    print_index_stats(_client.project_status(str(project_root)))
+
+
+def _print_index_changes(
+    added: tuple[str, ...],
+    updated: tuple[str, ...] | None,
+    deleted: tuple[str, ...],
+) -> None:
+    _typer.echo(f"Files to add ({len(added)}):")
+    for path in added:
+        _typer.echo(f"  {path}")
+    if updated is None:
+        _typer.echo("Files to update: unavailable until the next successful index")
+    else:
+        _typer.echo(f"Files to update ({len(updated)}):")
+        for path in updated:
+            _typer.echo(f"  {path}")
+    _typer.echo(f"Files to delete ({len(deleted)}):")
+    for path in deleted:
+        _typer.echo(f"  {path}")
 
 
 @app.command()
