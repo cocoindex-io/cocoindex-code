@@ -701,7 +701,10 @@ def run_daemon(
         except Exception:
             pass
 
-    listener = Listener(sock_path, family=connection_family())
+    # multiprocessing.Listener defaults to backlog=1. Several MCP clients can
+    # connect at once when an agent session starts, so a larger queue prevents
+    # transient refusals from being mistaken for a vanished daemon.
+    listener = Listener(sock_path, family=connection_family(), backlog=64)
     logger.info("Listening on %s", sock_path)
 
     loop = asyncio.new_event_loop()
