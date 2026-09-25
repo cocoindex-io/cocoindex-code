@@ -704,6 +704,15 @@ def run_daemon(
     listener = Listener(sock_path, family=connection_family())
     logger.info("Listening on %s", sock_path)
 
+    # Record the socket node identity so shutdown only unlinks its own socket
+    bound_sock_stat: tuple[int, int] | None = None
+    if sys.platform != "win32":
+        try:
+            st = Path(sock_path).stat()
+            bound_sock_stat = (st.st_dev, st.st_ino)
+        except Exception:
+            pass
+
     loop = asyncio.new_event_loop()
     tasks: set[asyncio.Task[Any]] = set()
 
@@ -846,7 +855,9 @@ def run_daemon(
         # 4. Remove socket and PID file.
         if sys.platform != "win32":
             try:
-                Path(sock_path).unlink(missing_ok=True)
+                current_st = Path(sock_path).stat()
+                if bound_sock_stat is not None and (current_st.st_dev, current_st.st_ino) == bound_sock_stat:
+                    Path(sock_path).unlink(missing_ok=True)
             except Exception:
                 pass
         try:
