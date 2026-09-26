@@ -82,6 +82,10 @@ def test_default_included_patterns_cover_elixir() -> None:
     assert "**/*.exs" in DEFAULT_INCLUDED_PATTERNS
 
 
+def test_default_included_patterns_cover_nix() -> None:
+    assert "**/*.nix" in DEFAULT_INCLUDED_PATTERNS
+
+
 @pytest.mark.usefixtures("_patch_user_dir")
 def test_save_and_load_user_settings(tmp_path: Path) -> None:
     settings = UserSettings(
