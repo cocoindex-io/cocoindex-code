@@ -1,6 +1,6 @@
 """Tests for the pluggable chunker registry.
 
-Uses Project.create() directly with a mock embedder so no real embedding model
+Uses Project.create() directly with a stub embedder so no real embedding model
 is needed.  Each test writes files to a temp directory, indexes them, and
 queries the resulting SQLite database to verify chunk content and language.
 """
@@ -11,9 +11,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from cocoindex.connectors import sqlite as coco_sqlite
-from cocoindex.resources.schema import VectorSchema
+from conftest import StubEmbedder
 from example_toml_chunker import toml_chunker
 
 from cocoindex_code.chunking import CHUNKER_REGISTRY, Chunk, TextPosition
@@ -24,35 +23,20 @@ from cocoindex_code.settings import ProjectSettings
 # Helpers
 # ---------------------------------------------------------------------------
 
-_EMBED_DIM = 4  # tiny dimension — enough to satisfy the vector table schema
-
-
-class _StubEmbedder:
-    """Minimal embedder stub satisfying cocoindex memo-key and vector-schema requirements."""
-
-    def __coco_memo_key__(self) -> str:
-        return "stub-embedder"
-
-    async def __coco_vector_schema__(self) -> VectorSchema:
-        return VectorSchema(dtype=np.dtype("float32"), size=_EMBED_DIM)
-
-    async def embed(self, text: str) -> np.ndarray:
-        return np.zeros(_EMBED_DIM, dtype=np.float32)
-
 
 async def _index_project(
     project_root: Path,
+    embedder: StubEmbedder,
     **create_kwargs: Any,
 ) -> Project:
     """Create a Project and run a full index pass."""
     settings = ProjectSettings(include_patterns=["**/*.*"], exclude_patterns=["**/.cocoindex_code"])
-    stub = _StubEmbedder()
     from cocoindex_code.settings import save_project_settings
 
     save_project_settings(project_root, settings)
     project = await Project.create(
         project_root,
-        stub,
+        embedder,
         indexing_params={},
         query_params={},
         **create_kwargs,
@@ -101,23 +85,25 @@ flag = true
 # ---------------------------------------------------------------------------
 
 
-async def test_default_registry_is_empty(tmp_path: Path) -> None:
+async def test_default_registry_is_empty(tmp_path: Path, stub_embedder: StubEmbedder) -> None:
     """CHUNKER_REGISTRY is an empty dict when no registry is passed."""
     (tmp_path / ".git").mkdir()
     (tmp_path / "hello.py").write_text("x = 1\n")
 
-    project = await _index_project(tmp_path)
+    project = await _index_project(tmp_path, stub_embedder)
     registry = project.env.get_context(CHUNKER_REGISTRY)
     assert isinstance(registry, dict)
     assert registry == {}
 
 
-async def test_unregistered_suffix_uses_splitter(tmp_path: Path) -> None:
+async def test_unregistered_suffix_uses_splitter(
+    tmp_path: Path, stub_embedder: StubEmbedder
+) -> None:
     """Files with no registered chunker are processed by RecursiveSplitter."""
     (tmp_path / ".git").mkdir()
     (tmp_path / "sample.py").write_text("def foo():\n    return 1\n")
 
-    await _index_project(tmp_path)
+    await _index_project(tmp_path, stub_embedder)
     chunks = _query_chunks(tmp_path)
 
     assert len(chunks) >= 1
@@ -125,12 +111,12 @@ async def test_unregistered_suffix_uses_splitter(tmp_path: Path) -> None:
     assert any("foo" in c["content"] for c in chunks)
 
 
-async def test_registered_chunker_is_called(tmp_path: Path) -> None:
+async def test_registered_chunker_is_called(tmp_path: Path, stub_embedder: StubEmbedder) -> None:
     """A registered ChunkerFn splits files and may override the language."""
     (tmp_path / ".git").mkdir()
     (tmp_path / "config.toml").write_text(_TOML_CONTENT)
 
-    await _index_project(tmp_path, chunker_registry={".toml": toml_chunker})
+    await _index_project(tmp_path, stub_embedder, chunker_registry={".toml": toml_chunker})
     chunks = _query_chunks(tmp_path)
 
     assert len(chunks) == 2
@@ -140,7 +126,9 @@ async def test_registered_chunker_is_called(tmp_path: Path) -> None:
     assert all(c["language"] == "toml" for c in chunks)
 
 
-async def test_chunker_language_none_preserves_detected(tmp_path: Path) -> None:
+async def test_chunker_language_none_preserves_detected(
+    tmp_path: Path, stub_embedder: StubEmbedder
+) -> None:
     """When ChunkerFn returns language=None, detect_code_language() is used."""
 
     def _passthrough_chunker(path: Path, content: str) -> tuple[str | None, list[Chunk]]:
@@ -150,19 +138,21 @@ async def test_chunker_language_none_preserves_detected(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "script.py").write_text("x = 1\n")
 
-    await _index_project(tmp_path, chunker_registry={".py": _passthrough_chunker})
+    await _index_project(tmp_path, stub_embedder, chunker_registry={".py": _passthrough_chunker})
     chunks = _query_chunks(tmp_path)
 
     assert all(c["language"] == "python" for c in chunks)
 
 
-async def test_registry_does_not_affect_other_suffixes(tmp_path: Path) -> None:
+async def test_registry_does_not_affect_other_suffixes(
+    tmp_path: Path, stub_embedder: StubEmbedder
+) -> None:
     """Registering a chunker for .toml does not affect .py files."""
     (tmp_path / ".git").mkdir()
     (tmp_path / "config.toml").write_text(_TOML_CONTENT)
     (tmp_path / "code.py").write_text("def bar():\n    pass\n")
 
-    await _index_project(tmp_path, chunker_registry={".toml": toml_chunker})
+    await _index_project(tmp_path, stub_embedder, chunker_registry={".toml": toml_chunker})
     chunks = _query_chunks(tmp_path)
 
     toml_chunks = [c for c in chunks if c["language"] == "toml"]

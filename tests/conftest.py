@@ -7,7 +7,9 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pytest
+from cocoindex.resources.schema import VectorSchema
 
 if TYPE_CHECKING:
     from cocoindex_code.settings import UserSettings
@@ -41,3 +43,24 @@ def make_test_user_settings() -> UserSettings:
 def test_codebase_root() -> Path:
     """Session-scoped test codebase directory."""
     return _TEST_DIR
+
+
+_STUB_EMBED_DIM = 4  # tiny dimension — enough to satisfy the vector table schema
+
+
+class StubEmbedder:
+    """Zero-vector embedder for indexing tests that don't need a real model."""
+
+    def __coco_memo_key__(self) -> str:
+        return "stub-embedder"
+
+    async def __coco_vector_schema__(self) -> VectorSchema:
+        return VectorSchema(dtype=np.dtype("float32"), size=_STUB_EMBED_DIM)
+
+    async def embed(self, text: str) -> np.ndarray:
+        return np.zeros(_STUB_EMBED_DIM, dtype=np.float32)
+
+
+@pytest.fixture
+def stub_embedder() -> StubEmbedder:
+    return StubEmbedder()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import logging
 import os
@@ -11,11 +12,13 @@ import sys
 import threading
 import time
 import traceback
+import weakref
 from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
 from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
-from typing import Any
+from types import ModuleType
+from typing import Any, NamedTuple
 
 from ._daemon_paths import (
     clear_last_exit_marker,
@@ -73,7 +76,13 @@ from .settings import (
     target_sqlite_db_path,
     user_settings_path,
 )
-from .shared import Embedder, check_embedding, configure_mps_environment, create_embedder
+from .shared import (
+    ChunkerFingerprint,
+    Embedder,
+    check_embedding,
+    configure_mps_environment,
+    create_embedder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,23 +108,51 @@ def _build_backward_compat_warning(
     )
 
 
-def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> dict[str, _ChunkerFn]:
-    """Resolve ``ChunkerMapping`` settings entries to a ``{suffix: fn}`` dict.
+class _ResolvedChunkers(NamedTuple):
+    registry: dict[str, _ChunkerFn]
+    fingerprints: dict[str, ChunkerFingerprint]
+
+
+# sha256 of each chunker module's file, taken when the daemon first got the module.
+# importlib returns the already loaded module on later imports (another project, or
+# the same one after `ccc reset`), and that module still runs the code that was
+# loaded, whatever the file holds now.
+_chunker_module_sha256: weakref.WeakKeyDictionary[ModuleType, str] = weakref.WeakKeyDictionary()
+
+
+def _module_sha256(mod: ModuleType) -> str:
+    digest = _chunker_module_sha256.get(mod)
+    if digest is None:
+        # Builtin modules have no file; their code only changes with Python itself.
+        file = getattr(mod, "__file__", None)
+        digest = hashlib.sha256(Path(file).read_bytes()).hexdigest() if file else ""
+        _chunker_module_sha256[mod] = digest
+    return digest
+
+
+def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> _ResolvedChunkers:
+    """Import the chunkers from ``ChunkerMapping`` settings entries, keyed by suffix.
 
     Each ``mapping.module`` must be a ``"module.path:callable"`` string importable
-    from the current environment.
+    from the current environment. Each chunker's fingerprint is that string plus a
+    hash of the module file it names; a helper module that file imports is not
+    covered, so editing only the helper does not re-process files.
     """
     registry: dict[str, _ChunkerFn] = {}
+    fingerprints: dict[str, ChunkerFingerprint] = {}
     for cm in mappings:
         module_path, _, attr = cm.module.partition(":")
         if not attr:
             raise ValueError(f"chunker module {cm.module!r} must use 'module.path:callable' format")
         mod = importlib.import_module(module_path)
+        module_sha256 = _module_sha256(mod)
         fn = getattr(mod, attr)
         if not callable(fn):
             raise ValueError(f"chunker {cm.module!r}: {attr!r} is not callable")
-        registry[f".{cm.ext}"] = fn
-    return registry
+        suffix = f".{cm.ext}"
+        registry[suffix] = fn
+        fingerprints[suffix] = ChunkerFingerprint(spec=cm.module, module_sha256=module_sha256)
+    return _ResolvedChunkers(registry, fingerprints)
 
 
 # ---------------------------------------------------------------------------
@@ -161,13 +198,14 @@ class ProjectRegistry:
         if project_root not in self._projects:
             root = Path(project_root)
             project_settings = load_project_settings(root)
-            chunker_registry = _resolve_chunker_registry(project_settings.chunkers)
+            chunkers = _resolve_chunker_registry(project_settings.chunkers)
             project = await Project.create(
                 root,
                 self._embedder,
                 indexing_params=self.indexing_params,
                 query_params=self.query_params,
-                chunker_registry=chunker_registry,
+                chunker_registry=chunkers.registry,
+                chunker_fingerprints=chunkers.fingerprints,
                 clear_mps_cache_after_index=self._clear_mps_cache_after_index,
             )
             self._projects[project_root] = project

@@ -34,11 +34,13 @@ from .settings import (
     target_sqlite_db_path as _target_sqlite_db_path,
 )
 from .shared import (
+    CHUNKER_FINGERPRINTS,
     CODEBASE_DIR,
     EMBEDDER,
     INDEXING_EMBED_PARAMS,
     QUERY_EMBED_PARAMS,
     SQLITE_DB,
+    ChunkerFingerprint,
     Embedder,
     clear_mps_allocator_cache,
 )
@@ -282,6 +284,7 @@ class Project:
         indexing_params: dict[str, Any],
         query_params: dict[str, Any],
         chunker_registry: dict[str, ChunkerFn] | None = None,
+        chunker_fingerprints: dict[str, ChunkerFingerprint] | None = None,
         clear_mps_cache_after_index: bool = False,
     ) -> Project:
         """Create a project with explicit embedder and per-call params.
@@ -301,6 +304,10 @@ class Project:
             chunker_registry: Optional mapping of file suffix (e.g. ``".toml"``)
                 to a ``ChunkerFn``. When a suffix matches, the registered
                 chunker is called instead of the built-in splitter.
+            chunker_fingerprints: What identifies the code of each
+                ``chunker_registry`` entry, keyed by the same suffixes. A
+                different value than in the previous run re-processes all files;
+                a registry change without a fingerprint change does not.
             clear_mps_cache_after_index: Whether to release unused MPS allocator
                 memory in CocoIndex's GPU subprocess after each index run.
         """
@@ -322,6 +329,9 @@ class Project:
         context.provide(INDEXING_EMBED_PARAMS, dict(indexing_params))
         context.provide(QUERY_EMBED_PARAMS, dict(query_params))
         context.provide(CHUNKER_REGISTRY, dict(chunker_registry) if chunker_registry else {})
+        context.provide(
+            CHUNKER_FINGERPRINTS, dict(chunker_fingerprints) if chunker_fingerprints else {}
+        )
 
         env = coco.Environment(settings, context_provider=context)
         app = coco.App(
