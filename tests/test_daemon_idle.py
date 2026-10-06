@@ -9,6 +9,8 @@ the right times, and that the socket and PID file are cleaned up.
 from __future__ import annotations
 
 import os
+import socket
+import sys
 import tempfile
 import threading
 import time
@@ -210,6 +212,36 @@ def test_daemon_exits_when_idle(idle_env: Path) -> None:
         assert marker.reason == "idle_timeout"
         assert marker.pid == os.getpid()
     finally:
+        _stop_daemon_thread(thread, sock_path)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="named pipes have no socket file to unlink")
+def test_displaced_daemon_keeps_replacement_socket(idle_env: Path) -> None:
+    """A displaced daemon's shutdown must not delete a replacement's socket.
+
+    A replacement daemon unlinks the old socket path and binds its own
+    there; when the old daemon later idle-exits, the path must still lead to
+    the replacement (issue #288).
+    """
+    thread, sock_path = _start_daemon_thread(idle_timeout_s=1.0, idle_check_interval_s=0.2)
+    # AF_UNIX only exists on POSIX; the skipif above keeps Windows out, and the
+    # ignore keeps mypy quiet on Windows runners.
+    replacement = socket.socket(socket.AF_UNIX)  # type: ignore[attr-defined,unused-ignore]
+    try:
+        # What a replacement daemon does at startup.
+        os.unlink(sock_path)
+        replacement.bind(sock_path)
+        replacement.listen()
+        replacement_stat = os.stat(sock_path)
+
+        thread.join(timeout=15)
+        assert not thread.is_alive(), "daemon did not idle-exit"
+        assert os.path.exists(sock_path), "displaced daemon deleted the replacement's socket"
+        st = os.stat(sock_path)
+        assert (st.st_dev, st.st_ino) == (replacement_stat.st_dev, replacement_stat.st_ino)
+        assert not daemon_pid_path().exists(), "PID file not cleaned up"
+    finally:
+        replacement.close()
         _stop_daemon_thread(thread, sock_path)
 
 

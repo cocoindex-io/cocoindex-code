@@ -9,6 +9,7 @@ import importlib
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 import time
@@ -29,6 +30,8 @@ from ._daemon_paths import (
     daemon_pid_path,
     daemon_runtime_dir,
     daemon_socket_path,
+    socket_identity,
+    unlink_socket_if_owned,
     write_last_exit_marker,
 )
 from ._version import __version__
@@ -657,6 +660,57 @@ class EmptyContextThreadPoolExecutor(ThreadPoolExecutor):
         return contextvars.Context().run(super().submit, fn, *args, **kwargs)
 
 
+if sys.platform != "win32":  # Windows uses named pipes via Listener
+
+    class _UnixListener:
+        """POSIX stand-in for ``multiprocessing.connection.Listener`` that removes
+        its socket file on ``close()`` only while the path still names it.
+
+        The stdlib listener unlinks its address on ``close()`` unconditionally, so
+        a displaced daemon shutting down would delete the socket a replacement
+        daemon had since bound at the same path, cutting clients off from it
+        (issue #288).
+        """
+
+        def __init__(self, path: str) -> None:
+            # Take over the path from a crashed or displaced daemon's socket file,
+            # which would otherwise make bind() fail.
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            self._path = path
+            self._sock = socket.socket(socket.AF_UNIX)
+            try:
+                self._sock.setblocking(True)
+                self._sock.bind(path)
+                self._sock.listen(1)  # same backlog as the stdlib Listener
+            except OSError:
+                self._sock.close()
+                raise
+            # A replacement binding the path in the instant between bind() and
+            # this stat would be recorded as ours; bind() itself can't report the
+            # file's identity, and the window is microseconds.
+            self._identity = socket_identity(path)
+
+        def accept(self) -> Connection:
+            conn, _ = self._sock.accept()
+            conn.setblocking(True)
+            return Connection(conn.detach())
+
+        def close(self) -> None:
+            # Unlink while the socket is still open: an open socket pins its
+            # inode, so a replacement's file can't have been given the same one.
+            unlink_socket_if_owned(self._path, self._identity)
+            # On Linux only shutdown() wakes a thread blocked in accept(); macOS
+            # wakes it on close() and rejects shutdown() of a listening socket.
+            try:
+                self._sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            self._sock.close()
+
+
 def run_daemon(
     *,
     idle_timeout: timedelta | None = None,
@@ -738,23 +792,11 @@ def run_daemon(
     )
 
     sock_path = daemon_socket_path()
-    if sys.platform != "win32":
-        try:
-            Path(sock_path).unlink(missing_ok=True)
-        except Exception:
-            pass
-
-    listener = Listener(sock_path, family=connection_family())
+    if sys.platform == "win32":
+        listener = Listener(sock_path, family=connection_family())
+    else:
+        listener = _UnixListener(sock_path)
     logger.info("Listening on %s", sock_path)
-
-    # Record the socket node identity so shutdown only unlinks its own socket
-    bound_sock_stat: tuple[int, int] | None = None
-    if sys.platform != "win32":
-        try:
-            st = Path(sock_path).stat()
-            bound_sock_stat = (st.st_dev, st.st_ino)
-        except Exception:
-            pass
 
     loop = asyncio.new_event_loop()
     loop.set_default_executor(EmptyContextThreadPoolExecutor())
@@ -869,14 +911,17 @@ def run_daemon(
         #    absence is how the client detects a crash.
         write_last_exit_marker(pid=os.getpid(), reason=shutdown_reason or "unknown")
 
-        # 1. Stop accepting new connections.  On Windows a blocked accept()
-        #    holds an open pipe instance that listener.close() can't release
-        #    (it only closes the queued next-instance handle), which would keep
-        #    the named pipe alive after exit — wake it with a dummy connection
-        #    so the accept thread closes it and exits.  POSIX doesn't need the
-        #    wake-up (listener.close() makes accept() raise), but it's harmless
-        #    there and keeps this path exercised on every platform rather than
-        #    only on Windows CI.
+        # 1. Stop accepting new connections and remove the socket file (if a
+        #    replacement daemon hasn't taken over the path).  On Windows a
+        #    blocked accept() holds an open pipe instance that listener.close()
+        #    can't release (it only closes the queued next-instance handle),
+        #    which would keep the named pipe alive after exit — wake it with a
+        #    dummy connection so the accept thread closes it and exits.  POSIX
+        #    doesn't need the wake-up (listener.close() makes accept() raise),
+        #    but it's harmless there and keeps this path exercised on every
+        #    platform rather than only on Windows CI.  If a replacement daemon
+        #    owns the path, the wake-up reaches it instead: one extra
+        #    connection, which only counts as activity there.
         shutting_down.set()
         try:
             Client(sock_path, family=connection_family()).close()
@@ -896,17 +941,7 @@ def run_daemon(
         registry.close_all()
         loop.close()
 
-        # 4. Remove socket and PID file.
-        if sys.platform != "win32":
-            try:
-                current_st = Path(sock_path).stat()
-                if (
-                    bound_sock_stat is not None
-                    and (current_st.st_dev, current_st.st_ino) == bound_sock_stat
-                ):
-                    Path(sock_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+        # 4. Remove the PID file.
         try:
             stored = pid_path.read_text().strip()
             if stored == str(os.getpid()):

@@ -21,12 +21,15 @@ from typing import NamedTuple
 import msgspec
 
 from ._daemon_paths import (
+    SocketIdentity,
     connection_family,
     daemon_log_path,
     daemon_pid_path,
     daemon_runtime_dir,
     daemon_socket_path,
     read_last_exit_marker,
+    socket_identity,
+    unlink_socket_if_owned,
 )
 from ._version import __version__
 from .protocol import (
@@ -642,6 +645,9 @@ def stop_daemon() -> None:
             pid = None
     except (FileNotFoundError, ValueError):
         pass
+    # The socket file of the daemon being stopped. Cleanup removes only that
+    # one, never a replacement daemon's bound there meanwhile (issue #288).
+    sock_identity = socket_identity(daemon_socket_path()) if sys.platform != "win32" else None
 
     # 1) Graceful StopRequest via socket (bypass auto-start)
     try:
@@ -677,17 +683,17 @@ def stop_daemon() -> None:
         except (ProcessLookupError, PermissionError):
             pass
 
-    _cleanup_stale_files(pid_path, pid)
+    _cleanup_stale_files(pid_path, pid, sock_identity)
 
 
-def _cleanup_stale_files(pid_path: Path, pid: int | None) -> None:
-    """Remove socket and PID file after the daemon has exited."""
-    if sys.platform != "win32":
-        sock = daemon_socket_path()
-        try:
-            Path(sock).unlink(missing_ok=True)
-        except Exception:
-            pass
+def _cleanup_stale_files(
+    pid_path: Path, pid: int | None, sock_identity: SocketIdentity | None
+) -> None:
+    """Remove socket and PID file after the daemon has exited.
+
+    The socket file is removed only while it is still *sock_identity*.
+    """
+    unlink_socket_if_owned(daemon_socket_path(), sock_identity)
     if pid is not None:
         try:
             stored = pid_path.read_text().strip()

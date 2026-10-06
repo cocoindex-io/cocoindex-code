@@ -14,6 +14,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from .settings import user_settings_dir
 
@@ -77,6 +78,45 @@ def daemon_socket_path() -> str:
     # socket sitting at our address.
     short = Path(tempfile.gettempdir()) / f"ccc-{os.getuid()}-{_runtime_dir_hash()}.sock"
     return str(short)
+
+
+class SocketIdentity(NamedTuple):
+    """Identifies one socket file, telling a daemon's own apart from one a
+    replacement daemon has since bound at the same path (issue #288).
+
+    ``ctime_ns`` is part of it because ext4/overlayfs hand a freed inode
+    number straight to the next file: once the original socket is closed and
+    unlinked, a replacement's can have the same ``(dev, ino)``.
+    """
+
+    dev: int
+    ino: int
+    ctime_ns: int
+
+
+def socket_identity(path: str) -> SocketIdentity | None:
+    """Return the identity of the socket file at *path*, or None if absent. POSIX only."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return SocketIdentity(st.st_dev, st.st_ino, st.st_ctime_ns)
+
+
+def unlink_socket_if_owned(path: str, identity: SocketIdentity | None) -> None:
+    """Remove the socket file at *path* only if it is still *identity*.
+
+    Leaves alone a socket a replacement daemon has bound there since. Not
+    atomic — POSIX has no unlink-if-inode — so a replacement binding between
+    the stat and the unlink is still lost, but that window is microseconds.
+    Best-effort — never raises.
+    """
+    if identity is None or socket_identity(path) != identity:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def daemon_pid_path() -> Path:

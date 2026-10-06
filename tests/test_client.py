@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import socket
+import sys
 import tempfile
+import time
 from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import cast
@@ -228,6 +232,58 @@ def test_stop_daemon_escalates_past_undecodable_handshake(
     client.stop_daemon()  # must not raise
 
     assert waited["n"] == 1  # reached the escalation ladder
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="named pipes have no socket file to unlink")
+@pytest.mark.parametrize("replaced", [False, True])
+def test_stop_daemon_removes_only_the_stopped_daemons_socket(
+    replaced: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the daemon dies without cleaning up, ``stop_daemon`` removes its
+    socket file — but not one a replacement daemon bound at the same path while
+    the stop was in progress (issue #288), even when the replacement's file
+    reuses the dead socket's inode number (as ext4 does).
+    """
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", tempfile.mkdtemp(prefix="ccc_stop_"))
+    sock_path = client.daemon_socket_path()
+    # AF_UNIX only exists on POSIX; the skipif above keeps Windows out, and the
+    # ignore keeps mypy quiet on Windows runners.
+    stopped = socket.socket(socket.AF_UNIX)  # type: ignore[attr-defined,unused-ignore]
+    replacement = socket.socket(socket.AF_UNIX)  # type: ignore[attr-defined,unused-ignore]
+    replacement_stat: list[os.stat_result] = []
+    try:
+        stopped.bind(sock_path)
+        # A daemon's socket predates its replacement's by far more than one
+        # file-timestamp tick, which is what tells a reused inode apart.
+        time.sleep(0.05)
+
+        def unresponsive() -> client._HandshakeResult:
+            raise ConnectionRefusedError("daemon does not answer")
+
+        def never_exits(timeout: float) -> bool:
+            stopped.close()  # the daemon dies, leaving its socket file behind
+            if replaced:
+                # What a replacement daemon does at startup.
+                os.unlink(sock_path)
+                replacement.bind(sock_path)
+                replacement_stat.append(os.stat(sock_path))
+            return False
+
+        monkeypatch.setattr(client, "_raw_connect_and_handshake", unresponsive)
+        monkeypatch.setattr(client, "_wait_for_daemon_exit", never_exits)
+
+        client.stop_daemon()
+
+        if replaced:
+            assert os.path.exists(sock_path), "stop_daemon deleted the replacement's socket"
+            st = os.stat(sock_path)
+            (expected,) = replacement_stat
+            assert (st.st_dev, st.st_ino) == (expected.st_dev, expected.st_ino)
+        else:
+            assert not os.path.exists(sock_path), "stale socket file not cleaned up"
+    finally:
+        stopped.close()
+        replacement.close()
 
 
 # ---------------------------------------------------------------------------
