@@ -877,7 +877,10 @@ def run_daemon(
         if sys.platform != "win32":
             try:
                 current_st = Path(sock_path).stat()
-                if bound_sock_stat is not None and (current_st.st_dev, current_st.st_ino) == bound_sock_stat:
+                if (
+                    bound_sock_stat is not None
+                    and (current_st.st_dev, current_st.st_ino) == bound_sock_stat
+                ):
                     Path(sock_path).unlink(missing_ok=True)
             except Exception:
                 pass

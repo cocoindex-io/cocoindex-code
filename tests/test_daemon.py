@@ -395,6 +395,7 @@ async def test_search_failure_reports_daemon_side_traceback() -> None:
 def test_stale_daemon_does_not_unlink_new_daemon_socket(tmp_path: Path) -> None:
     """A displaced daemon shutting down does not unlink a replacement daemon's socket."""
     import sys
+
     if sys.platform == "win32":
         pytest.skip("UNIX domain socket inode check is POSIX-specific")
 
@@ -418,4 +419,3 @@ def test_stale_daemon_does_not_unlink_new_daemon_socket(tmp_path: Path) -> None:
 
     # Socket should still exist because old daemon's stat didn't match
     assert sock_path.exists()
-
