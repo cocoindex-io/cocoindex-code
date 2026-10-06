@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 from pathlib import Path
@@ -39,6 +40,14 @@ def make_test_user_settings() -> UserSettings:
             model=TEST_EMBEDDING_MODEL,
         ),
     )
+
+
+@pytest.fixture(autouse=True)
+async def _empty_context_default_executor() -> None:
+    """Give each test's event loop the default executor the daemon's loop has."""
+    from cocoindex_code.daemon import EmptyContextThreadPoolExecutor
+
+    asyncio.get_running_loop().set_default_executor(EmptyContextThreadPoolExecutor())
 
 
 @pytest.fixture(scope="session")

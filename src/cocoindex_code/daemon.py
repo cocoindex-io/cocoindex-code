@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import importlib
 import logging
@@ -14,11 +15,12 @@ import time
 import traceback
 import weakref
 from collections.abc import AsyncIterator, Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import timedelta
 from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 from ._daemon_paths import (
     clear_last_exit_marker,
@@ -634,6 +636,26 @@ async def _dispatch(
 # Daemon main
 # ---------------------------------------------------------------------------
 
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
+
+
+class EmptyContextThreadPoolExecutor(ThreadPoolExecutor):
+    """Thread pool whose worker threads start in an empty ``contextvars`` context.
+
+    ``submit()`` starts a worker thread when no idle one is free. On free-threaded
+    Python 3.14 (``sys.flags.thread_inherit_context``) that thread starts in a copy
+    of the submitter's context and keeps it for its whole life. A copy taken inside
+    a CocoIndex component references the project's CocoIndex environment, which is
+    only released once nothing references it, so it would outlive the project and
+    opening the project again in this process (as after ``ccc reset``) would fail.
+    Submitting from an empty context gives worker threads the empty context they
+    start with on GIL builds.
+    """
+
+    def submit(self, fn: Callable[_P, _T], /, *args: _P.args, **kwargs: _P.kwargs) -> Future[_T]:
+        return contextvars.Context().run(super().submit, fn, *args, **kwargs)
+
 
 def run_daemon(
     *,
@@ -735,6 +757,7 @@ def run_daemon(
             pass
 
     loop = asyncio.new_event_loop()
+    loop.set_default_executor(EmptyContextThreadPoolExecutor())
     tasks: set[asyncio.Task[Any]] = set()
 
     reaper = IdleReaper(

@@ -268,6 +268,37 @@ def test_daemon_remove_project_not_loaded(daemon_sock: str) -> None:
     conn.close()
 
 
+def test_daemon_reindex_after_remove_project(daemon_sock: str) -> None:
+    """A removed project (as by `ccc reset`) loads again on the next index request.
+
+    The daemon opens it again in the same process, which works only if removing it
+    released its CocoIndex environment. Enough files that indexing starts new worker
+    threads in the event loop's default executor, which on free-threaded Python can
+    keep the indexing context, and with it the environment, for their whole life.
+    """
+    project = Path(tempfile.mkdtemp(prefix="ccc_rm_"))
+    save_project_settings(project, default_project_settings())
+    for i in range(20):
+        (project / f"mod{i}.py").write_text(SAMPLE_MAIN_PY)
+
+    def index() -> IndexResponse:
+        conn, _ = _connect_and_handshake(daemon_sock)
+        conn.send_bytes(encode_request(IndexRequest(project_root=str(project))))
+        _updates, final = _recv_index_response(conn)
+        conn.close()
+        return final
+
+    assert index().success is True
+
+    conn, _ = _connect_and_handshake(daemon_sock)
+    conn.send_bytes(encode_request(RemoveProjectRequest(project_root=str(project))))
+    assert decode_response(conn.recv_bytes()).ok is True
+    conn.close()
+
+    final = index()
+    assert final.success is True, final.message
+
+
 def test_daemon_search_waits_during_explicit_index(daemon_sock: str) -> None:
     """When IndexRequest is in progress, a concurrent SearchRequest should receive
     IndexWaitingNotice (Path B: index first, then search)."""
