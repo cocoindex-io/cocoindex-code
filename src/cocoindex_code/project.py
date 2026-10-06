@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import sqlite3
+import weakref
 from collections.abc import AsyncIterator, Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 import cocoindex as coco
 from cocoindex.connectors import sqlite as coco_sqlite
@@ -44,6 +47,36 @@ from .shared import (
 )
 
 logger = logging.getLogger(__name__)
+
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
+
+
+class _EmptyContextThreadPoolExecutor(ThreadPoolExecutor):
+    """A ``ThreadPoolExecutor`` whose worker threads start with an empty context.
+
+    On free-threaded Python a new thread starts with a copy of the context of the code
+    that started it (``sys.flags.thread_inherit_context``). The event loop's default
+    executor starts its workers lazily, often inside a CocoIndex component (the LocalFS
+    walker calls ``run_in_executor``). Such a worker keeps that component's context, which
+    references the project's ``Environment`` and through it the LMDB env, for as long as
+    the loop lives. The env then stays open after the project is closed, and loading the
+    project again fails with "environment already open in this program".
+    """
+
+    def submit(self, fn: Callable[_P, _T], /, *args: _P.args, **kwargs: _P.kwargs) -> Future[_T]:
+        # Worker threads are started from submit().
+        return contextvars.Context().run(super().submit, fn, *args, **kwargs)
+
+
+# Loops whose default executor is already an _EmptyContextThreadPoolExecutor.
+_loops_with_empty_context_executor: weakref.WeakSet[asyncio.AbstractEventLoop] = weakref.WeakSet()
+
+
+def _use_empty_context_default_executor(loop: asyncio.AbstractEventLoop) -> None:
+    if loop not in _loops_with_empty_context_executor:
+        loop.set_default_executor(_EmptyContextThreadPoolExecutor(thread_name_prefix="asyncio"))
+        _loops_with_empty_context_executor.add(loop)
 
 
 class Project:
@@ -314,6 +347,10 @@ class Project:
         target_sqlite_db = _target_sqlite_db_path(project_root)
 
         settings = coco.Settings.from_env(cocoindex_db)
+
+        # The environment runs its components on the running loop. Keep that loop's
+        # executor threads from holding on to the environment once this project is closed.
+        _use_empty_context_default_executor(asyncio.get_running_loop())
 
         context = coco.ContextProvider()
         context.provide(CODEBASE_DIR, project_root)

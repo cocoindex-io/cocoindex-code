@@ -245,13 +245,8 @@ def test_session_reset_databases(e2e_project: Path) -> None:
     assert not (e2e_project / ".cocoindex_code" / "cocoindex.db").exists()
     assert not (e2e_project / ".cocoindex_code" / "target_sqlite.db").exists()
 
-    # Restart daemon to fully release LMDB handles.
-    # On free-threaded Python (3.14t), deferred refcounting in the daemon
-    # process prevents the Rust LMDB environment from being freed promptly
-    # after remove_project; restarting is the reliable way to ensure cleanup.
-    runner.invoke(app, ["daemon", "restart"], catch_exceptions=False)
-
-    # Re-index — project is still initialized, just databases gone
+    # Re-index — project is still initialized, just databases gone. Same daemon, so
+    # the reset must have released the project's LMDB env.
     result = runner.invoke(app, ["index"], catch_exceptions=False)
     assert result.exit_code == 0, result.output
 
