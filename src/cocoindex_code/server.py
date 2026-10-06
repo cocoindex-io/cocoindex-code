@@ -1,8 +1,11 @@
 """MCP server for codebase indexing and querying.
 
 Supports two modes:
-1. Daemon-backed: ``create_mcp_server(client, project_root)`` — lightweight MCP
-   server that delegates to the daemon via per-request client functions.
+1. Daemon-backed: ``create_mcp_server(default_project_root)`` — lightweight MCP
+   server that delegates to the daemon via per-request client functions. The
+   project is resolved per call from the ``project_path`` tool parameter, with
+   ``default_project_root`` (the project the server started in) as the fallback
+   only when the parameter is omitted.
 2. Legacy entry point: ``main()`` — backward-compatible ``cocoindex-code`` CLI that
    auto-creates settings from env vars and delegates to the daemon.
 """
@@ -18,7 +21,13 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import BaseModel, Field
 
 from ._version import __version__
-from .settings import DaemonSettings, load_user_settings
+from .settings import (
+    DaemonSettings,
+    find_project_root,
+    format_path_for_display,
+    load_user_settings,
+    normalize_input_path,
+)
 
 _MCP_INSTRUCTIONS = (
     "Code search and codebase understanding tools."
@@ -38,7 +47,7 @@ _MCP_INSTRUCTIONS = (
 class CodeChunkResult(BaseModel):
     """A single code chunk result."""
 
-    file_path: str = Field(description="Relative path to the file")
+    file_path: str = Field(description="Path relative to the searched project_root")
     language: str = Field(description="Programming language")
     content: str = Field(description="The code content")
     start_line: int = Field(description="Starting line number (1-indexed)")
@@ -54,13 +63,22 @@ class SearchResultModel(BaseModel):
     total_returned: int = Field(default=0)
     offset: int = Field(default=0)
     message: str | None = None
+    project_root: str | None = Field(
+        default=None,
+        description="Project the results come from; file paths are relative to it",
+    )
 
 
 # === Daemon-backed MCP server factory ===
 
 
-def create_mcp_server(project_root: str) -> MCPServer:
-    """Create a lightweight MCP server that delegates to the daemon."""
+def create_mcp_server(default_project_root: str | None = None) -> MCPServer:
+    """Create a lightweight MCP server that delegates to the daemon.
+
+    ``default_project_root`` is the project searched when a call omits
+    ``project_path``; ``None`` means the server started outside any project, so
+    such calls fail with a clear message instead of guessing.
+    """
     mcp = MCPServer("cocoindex-code", instructions=_MCP_INSTRUCTIONS, version=__version__)
 
     @mcp.tool(
@@ -78,6 +96,9 @@ def create_mcp_server(project_root: str) -> MCPServer:
             " line numbers, and relevance scores."
             " Start with a small limit (e.g., 5);"
             " if most results look relevant, use offset to paginate for more."
+            " Always pass project_path set to your current working directory:"
+            " this server may have been started in another checkout, and the"
+            " project searched is the one containing project_path."
         ),
     )
     async def search(
@@ -120,12 +141,65 @@ def create_mcp_server(project_root: str) -> MCPServer:
                 " Example: ['src/utils/*', '*.py']"
             ),
         ),
+        project_path: str | None = Field(
+            default=None,
+            description=(
+                "Absolute path of your current working directory, or any absolute path"
+                " inside the project to search (relative paths are rejected). The"
+                " project is the nearest directory at or above it holding"
+                " .cocoindex_code/settings.yml. When omitted, the project this server"
+                " was started in is searched (an error if it started outside any"
+                " project), even if your working directory has since moved to another"
+                " checkout."
+            ),
+        ),
     ) -> SearchResultModel:
         """Query the codebase index via the daemon."""
         from . import client as _client
 
+        if project_path is None:
+            if default_project_root is None:
+                return SearchResultModel(
+                    success=False,
+                    message=(
+                        "This server was started outside a ccc project."
+                        " Pass project_path (a path inside the project to search),"
+                        " or run `ccc init` in the project root."
+                    ),
+                )
+            project_root = default_project_root
+        else:
+            # Relative paths would resolve against the server's cwd, i.e. silently
+            # against the checkout it started in: the very bug project_path fixes.
+            # Checked after host->container mapping, so mapped host paths qualify.
+            try:
+                local_path = Path(normalize_input_path(project_path))
+                if not local_path.is_absolute():
+                    return SearchResultModel(
+                        success=False,
+                        message=f"project_path must be an absolute path, got {project_path!r}.",
+                    )
+                found = find_project_root(local_path)
+            except (OSError, ValueError, RuntimeError) as e:  # RuntimeError: 3.11 symlink loop
+                return SearchResultModel(
+                    success=False, message=f"Could not resolve project_path {project_path!r}: {e}"
+                )
+            if found is None:
+                return SearchResultModel(
+                    success=False,
+                    message=(
+                        f"No ccc project found at or above {project_path}."
+                        " Run `ccc init` in the project root."
+                    ),
+                )
+            project_root = str(found)
+
+        # Results carry paths relative to the project root; report the root in the
+        # caller's (host) form so it can join them.
+        shown_root: str | None = None
         loop = asyncio.get_event_loop()
         try:
+            shown_root = format_path_for_display(project_root)
             if refresh_index:
                 await loop.run_in_executor(None, lambda: _client.index(project_root))
             resp = await loop.run_in_executor(
@@ -155,9 +229,12 @@ def create_mcp_server(project_root: str) -> MCPServer:
                 total_returned=resp.total_returned,
                 offset=resp.offset,
                 message=resp.message,
+                project_root=shown_root,
             )
         except Exception as e:
-            return SearchResultModel(success=False, message=f"Query failed: {e!s}")
+            return SearchResultModel(
+                success=False, message=f"Query failed: {e!s}", project_root=shown_root
+            )
 
     return mcp
 
@@ -232,7 +309,6 @@ def main() -> None:
         default_project_settings,
         default_user_settings,
         find_legacy_project_root,
-        find_project_root,
         project_settings_path,
         save_project_settings,
         save_user_settings,

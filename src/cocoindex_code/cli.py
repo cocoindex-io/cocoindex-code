@@ -78,15 +78,13 @@ def _apply_host_cwd() -> None:
 # ---------------------------------------------------------------------------
 
 
-def require_project_root(*, auto_init: bool = False) -> Path:
-    """Find the project root by walking up from CWD.
+def require_user_settings(*, auto_init: bool = False) -> None:
+    """Exit with code 1 unless global settings exist.
 
-    Checks global settings first (more fundamental), then project settings.
-    With ``auto_init``, a missing project is initialized with default settings
-    instead of failing. Missing global settings run the same interactive model
-    setup as ``ccc init`` — but only on a TTY, since picking an embedding model
-    is a consequential choice; non-interactive runs (scripts, hooks, agents)
-    still exit with code 1 rather than silently committing to a default model.
+    With ``auto_init`` on a TTY, missing global settings run the same interactive
+    model setup as ``ccc init`` — picking an embedding model is a consequential
+    choice, so non-interactive runs (scripts, hooks, agents) still exit rather
+    than silently committing to a default model.
     """
     gs_path = user_settings_path()
     if not gs_path.is_file():
@@ -99,6 +97,17 @@ def require_project_root(*, auto_init: bool = False) -> Path:
                 err=True,
             )
             raise _typer.Exit(code=1)
+
+
+def require_project_root(*, auto_init: bool = False) -> Path:
+    """Find the project root by walking up from CWD.
+
+    Checks global settings first (more fundamental), then project settings.
+    With ``auto_init``, a missing project is initialized with default settings
+    instead of failing. Missing global settings are handled as in
+    :func:`require_user_settings`.
+    """
+    require_user_settings(auto_init=auto_init)
     root = find_project_root(Path.cwd())
     if root is None:
         if auto_init:
@@ -1032,16 +1041,19 @@ def mcp() -> None:
     """Run as MCP server (stdio mode)."""
     import asyncio
 
-    project_root = str(require_project_root())
+    require_user_settings()
+    # Outside a project the server still starts: each `search` call names its
+    # project via `project_path`, so there is nothing to index up front.
+    found = find_project_root(Path.cwd())
+    project_root = str(found) if found is not None else None
 
     async def _run_mcp() -> None:
         from .server import create_mcp_server, run_heartbeat_loop
 
         mcp_server = create_mcp_server(project_root)
-        background_tasks = {
-            asyncio.create_task(_bg_index(project_root)),
-            asyncio.create_task(run_heartbeat_loop()),
-        }
+        background_tasks = {asyncio.create_task(run_heartbeat_loop())}
+        if project_root is not None:
+            background_tasks.add(asyncio.create_task(_bg_index(project_root)))
         try:
             await mcp_server.run_stdio_async()
         finally:
