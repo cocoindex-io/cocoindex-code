@@ -18,12 +18,11 @@ from typing import Any
 
 import pytest
 from cocoindex.connectors import sqlite as coco_sqlite
-from conftest import StubEmbedder
+from conftest import StubEmbedder, assert_all_unchanged, index_project
 
 from cocoindex_code.chunking import Chunk, TextPosition
 from cocoindex_code.daemon import ProjectRegistry, _resolve_chunker_registry
 from cocoindex_code.project import Project
-from cocoindex_code.protocol import IndexingProgress
 from cocoindex_code.settings import (
     ChunkerMapping,
     LanguageOverride,
@@ -152,19 +151,6 @@ def _restart_daemon(registry: ProjectRegistry, embedder: StubEmbedder) -> Projec
     return ProjectRegistry(embedder)
 
 
-async def _index(registry: ProjectRegistry, project_root: Path) -> IndexingProgress:
-    """Run one index pass through the daemon's registry; return the final file stats."""
-    project = await registry.get_project(str(project_root))
-    progress: list[IndexingProgress] = []
-    await project.run_index(on_progress=progress.append)
-    return progress[-1]
-
-
-def _assert_all_unchanged(stats: IndexingProgress, num_files: int) -> None:
-    assert stats.num_unchanged == num_files
-    assert stats.num_adds == stats.num_reprocesses == stats.num_deletes == 0
-
-
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -253,14 +239,14 @@ async def test_unchanged_chunking_config_leaves_files_unchanged(
     )
     registry = ProjectRegistry(stub_embedder)
     try:
-        stats = await _index(registry, project_root)
+        stats = await index_project(registry, project_root)
         assert stats.num_adds == 3
         assert _contents(project_root, "notes.txt") == [f"v1/{kind}:hello\n"]
 
-        _assert_all_unchanged(await _index(registry, project_root), 3)
+        assert_all_unchanged(await index_project(registry, project_root), 3)
 
         registry = _restart_daemon(registry, stub_embedder)
-        _assert_all_unchanged(await _index(registry, project_root), 3)
+        assert_all_unchanged(await index_project(registry, project_root), 3)
     finally:
         registry.close_all()
 
@@ -278,7 +264,7 @@ async def test_chunker_edit_takes_effect_after_restart(
     )
     registry = ProjectRegistry(stub_embedder)
     try:
-        await _index(registry, project_root)
+        await index_project(registry, project_root)
         assert _contents(project_root, "notes.txt") == ["v1/plain:hello\n"]
 
         chunker_module.set_tag("v2")
@@ -286,11 +272,11 @@ async def test_chunker_edit_takes_effect_after_restart(
         # the project again (as after `ccc reset`), so the chunks stay v1 for now.
         if reload_project:
             registry.remove_project(str(project_root))
-        await _index(registry, project_root)
+        await index_project(registry, project_root)
         assert _contents(project_root, "notes.txt") == ["v1/plain:hello\n"]
 
         registry = _restart_daemon(registry, stub_embedder)
-        stats = await _index(registry, project_root)
+        stats = await index_project(registry, project_root)
         assert stats.num_reprocesses == 1
         assert _contents(project_root, "notes.txt") == ["v2/plain:hello\n"]
     finally:
@@ -306,7 +292,7 @@ async def test_chunker_spec_change_reprocesses_affected_files(
     )
     registry = ProjectRegistry(stub_embedder)
     try:
-        await _index(registry, project_root)
+        await index_project(registry, project_root)
         assert _contents(project_root, "notes.txt") == ["v1/plain:hello\n"]
 
         # Another callable from the same, unedited module.
@@ -315,7 +301,7 @@ async def test_chunker_spec_change_reprocesses_affected_files(
             _settings(chunkers=[ChunkerMapping("txt", chunker_module.spec("by_partial"))]),
         )
         registry = _restart_daemon(registry, stub_embedder)
-        stats = await _index(registry, project_root)
+        stats = await index_project(registry, project_root)
         assert stats.num_reprocesses == 1
         assert _contents(project_root, "notes.txt") == ["v1/partial:hello\n"]
     finally:

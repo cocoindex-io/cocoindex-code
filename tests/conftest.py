@@ -5,13 +5,15 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
 from cocoindex.resources.schema import VectorSchema
 
 if TYPE_CHECKING:
+    from cocoindex_code.daemon import ProjectRegistry
+    from cocoindex_code.protocol import IndexingProgress
     from cocoindex_code.settings import UserSettings
 
 # === Environment setup BEFORE any cocoindex_code imports ===
@@ -49,7 +51,13 @@ _STUB_EMBED_DIM = 4  # tiny dimension — enough to satisfy the vector table sch
 
 
 class StubEmbedder:
-    """Zero-vector embedder for indexing tests that don't need a real model."""
+    """Zero-vector embedder for indexing tests that don't need a real model.
+
+    Records the kwargs of each ``embed()`` call in ``calls``.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
 
     def __coco_memo_key__(self) -> str:
         return "stub-embedder"
@@ -57,10 +65,24 @@ class StubEmbedder:
     async def __coco_vector_schema__(self) -> VectorSchema:
         return VectorSchema(dtype=np.dtype("float32"), size=_STUB_EMBED_DIM)
 
-    async def embed(self, text: str) -> np.ndarray:
+    async def embed(self, text: str, **kwargs: Any) -> np.ndarray:
+        self.calls.append(kwargs)
         return np.zeros(_STUB_EMBED_DIM, dtype=np.float32)
 
 
 @pytest.fixture
 def stub_embedder() -> StubEmbedder:
     return StubEmbedder()
+
+
+async def index_project(registry: ProjectRegistry, project_root: Path) -> IndexingProgress:
+    """Run one index pass through the daemon's registry; return the final file stats."""
+    project = await registry.get_project(str(project_root))
+    progress: list[IndexingProgress] = []
+    await project.run_index(on_progress=progress.append)
+    return progress[-1]
+
+
+def assert_all_unchanged(stats: IndexingProgress, num_files: int) -> None:
+    assert stats.num_unchanged == num_files
+    assert stats.num_adds == stats.num_reprocesses == stats.num_deletes == 0

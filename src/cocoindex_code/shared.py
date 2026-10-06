@@ -37,7 +37,8 @@ Embedder = Union[
 EMBEDDER = coco.ContextKey[Embedder]("embedder", detect_change=True)
 SQLITE_DB = coco.ContextKey[sqlite.ManagedConnection]("index_db")
 CODEBASE_DIR = coco.ContextKey[pathlib.Path]("codebase")
-INDEXING_EMBED_PARAMS = coco.ContextKey[dict[str, Any]]("indexing_embed_params")
+INDEXING_EMBED_PARAMS = coco.ContextKey[dict[str, Any]]("indexing_embed_params", detect_change=True)
+# Read only at query time, outside any memoized function: nothing to invalidate.
 QUERY_EMBED_PARAMS = coco.ContextKey[dict[str, Any]]("query_embed_params")
 
 
