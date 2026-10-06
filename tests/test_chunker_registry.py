@@ -15,9 +15,10 @@ from cocoindex.connectors import sqlite as coco_sqlite
 from conftest import StubEmbedder
 from example_toml_chunker import toml_chunker
 
-from cocoindex_code.chunking import CHUNKER_REGISTRY, Chunk, TextPosition
+from cocoindex_code.chunking import CHUNKER_REGISTRY, Chunk, ChunkerFn, TextPosition
 from cocoindex_code.project import Project
 from cocoindex_code.settings import ProjectSettings
+from cocoindex_code.shared import ChunkerFingerprint, LoadedChunker
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -27,9 +28,12 @@ from cocoindex_code.settings import ProjectSettings
 async def _index_project(
     project_root: Path,
     embedder: StubEmbedder,
-    **create_kwargs: Any,
+    chunker_registry: dict[str, ChunkerFn] | None = None,
 ) -> Project:
-    """Create a Project and run a full index pass."""
+    """Create a Project and run a full index pass.
+
+    These tests index once, so the chunker fingerprints only have to exist.
+    """
     settings = ProjectSettings(include_patterns=["**/*.*"], exclude_patterns=["**/.cocoindex_code"])
     from cocoindex_code.settings import save_project_settings
 
@@ -39,7 +43,10 @@ async def _index_project(
         embedder,
         indexing_params={},
         query_params={},
-        **create_kwargs,
+        chunkers={
+            suffix: LoadedChunker(fn, ChunkerFingerprint(spec=fn.__qualname__, module_sha256=""))
+            for suffix, fn in (chunker_registry or {}).items()
+        },
     )
     await project.run_index()
     return project

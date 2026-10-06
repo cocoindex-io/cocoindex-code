@@ -18,7 +18,7 @@ from datetime import timedelta
 from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
 from types import ModuleType
-from typing import Any, NamedTuple
+from typing import Any
 
 from ._daemon_paths import (
     clear_last_exit_marker,
@@ -30,7 +30,6 @@ from ._daemon_paths import (
     write_last_exit_marker,
 )
 from ._version import __version__
-from .chunking import ChunkerFn as _ChunkerFn
 from .embedder_params import resolve_embedder_params
 from .project import Project
 from .protocol import (
@@ -79,6 +78,7 @@ from .settings import (
 from .shared import (
     ChunkerFingerprint,
     Embedder,
+    LoadedChunker,
     check_embedding,
     configure_mps_environment,
     create_embedder,
@@ -108,11 +108,6 @@ def _build_backward_compat_warning(
     )
 
 
-class _ResolvedChunkers(NamedTuple):
-    registry: dict[str, _ChunkerFn]
-    fingerprints: dict[str, ChunkerFingerprint]
-
-
 # sha256 of each chunker module's file, taken when the daemon first got the module.
 # importlib returns the already loaded module on later imports (another project, or
 # the same one after `ccc reset`), and that module still runs the code that was
@@ -130,7 +125,7 @@ def _module_sha256(mod: ModuleType) -> str:
     return digest
 
 
-def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> _ResolvedChunkers:
+def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> dict[str, LoadedChunker]:
     """Import the chunkers from ``ChunkerMapping`` settings entries, keyed by suffix.
 
     Each ``mapping.module`` must be a ``"module.path:callable"`` string importable
@@ -138,8 +133,7 @@ def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> _ResolvedChunke
     hash of the module file it names; a helper module that file imports is not
     covered, so editing only the helper does not re-process files.
     """
-    registry: dict[str, _ChunkerFn] = {}
-    fingerprints: dict[str, ChunkerFingerprint] = {}
+    registry: dict[str, LoadedChunker] = {}
     for cm in mappings:
         module_path, _, attr = cm.module.partition(":")
         if not attr:
@@ -149,10 +143,10 @@ def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> _ResolvedChunke
         fn = getattr(mod, attr)
         if not callable(fn):
             raise ValueError(f"chunker {cm.module!r}: {attr!r} is not callable")
-        suffix = f".{cm.ext}"
-        registry[suffix] = fn
-        fingerprints[suffix] = ChunkerFingerprint(spec=cm.module, module_sha256=module_sha256)
-    return _ResolvedChunkers(registry, fingerprints)
+        registry[f".{cm.ext}"] = LoadedChunker(
+            fn, ChunkerFingerprint(spec=cm.module, module_sha256=module_sha256)
+        )
+    return registry
 
 
 # ---------------------------------------------------------------------------
@@ -198,14 +192,12 @@ class ProjectRegistry:
         if project_root not in self._projects:
             root = Path(project_root)
             project_settings = load_project_settings(root)
-            chunkers = _resolve_chunker_registry(project_settings.chunkers)
             project = await Project.create(
                 root,
                 self._embedder,
                 indexing_params=self.indexing_params,
                 query_params=self.query_params,
-                chunker_registry=chunkers.registry,
-                chunker_fingerprints=chunkers.fingerprints,
+                chunkers=_resolve_chunker_registry(project_settings.chunkers),
                 clear_mps_cache_after_index=self._clear_mps_cache_after_index,
             )
             self._projects[project_root] = project

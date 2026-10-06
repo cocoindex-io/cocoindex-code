@@ -21,7 +21,7 @@ from cocoindex.connectors import sqlite as coco_sqlite
 from conftest import StubEmbedder
 
 from cocoindex_code.chunking import Chunk, TextPosition
-from cocoindex_code.daemon import ProjectRegistry
+from cocoindex_code.daemon import ProjectRegistry, _resolve_chunker_registry
 from cocoindex_code.project import Project
 from cocoindex_code.protocol import IndexingProgress
 from cocoindex_code.settings import (
@@ -30,7 +30,6 @@ from cocoindex_code.settings import (
     ProjectSettings,
     save_project_settings,
 )
-from cocoindex_code.shared import ChunkerFingerprint
 
 
 def _settings(**overrides: Any) -> ProjectSettings:
@@ -200,8 +199,7 @@ async def test_chunker_change_reprocesses_unchanged_files(
     first = await _project(
         tmp_path,
         stub_embedder,
-        chunker_registry={".txt": _chunker_a},
-        chunker_fingerprints={".txt": ChunkerFingerprint(f"{__name__}:_chunker_a", "")},
+        chunkers=_resolve_chunker_registry([ChunkerMapping("txt", f"{__name__}:_chunker_a")]),
     )
     try:
         await first.run_index()
@@ -218,8 +216,7 @@ async def test_chunker_change_reprocesses_unchanged_files(
     second = await _project(
         tmp_path,
         stub_embedder,
-        chunker_registry={".txt": _chunker_b},
-        chunker_fingerprints={".txt": ChunkerFingerprint(f"{__name__}:_chunker_b", "")},
+        chunkers=_resolve_chunker_registry([ChunkerMapping("txt", f"{__name__}:_chunker_b")]),
     )
     try:
         await second.run_index()

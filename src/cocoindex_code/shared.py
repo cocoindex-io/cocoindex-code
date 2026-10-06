@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from cocoindex.ops.litellm import LiteLLMEmbedder
     from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
+from .chunking import ChunkerFn
 from .settings import EmbeddingSettings
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,13 @@ class ChunkerFingerprint(NamedTuple):
     #: sha256 of the module file named in ``spec``, as it was when imported. Helper
     #: modules that file imports are not covered.
     module_sha256: str
+
+
+class LoadedChunker(NamedTuple):
+    """A custom chunker together with the fingerprint of its code."""
+
+    fn: ChunkerFn
+    fingerprint: ChunkerFingerprint
 
 
 # Context keys
