@@ -56,6 +56,8 @@ def _chunks(project_root: Path) -> list[dict[str, Any]]:
         conn.close()
 
 
+# Files whose chunk contents are compared exactly are written with write_bytes: on
+# Windows, write_text would turn "\n" into "\r\n".
 def _contents(project_root: Path, file_path: str) -> list[str]:
     return [c["content"] for c in _chunks(project_root) if c["file_path"] == file_path]
 
@@ -194,7 +196,7 @@ async def test_chunker_change_reprocesses_unchanged_files(
     tmp_path: Path, stub_embedder: StubEmbedder
 ) -> None:
     (tmp_path / ".git").mkdir()
-    (tmp_path / "notes.txt").write_text("hello world\n")
+    (tmp_path / "notes.txt").write_bytes(b"hello world\n")
     save_project_settings(tmp_path, _settings())
     first = await _project(
         tmp_path,
@@ -239,7 +241,7 @@ async def test_unchanged_chunking_config_leaves_files_unchanged(
     chunker_module: _ChunkerModule,
     stub_embedder: StubEmbedder,
 ) -> None:
-    (project_root / "notes.txt").write_text("hello\n")
+    (project_root / "notes.txt").write_bytes(b"hello\n")
     (project_root / "lib.inc").write_text("<?php echo 1;\n")
     (project_root / "main.py").write_text("x = 1\n")
     save_project_settings(
@@ -270,7 +272,7 @@ async def test_chunker_edit_takes_effect_after_restart(
     chunker_module: _ChunkerModule,
     stub_embedder: StubEmbedder,
 ) -> None:
-    (project_root / "notes.txt").write_text("hello\n")
+    (project_root / "notes.txt").write_bytes(b"hello\n")
     save_project_settings(
         project_root, _settings(chunkers=[ChunkerMapping("txt", chunker_module.spec("plain"))])
     )
@@ -298,7 +300,7 @@ async def test_chunker_edit_takes_effect_after_restart(
 async def test_chunker_spec_change_reprocesses_affected_files(
     project_root: Path, chunker_module: _ChunkerModule, stub_embedder: StubEmbedder
 ) -> None:
-    (project_root / "notes.txt").write_text("hello\n")
+    (project_root / "notes.txt").write_bytes(b"hello\n")
     save_project_settings(
         project_root, _settings(chunkers=[ChunkerMapping("txt", chunker_module.spec("plain"))])
     )
