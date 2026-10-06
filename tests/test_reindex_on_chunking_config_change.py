@@ -199,7 +199,9 @@ async def test_chunker_change_reprocesses_unchanged_files(
     first = await _project(
         tmp_path,
         stub_embedder,
-        chunkers=_resolve_chunker_registry([ChunkerMapping("txt", f"{__name__}:_chunker_a")]),
+        chunker_registry=_resolve_chunker_registry(
+            [ChunkerMapping("txt", f"{__name__}:_chunker_a")]
+        ),
     )
     try:
         await first.run_index()
@@ -216,7 +218,9 @@ async def test_chunker_change_reprocesses_unchanged_files(
     second = await _project(
         tmp_path,
         stub_embedder,
-        chunkers=_resolve_chunker_registry([ChunkerMapping("txt", f"{__name__}:_chunker_b")]),
+        chunker_registry=_resolve_chunker_registry(
+            [ChunkerMapping("txt", f"{__name__}:_chunker_b")]
+        ),
     )
     try:
         await second.run_index()

@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from cocoindex.ops.litellm import LiteLLMEmbedder
     from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
-from .chunking import ChunkerFn
 from .settings import EmbeddingSettings
 
 logger = logging.getLogger(__name__)
@@ -34,36 +33,12 @@ Embedder = Union[
     "LiteLLMEmbedder",
 ]
 
-
-class ChunkerFingerprint(NamedTuple):
-    """Identifies the code of a custom chunker the daemon imported."""
-
-    #: The ``"module.path:callable"`` string from ``settings.yml``.
-    spec: str
-    #: sha256 of the module file named in ``spec``, as it was when imported. Helper
-    #: modules that file imports are not covered.
-    module_sha256: str
-
-
-class LoadedChunker(NamedTuple):
-    """A custom chunker together with the fingerprint of its code."""
-
-    fn: ChunkerFn
-    fingerprint: ChunkerFingerprint
-
-
 # Context keys
 EMBEDDER = coco.ContextKey[Embedder]("embedder", detect_change=True)
 SQLITE_DB = coco.ContextKey[sqlite.ManagedConnection]("index_db")
 CODEBASE_DIR = coco.ContextKey[pathlib.Path]("codebase")
 INDEXING_EMBED_PARAMS = coco.ContextKey[dict[str, Any]]("indexing_embed_params")
 QUERY_EMBED_PARAMS = coco.ContextKey[dict[str, Any]]("query_embed_params")
-# Fingerprints of the CHUNKER_REGISTRY entries, keyed by the same suffixes. The
-# registry holds callables, which cocoindex fingerprints by name only, so this key
-# is what lets a chunker change invalidate memoized files.
-CHUNKER_FINGERPRINTS = coco.ContextKey[dict[str, ChunkerFingerprint]](
-    "chunker_fingerprints", detect_change=True
-)
 
 
 def is_sentence_transformers_installed() -> bool:

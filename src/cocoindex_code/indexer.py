@@ -16,7 +16,6 @@ from .chunking import CHUNKER_REGISTRY
 from .file_walk import build_matcher
 from .settings import load_project_settings
 from .shared import (
-    CHUNKER_FINGERPRINTS,
     CODEBASE_DIR,
     EMBEDDER,
     INDEXING_EMBED_PARAMS,
@@ -63,12 +62,9 @@ async def process_file(
     )
 
     chunker_registry = coco.use_context(CHUNKER_REGISTRY)
-    # The value is not needed; reading it makes any change to the configured
-    # chunkers (spec or module source) re-process this file.
-    coco.use_context(CHUNKER_FINGERPRINTS)
     chunker = chunker_registry.get(suffix)
     if chunker is not None:
-        language_override, chunks = chunker(Path(file.file_path.path), content)
+        language_override, chunks = chunker.fn(Path(file.file_path.path), content)
         if language_override is not None:
             language = language_override
     else:

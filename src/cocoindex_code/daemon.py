@@ -30,6 +30,7 @@ from ._daemon_paths import (
     write_last_exit_marker,
 )
 from ._version import __version__
+from .chunking import LoadedChunker
 from .embedder_params import resolve_embedder_params
 from .project import Project
 from .protocol import (
@@ -75,14 +76,7 @@ from .settings import (
     target_sqlite_db_path,
     user_settings_path,
 )
-from .shared import (
-    ChunkerFingerprint,
-    Embedder,
-    LoadedChunker,
-    check_embedding,
-    configure_mps_environment,
-    create_embedder,
-)
+from .shared import Embedder, check_embedding, configure_mps_environment, create_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +123,8 @@ def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> dict[str, Loade
     """Import the chunkers from ``ChunkerMapping`` settings entries, keyed by suffix.
 
     Each ``mapping.module`` must be a ``"module.path:callable"`` string importable
-    from the current environment. Each chunker's fingerprint is that string plus a
-    hash of the module file it names; a helper module that file imports is not
-    covered, so editing only the helper does not re-process files.
+    from the current environment. Each chunker records that string and a hash of
+    the module file it names, which is what makes a chunker edit re-process files.
     """
     registry: dict[str, LoadedChunker] = {}
     for cm in mappings:
@@ -143,9 +136,7 @@ def _resolve_chunker_registry(mappings: list[ChunkerMapping]) -> dict[str, Loade
         fn = getattr(mod, attr)
         if not callable(fn):
             raise ValueError(f"chunker {cm.module!r}: {attr!r} is not callable")
-        registry[f".{cm.ext}"] = LoadedChunker(
-            fn, ChunkerFingerprint(spec=cm.module, module_sha256=module_sha256)
-        )
+        registry[f".{cm.ext}"] = LoadedChunker(fn, spec=cm.module, module_sha256=module_sha256)
     return registry
 
 
@@ -197,7 +188,7 @@ class ProjectRegistry:
                 self._embedder,
                 indexing_params=self.indexing_params,
                 query_params=self.query_params,
-                chunkers=_resolve_chunker_registry(project_settings.chunkers),
+                chunker_registry=_resolve_chunker_registry(project_settings.chunkers),
                 clear_mps_cache_after_index=self._clear_mps_cache_after_index,
             )
             self._projects[project_root] = project

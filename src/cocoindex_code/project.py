@@ -12,7 +12,7 @@ from typing import Any
 import cocoindex as coco
 from cocoindex.connectors import sqlite as coco_sqlite
 
-from .chunking import CHUNKER_REGISTRY
+from .chunking import CHUNKER_REGISTRY, LoadedChunker
 from .indexer import indexer_main
 from .protocol import (
     IndexingProgress,
@@ -34,14 +34,12 @@ from .settings import (
     target_sqlite_db_path as _target_sqlite_db_path,
 )
 from .shared import (
-    CHUNKER_FINGERPRINTS,
     CODEBASE_DIR,
     EMBEDDER,
     INDEXING_EMBED_PARAMS,
     QUERY_EMBED_PARAMS,
     SQLITE_DB,
     Embedder,
-    LoadedChunker,
     clear_mps_allocator_cache,
 )
 
@@ -283,7 +281,7 @@ class Project:
         embedder: Embedder,
         indexing_params: dict[str, Any],
         query_params: dict[str, Any],
-        chunkers: Mapping[str, LoadedChunker] | None = None,
+        chunker_registry: Mapping[str, LoadedChunker] | None = None,
         clear_mps_cache_after_index: bool = False,
     ) -> Project:
         """Create a project with explicit embedder and per-call params.
@@ -300,10 +298,9 @@ class Project:
                 no extras.
             query_params: Extra kwargs spread into ``embedder.embed()`` for the
                 query side.
-            chunkers: Optional mapping of file suffix (e.g. ``".toml"``) to a
-                custom chunker. When a suffix matches, the chunker is called
-                instead of the built-in splitter. A change to any chunker's
-                fingerprint since the previous run re-processes all files.
+            chunker_registry: Optional mapping of file suffix (e.g. ``".toml"``)
+                to a ``LoadedChunker``. When a suffix matches, the registered
+                chunker is called instead of the built-in splitter.
             clear_mps_cache_after_index: Whether to release unused MPS allocator
                 memory in CocoIndex's GPU subprocess after each index run.
         """
@@ -324,11 +321,7 @@ class Project:
         context.provide(EMBEDDER, embedder)
         context.provide(INDEXING_EMBED_PARAMS, dict(indexing_params))
         context.provide(QUERY_EMBED_PARAMS, dict(query_params))
-        chunkers = chunkers or {}
-        context.provide(CHUNKER_REGISTRY, {suffix: c.fn for suffix, c in chunkers.items()})
-        context.provide(
-            CHUNKER_FINGERPRINTS, {suffix: c.fingerprint for suffix, c in chunkers.items()}
-        )
+        context.provide(CHUNKER_REGISTRY, dict(chunker_registry) if chunker_registry else {})
 
         env = coco.Environment(settings, context_provider=context)
         app = coco.App(

@@ -12,6 +12,7 @@ Example usage::
 
 from __future__ import annotations
 
+import dataclasses as _dataclasses
 import pathlib as _pathlib
 from collections.abc import Callable as _Callable
 
@@ -23,9 +24,31 @@ from cocoindex.resources.chunk import Chunk, TextPosition
 # path is not resolved (no syscall); call path.resolve() inside the chunker if needed.
 ChunkerFn = _Callable[[_pathlib.Path, str], tuple[str | None, list[Chunk]]]
 
-# Not change-detected: cocoindex fingerprints a function by its module and name
-# only, so the daemon provides a fingerprint of each chunker's code through a
-# separate context key instead.
-CHUNKER_REGISTRY = _coco.ContextKey[dict[str, ChunkerFn]]("chunker_registry")
 
-__all__ = ["Chunk", "ChunkerFn", "CHUNKER_REGISTRY", "TextPosition"]
+@_dataclasses.dataclass(frozen=True)
+class LoadedChunker:
+    """A chunker the daemon imported from a ``settings.yml`` entry.
+
+    Its memo key is ``(spec, module_sha256)``, never ``fn`` itself: cocoindex
+    fingerprints a function by its module and name only, so an edit to its body
+    would go unnoticed, and it cannot fingerprint lambdas or closures at all.
+    """
+
+    fn: ChunkerFn
+    #: The ``"module.path:callable"`` string from ``settings.yml``.
+    spec: str
+    #: sha256 of the module file named in ``spec``, as it was when imported. Helper
+    #: modules that file imports are not covered.
+    module_sha256: str
+
+    def __coco_memo_key__(self) -> tuple[str, str]:
+        return (self.spec, self.module_sha256)
+
+
+# Keyed by file suffix (e.g. ".toml"). Adding, removing or changing an entry
+# re-processes all files.
+CHUNKER_REGISTRY = _coco.ContextKey[dict[str, LoadedChunker]](
+    "chunker_registry", detect_change=True
+)
+
+__all__ = ["Chunk", "ChunkerFn", "CHUNKER_REGISTRY", "LoadedChunker", "TextPosition"]
