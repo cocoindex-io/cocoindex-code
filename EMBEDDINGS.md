@@ -141,6 +141,22 @@ Well ranked in the MTEB v3 benchmarks
 - **Gemini ([`text-embedding-004`](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings))**: Top-tier performance (Score: **0.97**) with a generous free tier.
 - **OpenAI ([`text-embedding-3-small`](https://platform.openai.com/docs/guides/embeddings))**: Reliable and very cost-effective for large codebases.
 
+### OrcaRouter (aggregated cloud gateway)
+
+[OrcaRouter](https://www.orcarouter.ai) is an OpenAI-compatible AI gateway that serves many embedding models behind a single endpoint, with provider-prefixed ids such as `openai/text-embedding-3-small` and `google/gemini-embedding-001`. It also adds automatic failover and adaptive routing across those models. Configure it through the standard `openai/` LiteLLM route — LiteLLM strips one `openai/` and forwards the remaining id to OrcaRouter:
+
+```yaml
+embedding:
+  provider: litellm
+  model: openai/openai/text-embedding-3-small
+  min_interval_ms: 300
+envs:
+  OPENAI_BASE_URL: https://api.orcarouter.ai/v1
+  OPENAI_API_KEY: your-api-key
+```
+
+Use `openai/<model-id>` where `<model-id>` is any OrcaRouter embedding id, e.g. `openai/google/gemini-embedding-001`.
+
 ### Configuration
 
 Example for Voyage AI:
