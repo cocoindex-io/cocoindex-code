@@ -80,7 +80,8 @@ _DEFAULT_PARAMS: list[DefaultParamsEntry] = [
     ),
     DefaultParamsEntry(
         "litellm",
-        re.compile(r"voyage/.+"),
+        # ``mongodb/`` routes Voyage models through MongoDB Atlas; same params.
+        re.compile(r"(voyage|mongodb)/.+"),
         {"input_type": "document"},
         {"input_type": "query"},
     ),
