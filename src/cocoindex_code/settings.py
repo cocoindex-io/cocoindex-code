@@ -139,6 +139,9 @@ class UserSettings:
     embedding: EmbeddingSettings
     envs: dict[str, str] = field(default_factory=dict)
     daemon: DaemonSettings = field(default_factory=DaemonSettings)
+    include_patterns: list[str] | None = None
+    exclude_patterns: list[str] | None = None
+    max_file_size: int | None = None
 
 
 @dataclass
@@ -180,8 +183,33 @@ def default_user_settings() -> UserSettings:
     )
 
 
-def default_project_settings() -> ProjectSettings:
-    return ProjectSettings()
+def default_project_settings(user_settings: UserSettings | None = None) -> ProjectSettings:
+    if user_settings is None:
+        try:
+            user_settings = load_user_settings()
+        except Exception:
+            user_settings = None
+
+    include_patterns = (
+        list(user_settings.include_patterns)
+        if user_settings is not None and user_settings.include_patterns is not None
+        else list(DEFAULT_INCLUDED_PATTERNS)
+    )
+    exclude_patterns = (
+        list(user_settings.exclude_patterns)
+        if user_settings is not None and user_settings.exclude_patterns is not None
+        else list(DEFAULT_EXCLUDED_PATTERNS)
+    )
+    max_file_size = (
+        user_settings.max_file_size
+        if user_settings is not None and user_settings.max_file_size is not None
+        else None
+    )
+    return ProjectSettings(
+        include_patterns=include_patterns,
+        exclude_patterns=exclude_patterns,
+        max_file_size=max_file_size,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +554,12 @@ def _user_settings_to_dict(settings: UserSettings) -> dict[str, Any]:
         daemon_dict["keep_alive_with_mcp"] = settings.daemon.keep_alive_with_mcp
     if daemon_dict:
         d["daemon"] = daemon_dict
+    if settings.include_patterns is not None:
+        d["include_patterns"] = list(settings.include_patterns)
+    if settings.exclude_patterns is not None:
+        d["exclude_patterns"] = list(settings.exclude_patterns)
+    if settings.max_file_size is not None:
+        d["max_file_size"] = settings.max_file_size
     return d
 
 
@@ -565,7 +599,30 @@ def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
             raise ValueError("daemon.keep_alive_with_mcp must be a boolean")
         daemon_kwargs["keep_alive_with_mcp"] = keep_alive_with_mcp
     daemon = DaemonSettings(**daemon_kwargs)
-    return UserSettings(embedding=embedding, envs=envs, daemon=daemon)
+
+    include_patterns = d.get("include_patterns")
+    if include_patterns is not None:
+        if not isinstance(include_patterns, list) or not all(isinstance(x, str) for x in include_patterns):
+            raise ValueError("include_patterns must be a list of strings")
+        include_patterns = list(include_patterns)
+
+    exclude_patterns = d.get("exclude_patterns")
+    if exclude_patterns is not None:
+        if not isinstance(exclude_patterns, list) or not all(isinstance(x, str) for x in exclude_patterns):
+            raise ValueError("exclude_patterns must be a list of strings")
+        exclude_patterns = list(exclude_patterns)
+
+    raw_max_size = d.get("max_file_size")
+    max_file_size = None if raw_max_size is None else parse_file_size(raw_max_size)
+
+    return UserSettings(
+        embedding=embedding,
+        envs=envs,
+        daemon=daemon,
+        include_patterns=include_patterns,
+        exclude_patterns=exclude_patterns,
+        max_file_size=max_file_size,
+    )
 
 
 _SIZE_UNITS: dict[str, int] = {
@@ -628,16 +685,43 @@ def _project_settings_to_dict(settings: ProjectSettings) -> dict[str, Any]:
     return d
 
 
-def _project_settings_from_dict(d: dict[str, Any]) -> ProjectSettings:
+def _project_settings_from_dict(
+    d: dict[str, Any],
+    user_settings: UserSettings | None = None,
+) -> ProjectSettings:
     overrides = [
         LanguageOverride(ext=lo["ext"], lang=lo["lang"]) for lo in d.get("language_overrides", [])
     ]
     chunkers = [ChunkerMapping(ext=cm["ext"], module=cm["module"]) for cm in d.get("chunkers", [])]
-    raw_max_size = d.get("max_file_size")
-    max_file_size = None if raw_max_size is None else parse_file_size(raw_max_size)
+
+    # Include patterns: project > user > default
+    if "include_patterns" in d and d["include_patterns"] is not None:
+        include_patterns = list(d["include_patterns"])
+    elif user_settings is not None and user_settings.include_patterns is not None:
+        include_patterns = list(user_settings.include_patterns)
+    else:
+        include_patterns = list(DEFAULT_INCLUDED_PATTERNS)
+
+    # Exclude patterns: project > user > default
+    if "exclude_patterns" in d and d["exclude_patterns"] is not None:
+        exclude_patterns = list(d["exclude_patterns"])
+    elif user_settings is not None and user_settings.exclude_patterns is not None:
+        exclude_patterns = list(user_settings.exclude_patterns)
+    else:
+        exclude_patterns = list(DEFAULT_EXCLUDED_PATTERNS)
+
+    # Max file size: project > user > None
+    if "max_file_size" in d:
+        raw_max_size = d.get("max_file_size")
+        max_file_size = None if raw_max_size is None else parse_file_size(raw_max_size)
+    elif user_settings is not None and user_settings.max_file_size is not None:
+        max_file_size = user_settings.max_file_size
+    else:
+        max_file_size = None
+
     return ProjectSettings(
-        include_patterns=d.get("include_patterns", list(DEFAULT_INCLUDED_PATTERNS)),
-        exclude_patterns=d.get("exclude_patterns", list(DEFAULT_EXCLUDED_PATTERNS)),
+        include_patterns=include_patterns,
+        exclude_patterns=exclude_patterns,
         language_overrides=overrides,
         chunkers=chunkers,
         max_file_size=max_file_size,
@@ -757,7 +841,10 @@ def save_initial_user_settings(
     return path
 
 
-def load_project_settings(project_root: Path) -> ProjectSettings:
+def load_project_settings(
+    project_root: Path,
+    user_settings: UserSettings | None = None,
+) -> ProjectSettings:
     """Read ``$PROJECT_ROOT/.cocoindex_code/settings.yml``.
 
     Raises ``FileNotFoundError`` if the file does not exist.
@@ -765,12 +852,17 @@ def load_project_settings(project_root: Path) -> ProjectSettings:
     path = project_settings_path(project_root)
     if not path.is_file():
         raise FileNotFoundError(f"Project settings not found: {path}")
+    if user_settings is None:
+        try:
+            user_settings = load_user_settings()
+        except Exception:
+            user_settings = None
     try:
         with open(path) as f:
             data = _yaml.safe_load(f)
         if not data:
-            return default_project_settings()
-        return _project_settings_from_dict(data)
+            return default_project_settings(user_settings=user_settings)
+        return _project_settings_from_dict(data, user_settings=user_settings)
     except Exception as e:
         raise type(e)(f"Error loading {path}: {e}") from e
 
