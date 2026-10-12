@@ -602,13 +602,17 @@ def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
 
     include_patterns = d.get("include_patterns")
     if include_patterns is not None:
-        if not isinstance(include_patterns, list) or not all(isinstance(x, str) for x in include_patterns):
+        if not isinstance(include_patterns, list) or not all(
+            isinstance(x, str) for x in include_patterns
+        ):
             raise ValueError("include_patterns must be a list of strings")
         include_patterns = list(include_patterns)
 
     exclude_patterns = d.get("exclude_patterns")
     if exclude_patterns is not None:
-        if not isinstance(exclude_patterns, list) or not all(isinstance(x, str) for x in exclude_patterns):
+        if not isinstance(exclude_patterns, list) or not all(
+            isinstance(x, str) for x in exclude_patterns
+        ):
             raise ValueError("exclude_patterns must be a list of strings")
         exclude_patterns = list(exclude_patterns)
 
