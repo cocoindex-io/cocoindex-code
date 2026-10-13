@@ -45,7 +45,7 @@ from pathlib import Path
 import pandas as pd
 from datasets import load_dataset
 from huggingface_hub import HfApi, ModelInfo, dataset_info
-from tabulate import tabulate
+from tabulate import tabulate  # type: ignore[import-untyped]
 
 CACHE_DIR = Path(".cocoindex_code/cache")
 CACHE_FILE = CACHE_DIR / "mteb_results.parquet"
@@ -168,10 +168,11 @@ def main() -> None:
     # Fetch dataset info for freshness (always live check for the date)
     try:
         info = dataset_info("mteb/results")
-        last_update = info.lastModified.strftime("%Y-%m-%d")
-        report.append(
-            f"\n> **Data Freshness**: MTEB results dataset last updated on `{last_update}`."
-        )
+        if info.lastModified is not None:
+            last_update = info.lastModified.strftime("%Y-%m-%d")
+            report.append(
+                f"\n> **Data Freshness**: MTEB results dataset last updated on `{last_update}`."
+            )
     except Exception:
         pass
 

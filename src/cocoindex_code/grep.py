@@ -261,7 +261,7 @@ def _match_file(target: _Target) -> FileMatches | GrepWarning | None:
     if fm is None:
         return None  # binary, prefilter-rejected, or no matches
     matches = sorted(fm.matches, key=lambda m: m.chunks[0].start.byte_offset if m.chunks else 0)
-    return FileMatches(path=target.display, source=fm.ast.source, matches=matches)
+    return FileMatches(path=target.display, source=fm.source.text, matches=matches)
 
 
 class Grep:

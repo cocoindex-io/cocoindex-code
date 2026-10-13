@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
+import json
 import logging
 import sqlite3
+import time
 import weakref
 from collections.abc import AsyncIterator, Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -16,6 +19,7 @@ import cocoindex as coco
 from cocoindex.connectors import sqlite as coco_sqlite
 
 from .chunking import CHUNKER_REGISTRY, LoadedChunker
+from .file_walk import build_matcher, iter_included_files
 from .indexer import indexer_main
 from .protocol import (
     IndexingProgress,
@@ -31,6 +35,8 @@ from .settings import (
     cocoindex_db_path as _cocoindex_db_path,
 )
 from .settings import (
+    index_state_path,
+    load_project_settings,
     resolve_db_dir,
 )
 from .settings import (
@@ -50,6 +56,54 @@ logger = logging.getLogger(__name__)
 
 _P = ParamSpec("_P")
 _T = TypeVar("_T")
+
+
+def _source_fingerprint(project_root: Path) -> str | None:
+    """Return a stable fingerprint of the indexable source tree and settings.
+
+    The fingerprint deliberately uses paths, mtimes, and sizes rather than file
+    contents: checking freshness must remain much cheaper than embedding every
+    file. It catches additions, removals, renames, and ordinary edits, including
+    changes to the project settings that control which files are indexed.
+    """
+    try:
+        settings = load_project_settings(project_root)
+        matcher = build_matcher(
+            project_root,
+            settings.include_patterns,
+            settings.exclude_patterns,
+            settings.max_file_size,
+        )
+        digest = hashlib.sha256()
+        settings_path = project_root / ".cocoindex_code" / "settings.yml"
+        digest.update(b"settings\x00")
+        digest.update(settings_path.read_bytes())
+        for path, relative_path in iter_included_files(project_root, project_root, matcher):
+            stat = path.stat()
+            digest.update(relative_path.as_posix().encode())
+            digest.update(b"\x00")
+            digest.update(str(stat.st_mtime_ns).encode())
+            digest.update(b"\x00")
+            digest.update(str(stat.st_size).encode())
+            digest.update(b"\x00")
+        return digest.hexdigest()
+    except OSError:
+        # A concurrent file change or unreadable path means freshness is unknown,
+        # never that an index is fresh.
+        return None
+
+
+def _load_index_state(path: Path) -> tuple[str | None, int | None]:
+    """Read a prior successful index fingerprint, tolerating old/corrupt state."""
+    try:
+        value = json.loads(path.read_text())
+        fingerprint = value.get("source_fingerprint")
+        indexed_at_us = value.get("indexed_at_us")
+        if isinstance(fingerprint, str) and isinstance(indexed_at_us, int):
+            return fingerprint, indexed_at_us
+    except (OSError, ValueError, TypeError):
+        pass
+    return None, None
 
 
 class _EmptyContextThreadPoolExecutor(ThreadPoolExecutor):
@@ -89,6 +143,9 @@ class Project:
     _initial_index_task: asyncio.Task[None] | None
     _initial_index_started: asyncio.Event | None
     _indexing_stats: IndexingProgress | None = None
+    _index_state_path: Path
+    _source_tree_fingerprint: str | None
+    _indexed_at_us: int | None
 
     def close(self) -> None:
         """Close project resources to release file handles (LMDB, SQLite)."""
@@ -131,6 +188,7 @@ class Project:
         on_progress: Callable[[IndexingProgress], None] | None = None,
     ) -> None:
         """Run indexing (lock must already be held)."""
+        completed = False
         try:
             handle = self._app.update()
             async for snapshot in handle.watch():
@@ -148,8 +206,23 @@ class Project:
                     if on_progress is not None:
                         on_progress(progress)
                     await asyncio.sleep(0.1)
+            completed = True
         finally:
             try:
+                # An index that encountered file-processing errors cannot be called
+                # fresh: clear any older state rather than presenting stale data as
+                # current. The filesystem walk belongs off the daemon event loop.
+                no_index_errors = (
+                    self._indexing_stats is None or self._indexing_stats.num_errors == 0
+                )
+                if completed and no_index_errors:
+                    try:
+                        await asyncio.to_thread(self._record_index_state)
+                    except Exception:
+                        logger.exception("Unable to record index freshness state")
+                        self._clear_index_state()
+                else:
+                    self._clear_index_state()
                 if self._clear_mps_cache_after_index:
                     try:
                         await clear_mps_allocator_cache()
@@ -158,6 +231,33 @@ class Project:
             finally:
                 self._initial_index_done.set()
                 self._indexing_stats = None
+
+    def _record_index_state(self) -> None:
+        """Persist the source-tree fingerprint after a successful index update."""
+        fingerprint = _source_fingerprint(self._project_root)
+        if fingerprint is None:
+            self._clear_index_state()
+            return
+        indexed_at_us = time.time_ns() // 1_000
+        payload = json.dumps(
+            {"source_fingerprint": fingerprint, "indexed_at_us": indexed_at_us},
+            sort_keys=True,
+        )
+        self._index_state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self._index_state_path.with_suffix(".tmp")
+        tmp_path.write_text(payload)
+        tmp_path.replace(self._index_state_path)
+        self._source_tree_fingerprint = fingerprint
+        self._indexed_at_us = indexed_at_us
+
+    def _clear_index_state(self) -> None:
+        """Forget freshness state after an incomplete or failed index update."""
+        self._source_tree_fingerprint = None
+        self._indexed_at_us = None
+        try:
+            self._index_state_path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Unable to remove stale index freshness state", exc_info=True)
 
     async def ensure_indexing_started(self) -> None:
         """Kick off background indexing and wait until it is active or queued.
@@ -283,6 +383,9 @@ class Project:
 
         is_indexing = self._index_lock.locked()
         progress = self._indexing_stats if is_indexing else None
+        stale = True
+        if index_exists and not is_indexing and self._source_tree_fingerprint is not None:
+            stale = _source_fingerprint(self._project_root) != self._source_tree_fingerprint
         return ProjectStatusResponse(
             indexing=is_indexing,
             total_chunks=total_chunks,
@@ -290,6 +393,8 @@ class Project:
             languages={lang: cnt for lang, cnt in lang_rows},
             progress=progress,
             index_exists=index_exists,
+            stale=stale,
+            indexed_at_us=self._indexed_at_us,
         )
 
     # ------------------------------------------------------------------
@@ -378,4 +483,8 @@ class Project:
         result._initial_index_done = asyncio.Event()
         result._initial_index_task = None
         result._initial_index_started = None
+        result._index_state_path = index_state_path(project_root)
+        result._source_tree_fingerprint, result._indexed_at_us = _load_index_state(
+            result._index_state_path
+        )
         return result
