@@ -247,9 +247,9 @@ Once configured, the agent automatically decides when semantic code search is he
 <details>
 <summary>MCP Tool Reference</summary>
 
-When running as an MCP server (`ccc mcp`), the following tool is exposed:
+When running as an MCP server (`ccc mcp`), the following tools are exposed:
 
-**`search`** — Search the codebase using semantic similarity.
+**`search`** - Search the codebase using semantic similarity.
 
 ```
 search(
@@ -262,7 +262,32 @@ search(
 )
 ```
 
-Returns matching code chunks with file path, language, code content, line numbers, and similarity score.
+Returns matching code chunks with file path, language, code content, line numbers, similarity score, and `freshness` (`stale` plus the time of the latest successful index). When `stale` is true, search again with `refresh_index=true` before relying on the result.
+
+**`grep`** - Structural code search by syntax example. It runs locally and needs no index or embedding model.
+
+```
+grep(
+    pattern: str,                        # e.g. r"def \NAME(\(ARGS*\)):"
+    path: str = ".",                     # File or directory relative to the project root
+    languages: list[str] | None = None,  # Optional language filter
+    path_glob: str | None = None,        # Optional project-relative glob
+    limit: int = 100,                    # Maximum matches returned (1-1000)
+)
+```
+
+Returns exact matched source spans with file paths and line ranges. Paths outside the configured project are rejected.
+
+**`status`** - Report index health and freshness: whether indexing is active, index/file/chunk counts, indexed-language breakdown, and `freshness`.
+
+**`codebase_overview`** - Return a compact tree of indexable source files, top-level directory file counts, and language file counts without returning source text. Use it to orient in an unfamiliar repository.
+
+```
+codebase_overview(
+    max_depth: int = 2,                  # Tree depth (1-8)
+    max_entries: int = 80,               # Maximum tree entries (1-500)
+)
+```
 </details>
 
 ## Manual CLI Usage

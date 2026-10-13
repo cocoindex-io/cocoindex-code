@@ -12,13 +12,24 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
+from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 
+from cocoindex.ops.text import detect_code_language
 from mcp.server.mcpserver import MCPServer
 from pydantic import BaseModel, Field
 
 from ._version import __version__
-from .settings import DaemonSettings, load_user_settings, user_settings_root_note
+from .file_walk import build_matcher, iter_included_files
+from .protocol import ProjectStatusResponse
+from .settings import (
+    DaemonSettings,
+    load_project_settings,
+    load_user_settings,
+    user_settings_root_note,
+)
 
 _MCP_INSTRUCTIONS = (
     "Code search and codebase understanding tools."
@@ -46,6 +57,16 @@ class CodeChunkResult(BaseModel):
     score: float = Field(description="Similarity score (0-1, higher is better)")
 
 
+class IndexFreshnessModel(BaseModel):
+    """Whether the source tree still matches the latest successful index."""
+
+    stale: bool = Field(description="True when a refresh is needed or freshness is unknown")
+    indexed_at: str | None = Field(
+        default=None,
+        description="UTC time of the successful index update, or null when unavailable",
+    )
+
+
 class SearchResultModel(BaseModel):
     """Result from search tool."""
 
@@ -53,6 +74,66 @@ class SearchResultModel(BaseModel):
     results: list[CodeChunkResult] = Field(default_factory=list)
     total_returned: int = Field(default=0)
     offset: int = Field(default=0)
+    freshness: IndexFreshnessModel = Field(default_factory=lambda: IndexFreshnessModel(stale=True))
+    message: str | None = None
+
+
+class IndexStatusModel(BaseModel):
+    """Index health, size, and freshness for the current project."""
+
+    indexing: bool
+    index_exists: bool
+    total_chunks: int
+    total_files: int
+    languages: dict[str, int] = Field(
+        default_factory=dict,
+        description="Indexed chunk counts by programming language",
+    )
+    freshness: IndexFreshnessModel
+    message: str | None = None
+
+
+class StructuralMatchResult(BaseModel):
+    """One structural-code match."""
+
+    file_path: str = Field(description="Path relative to the project root")
+    language: str | None = Field(description="Detected language, if available")
+    content: str = Field(description="The exact source span matching the structural pattern")
+    start_line: int = Field(description="Starting line number (1-indexed)")
+    end_line: int = Field(description="Ending line number (1-indexed)")
+
+
+class GrepResultModel(BaseModel):
+    """Result from structural grep."""
+
+    success: bool
+    matches: list[StructuralMatchResult] = Field(default_factory=list)
+    total_matches: int = Field(default=0)
+    warnings: list[str] = Field(default_factory=list)
+    truncated: bool = False
+    message: str | None = None
+
+
+class DirectorySummary(BaseModel):
+    """Indexed-source file count for a top-level directory."""
+
+    path: str
+    files: int
+
+
+class CodebaseOverviewResult(BaseModel):
+    """A compact source-tree overview for agent orientation."""
+
+    success: bool
+    total_source_files: int = 0
+    languages: dict[str, int] = Field(
+        default_factory=dict,
+        description="Current source file counts by detected language",
+    )
+    top_level_directories: list[DirectorySummary] = Field(default_factory=list)
+    tree: list[str] = Field(default_factory=list)
+    truncated: bool = False
+    freshness: IndexFreshnessModel = Field(default_factory=lambda: IndexFreshnessModel(stale=True))
     message: str | None = None
 
 
@@ -61,6 +142,145 @@ def _with_note(message: str | None, note: str | None) -> str | None:
     if note is None:
         return message
     return f"{message}\nNote: {note}" if message else f"Note: {note}"
+
+
+def _freshness_from_status(status: ProjectStatusResponse) -> IndexFreshnessModel:
+    """Translate daemon timestamp fields into a stable MCP-facing shape."""
+    indexed_at_us = getattr(status, "indexed_at_us", None)
+    indexed_at = None
+    if indexed_at_us is not None:
+        indexed_at = datetime.fromtimestamp(indexed_at_us / 1_000_000, UTC).isoformat()
+    return IndexFreshnessModel(stale=getattr(status, "stale", True), indexed_at=indexed_at)
+
+
+def _status_model(status: ProjectStatusResponse, note: str | None = None) -> IndexStatusModel:
+    """Build the public MCP status model from the daemon protocol response."""
+    return IndexStatusModel(
+        indexing=status.indexing,
+        index_exists=status.index_exists,
+        total_chunks=status.total_chunks,
+        total_files=status.total_files,
+        languages=status.languages,
+        freshness=_freshness_from_status(status),
+        message=_with_note(None, note),
+    )
+
+
+def _resolve_project_path(project_root: Path, path: str) -> Path:
+    """Resolve an MCP path and reject paths outside the configured project."""
+    root = project_root.resolve()
+    target = (root / path).resolve()
+    if not target.is_relative_to(root):
+        raise ValueError("path must be within the project root")
+    if not target.exists():
+        raise ValueError(f"path not found: {path}")
+    return target
+
+
+def _language_for_path(path: Path, overrides: dict[str, str]) -> str:
+    """Match the indexer's language-detection behavior for MCP-only tools."""
+    return overrides.get(path.suffix) or detect_code_language(filename=path.name) or "text"
+
+
+def _run_structural_grep(
+    project_root: Path,
+    pattern: str,
+    path: str,
+    languages: list[str] | None,
+    path_glob: str | None,
+    limit: int,
+) -> tuple[list[StructuralMatchResult], int, list[str], bool]:
+    """Run local structural grep and retain only the requested number of matches."""
+    from . import grep as _grep
+
+    target = _resolve_project_path(project_root, path)
+    settings = load_project_settings(project_root)
+    overrides = {f".{entry.ext}": entry.lang for entry in settings.language_overrides}
+    grep_run = _grep.Grep(
+        _grep.GrepRequest(
+            pattern=pattern,
+            root=target,
+            languages=frozenset(language.lower() for language in languages) if languages else None,
+            path_glob=path_glob,
+        )
+    )
+    matches: list[StructuralMatchResult] = []
+    warnings: list[str] = []
+    total_matches = 0
+    lock = threading.Lock()
+
+    def emit(item: _grep.FileMatches | _grep.GrepWarning) -> None:
+        nonlocal total_matches
+        if isinstance(item, _grep.GrepWarning):
+            with lock:
+                warnings.append(item.message)
+            return
+        relative_path = Path(item.path).resolve().relative_to(project_root.resolve()).as_posix()
+        language = _language_for_path(Path(relative_path), overrides)
+        file_matches: list[StructuralMatchResult] = []
+        for match in item.matches:
+            if not match.chunks:
+                continue
+            chunk = match.chunks[0]
+            file_matches.append(
+                StructuralMatchResult(
+                    file_path=relative_path,
+                    language=language,
+                    content=item.source[chunk.start.char_offset : chunk.end.char_offset],
+                    start_line=chunk.start.line,
+                    end_line=chunk.end.line,
+                )
+            )
+        with lock:
+            total_matches += len(file_matches)
+            remaining = limit - len(matches)
+            if remaining > 0:
+                matches.extend(file_matches[:remaining])
+
+    grep_run.run(emit)
+    matches.sort(key=lambda match: (match.file_path, match.start_line, match.end_line))
+    return matches, total_matches, sorted(warnings), grep_run.unusable
+
+
+def _build_codebase_overview(
+    project_root: Path, max_depth: int, max_entries: int
+) -> tuple[int, dict[str, int], list[DirectorySummary], list[str], bool]:
+    """Summarize the currently indexable source tree without reading file content."""
+    settings = load_project_settings(project_root)
+    matcher = build_matcher(
+        project_root,
+        settings.include_patterns,
+        settings.exclude_patterns,
+        settings.max_file_size,
+    )
+    overrides = {f".{entry.ext}": entry.lang for entry in settings.language_overrides}
+    languages: Counter[str] = Counter()
+    top_level: Counter[str] = Counter()
+    tree_entries: set[str] = set()
+    total_files = 0
+
+    for path, relative_path in iter_included_files(project_root, project_root, matcher):
+        total_files += 1
+        languages[_language_for_path(path, overrides)] += 1
+        parts = relative_path.parts
+        if len(parts) > 1:
+            top_level[parts[0]] += 1
+        for depth in range(1, min(len(parts), max_depth) + 1):
+            is_file = depth == len(parts)
+            entry = "/".join(parts[:depth])
+            tree_entries.add(entry if is_file else f"{entry}/")
+        if len(parts) > max_depth:
+            tree_entries.add(f"{'/'.join(parts[:max_depth])}/…")
+
+    tree = sorted(tree_entries)
+    truncated = len(tree) > max_entries
+    return (
+        total_files,
+        dict(sorted(languages.items())),
+        [DirectorySummary(path=path, files=count) for path, count in sorted(top_level.items())],
+        tree[:max_entries],
+        truncated,
+    )
 
 
 # === Daemon-backed MCP server factory ===
@@ -136,7 +356,17 @@ def create_mcp_server(project_root: str) -> MCPServer:
         try:
             note = user_settings_root_note(Path(project_root), Path.cwd())
             if refresh_index:
-                await loop.run_in_executor(None, lambda: _client.index(project_root))
+                index_response = await loop.run_in_executor(
+                    None, lambda: _client.index(project_root)
+                )
+                if not index_response.success:
+                    return SearchResultModel(
+                        success=False,
+                        message=_with_note(
+                            f"Index refresh failed: {index_response.message or 'unknown error'}",
+                            note,
+                        ),
+                    )
             resp = await loop.run_in_executor(
                 None,
                 lambda: _client.search(
@@ -148,6 +378,18 @@ def create_mcp_server(project_root: str) -> MCPServer:
                     offset=offset,
                 ),
             )
+            # A separate status request adds a source-tree freshness check without
+            # changing the search protocol or forcing a refresh on every query.
+            try:
+                status = await loop.run_in_executor(
+                    None, lambda: _client.project_status(project_root)
+                )
+                freshness = _freshness_from_status(status)
+            except Exception:
+                # Never discard useful search hits merely because observability
+                # failed. Conservatively tell the agent it must refresh to trust
+                # the result.
+                freshness = IndexFreshnessModel(stale=True)
             return SearchResultModel(
                 success=resp.success,
                 results=[
@@ -163,11 +405,142 @@ def create_mcp_server(project_root: str) -> MCPServer:
                 ],
                 total_returned=resp.total_returned,
                 offset=resp.offset,
+                freshness=freshness,
                 message=_with_note(resp.message, note),
             )
         except Exception as e:
             return SearchResultModel(
                 success=False, message=_with_note(f"Query failed: {e!s}", note)
+            )
+
+    @mcp.tool(
+        name="grep",
+        description=(
+            "Structural code search by syntax example. Use this when you know the code shape "
+            "or an exact API call/definition to find. It does not require an index or embeddings. "
+            "Use \\ metavariables, for example `def \\NAME(\\(ARGS*\\)):` or `foo(\\(ARGS*\\))`."
+        ),
+    )
+    async def grep(
+        pattern: str = Field(description="Structural pattern to match, using \\ metavariables."),
+        path: str = Field(
+            default=".",
+            description=(
+                "Project-relative file or directory to search. It must stay inside the project."
+            ),
+        ),
+        languages: list[str] | None = Field(
+            default=None,
+            description="Optional programming-language filter, for example ['python', 'rust'].",
+        ),
+        path_glob: str | None = Field(
+            default=None,
+            description="Optional project-relative glob filter, for example 'src/**'.",
+        ),
+        limit: int = Field(default=100, ge=1, le=1000, description="Maximum matches to return."),
+    ) -> GrepResultModel:
+        """Run local, AST-aware structural search without using the vector index."""
+        loop = asyncio.get_event_loop()
+        note = user_settings_root_note(Path(project_root), Path.cwd())
+        try:
+            matches, total_matches, warnings, unusable = await loop.run_in_executor(
+                None,
+                lambda: _run_structural_grep(
+                    Path(project_root), pattern, path, languages, path_glob, limit
+                ),
+            )
+            message = None
+            if unusable:
+                message = "Pattern did not compile for any of the matching languages."
+            return GrepResultModel(
+                success=not unusable,
+                matches=matches,
+                total_matches=total_matches,
+                warnings=warnings,
+                truncated=total_matches > len(matches),
+                message=_with_note(message, note),
+            )
+        except Exception as e:
+            return GrepResultModel(
+                success=False, message=_with_note(f"Structural search failed: {e!s}", note)
+            )
+
+    @mcp.tool(
+        name="status",
+        description=(
+            "Show index size, language breakdown, and freshness. Check this before trusting "
+            "a search run with refresh_index=false."
+        ),
+    )
+    async def status() -> IndexStatusModel:
+        """Get index status and whether the source tree has changed since indexing."""
+        from . import client as _client
+
+        loop = asyncio.get_event_loop()
+        note = user_settings_root_note(Path(project_root), Path.cwd())
+        try:
+            daemon_status = await loop.run_in_executor(
+                None, lambda: _client.project_status(project_root)
+            )
+            return _status_model(daemon_status, note)
+        except Exception as e:
+            return IndexStatusModel(
+                indexing=False,
+                index_exists=False,
+                total_chunks=0,
+                total_files=0,
+                freshness=IndexFreshnessModel(stale=True),
+                message=_with_note(f"Status failed: {e!s}", note),
+            )
+
+    @mcp.tool(
+        name="codebase_overview",
+        description=(
+            "Return a compact source-tree and language overview for orienting in an unfamiliar "
+            "codebase. It lists no file contents and does not require a completed index."
+        ),
+    )
+    async def codebase_overview(
+        max_depth: int = Field(
+            default=2,
+            ge=1,
+            le=8,
+            description="Maximum directory depth represented in the tree.",
+        ),
+        max_entries: int = Field(
+            default=80,
+            ge=1,
+            le=500,
+            description="Maximum tree entries to return.",
+        ),
+    ) -> CodebaseOverviewResult:
+        """Summarize indexable files and languages without spending tokens on source text."""
+        from . import client as _client
+
+        loop = asyncio.get_event_loop()
+        note = user_settings_root_note(Path(project_root), Path.cwd())
+        try:
+            daemon_status = await loop.run_in_executor(
+                None, lambda: _client.project_status(project_root)
+            )
+            total_files, languages, directories, tree, truncated = await loop.run_in_executor(
+                None, lambda: _build_codebase_overview(Path(project_root), max_depth, max_entries)
+            )
+            return CodebaseOverviewResult(
+                success=True,
+                total_source_files=total_files,
+                languages=languages,
+                top_level_directories=directories,
+                tree=tree,
+                truncated=truncated,
+                freshness=_freshness_from_status(daemon_status),
+                message=_with_note(None, note),
+            )
+        except Exception as e:
+            return CodebaseOverviewResult(
+                success=False,
+                freshness=IndexFreshnessModel(stale=True),
+                message=_with_note(f"Codebase overview failed: {e!s}", note),
             )
 
     return mcp

@@ -584,7 +584,8 @@ async def _dispatch(
         if isinstance(req, ProjectStatusRequest):
             project = await registry.get_project(req.project_root)
             await project.ensure_indexing_started()
-            return project.get_status()
+            # Status checks the source tree on disk, which is blocking I/O.
+            return await asyncio.to_thread(project.get_status)
 
         if isinstance(req, DaemonStatusRequest):
             now = time.monotonic()
