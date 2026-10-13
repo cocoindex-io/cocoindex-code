@@ -94,3 +94,36 @@ async def test_run_embedding_request_omits_encoding_format_for_native_providers(
 
     assert "encoding_format" not in seen_kwargs
     assert "drop_params" not in seen_kwargs
+
+
+@pytest.mark.parametrize(
+    ("constructor_prompt", "call_prompt", "expected_input"),
+    [
+        (None, "title: none | text: ", "title: none | text: fn a()"),
+        ("title: none | text: ", None, "title: none | text: fn a()"),
+        ("title: none | text: ", "query: ", "query: fn a()"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_embed_prepends_prompt_without_sending_it(
+    monkeypatch: pytest.MonkeyPatch,
+    constructor_prompt: str | None,
+    call_prompt: str | None,
+    expected_input: str,
+) -> None:
+    seen: list[tuple[list[str], dict[str, Any]]] = []
+
+    async def fake_aembedding(*, model: str, input: list[str], **kwargs: Any) -> Any:
+        assert model == "openai/embeddinggemma-2"
+        seen.append((input, kwargs))
+        return SimpleNamespace(data=[{"embedding": [float(len(text))]} for text in input])
+
+    monkeypatch.setattr("cocoindex_code.litellm_embedder.litellm.aembedding", fake_aembedding)
+
+    constructor_kwargs = {} if constructor_prompt is None else {"prompt": constructor_prompt}
+    embedder = PacedLiteLLMEmbedder("openai/embeddinggemma-2", **constructor_kwargs)
+    call_kwargs = {} if call_prompt is None else {"prompt": call_prompt}
+    vector = await embedder.embed("fn a()", **call_kwargs)
+
+    assert seen == [([expected_input], {"encoding_format": "float", "drop_params": True})]
+    assert vector.tolist() == [float(len(expected_input))]
