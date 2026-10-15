@@ -5,6 +5,7 @@ from __future__ import annotations
 import msgspec as _msgspec
 
 MEMBER_READONLY_CAPABILITY = "member-readonly-v1"
+MEMBER_EMBEDDING_CONTRACT_CAPABILITY = "member-embedding-contract-v1"
 
 # ---------------------------------------------------------------------------
 # Requests (tagged union via struct tag)

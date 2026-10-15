@@ -141,8 +141,9 @@ def test_member_project_status_sends_readonly_snapshot_policy(
     assert request.index_db_path == str(snapshot)
 
 
-def test_member_rejects_same_version_daemon_without_readonly_capability(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("capabilities", [[], ["member-readonly-v1"]])
+def test_member_rejects_same_version_daemon_without_required_capabilities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capabilities: list[str]
 ) -> None:
     monkeypatch.setenv("COCOINDEX_CODE_INDEXING_ROLE", "member")
     socket_path = tmp_path / "daemon.sock"
@@ -165,6 +166,7 @@ def test_member_rejects_same_version_daemon_without_readonly_capability(
                         daemon_version=client.__version__,
                         pid=42,
                         global_settings_mtime_us=None,
+                        capabilities=capabilities,
                     )
                 ),
             )

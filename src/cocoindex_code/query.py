@@ -12,6 +12,7 @@ from cocoindex.connectors.sqlite import ManagedConnection
 
 from .schema import QueryResult
 from .shared import Embedder
+from .snapshot_metadata import require_snapshot_compatible
 
 
 def _l2_to_score(distance: float) -> float:
@@ -207,10 +208,12 @@ async def query_codebase_readonly(
     offset: int = 0,
     languages: list[str] | None = None,
     paths: list[str] | None = None,
+    expected_embedding_contract: str | None = None,
 ) -> list[QueryResult]:
     """Search a published snapshot through a fresh read-only connection."""
     db = open_readonly_index(target_sqlite_db_path)
     try:
+        require_snapshot_compatible(db, expected_embedding_contract)
         return await query_codebase(
             query=query,
             db=db,

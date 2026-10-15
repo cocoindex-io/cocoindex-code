@@ -33,6 +33,7 @@ from ._daemon_paths import (
 )
 from ._version import __version__
 from .protocol import (
+    MEMBER_EMBEDDING_CONTRACT_CAPABILITY,
     MEMBER_READONLY_CAPABILITY,
     DaemonEnvRequest,
     DaemonEnvResponse,
@@ -291,13 +292,14 @@ def _raw_connect_and_handshake() -> _HandshakeResult:
     if not resp.ok or _needs_restart(resp):
         conn.close()
         raise DaemonVersionError(resp)
-    if (
-        get_indexing_role() is IndexingRole.MEMBER
-        and MEMBER_READONLY_CAPABILITY not in resp.capabilities
-    ):
+    if get_indexing_role() is IndexingRole.MEMBER and not {
+        MEMBER_READONLY_CAPABILITY,
+        MEMBER_EMBEDDING_CONTRACT_CAPABILITY,
+    }.issubset(resp.capabilities):
         conn.close()
         raise DaemonProtocolError(
-            "Daemon does not support request-scoped member read-only searches; restart required"
+            "Daemon does not support member read-only searches with embedding compatibility "
+            "checks; restart required"
         )
     _print_handshake_warnings(resp)
     return _HandshakeResult(conn=conn, resp=resp)

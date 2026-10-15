@@ -152,10 +152,22 @@ async def test_member_query_does_not_create_a_missing_index(tmp_path: Path) -> N
     assert not missing.parent.exists()
 
 
-def _write_vec_snapshot(path: Path, *, first_content: str = "fibonacci") -> None:
+def _write_vec_snapshot(
+    path: Path, *, first_content: str = "fibonacci", contract: str | None = None
+) -> None:
     sqlite_vec = pytest.importorskip("sqlite_vec")
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = [(0, "src/main.py", "python", first_content, 1, 5, _ROWS[0][6]), *_ROWS[1:]]
+    if contract is not None:
+        from cocoindex.connectors import sqlite as coco_sqlite
+
+        from cocoindex_code.snapshot_metadata import begin_snapshot_update
+
+        db = coco_sqlite.connect(path, load_vec=True)
+        try:
+            assert begin_snapshot_update(db, contract)
+        finally:
+            db.close()
     conn = sqlite3.connect(path)
     try:
         conn.enable_load_extension(True)
@@ -171,6 +183,14 @@ def _write_vec_snapshot(path: Path, *, first_content: str = "fibonacci") -> None
         conn.commit()
     finally:
         conn.close()
+    if contract is not None:
+        from cocoindex_code.snapshot_metadata import finish_snapshot_update
+
+        db = coco_sqlite.connect(path, load_vec=True)
+        try:
+            finish_snapshot_update(db, contract)
+        finally:
+            db.close()
 
 
 def test_open_readonly_index_enforces_query_only(tmp_path: Path) -> None:

@@ -939,16 +939,26 @@ In `member` mode:
 - A missing or unreadable snapshot returns an error instead of creating a local index.
 
 The role is process-local. An `env` block in `.mcp.json` affects the MCP process only;
-it does not affect `ccc` commands launched from a shell. The bundled `SessionStart`
-hook inherits the parent agent environment and skips `ccc index` when that process has
+it does not affect `ccc` commands launched from a shell. The bundled `SessionStart` and
+`PostToolUse` hooks inherit the parent agent environment and skip `ccc index` when that process has
 `COCOINDEX_CODE_INDEXING_ROLE=member`. Export the variable there, or disable the hook
 and install only the skill plus a manually configured MCP server. Filesystem write
 permissions on the published directory are still recommended as a second safety layer.
 
 Member mode requires a matching `COCOINDEX_CODE_DB_PATH_MAPPING` entry and refuses to
 fall back to a project-local index. All members must use the same embedding provider,
-model, and query parameters as the leader. Each member may have a different local source
-path; map that path to the same
+model, and resolved indexing/query parameters as the leader. Before embedding a query,
+the member checks compatibility metadata in the snapshot using the same read-only
+connection as the search. Missing, incompatible, unsupported, or unready metadata
+returns an error.
+
+Existing indices without this metadata remain usable by the leader, but member searches
+require a leader-local reset/rebuild and a newly published snapshot. An incremental run
+alone does not certify existing vectors. Contract changes also require a rebuild under
+the current conservative policy. See the [embedding compatibility RFC](docs/pr275-embedding-compatibility-rfc.md)
+for the metadata format, migration policy, and open design questions.
+
+Each member may have a different local source path; map that path to the same
 published directory on every machine. The member sends the resolved snapshot path with
 each request, so the policy still works if its long-lived daemon was started before the
 MCP process.

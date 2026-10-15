@@ -783,14 +783,16 @@ def test_member_search_refresh_uses_the_same_indexing_disabled_message(
     assert "Indexing failed" not in result.output
 
 
-def test_session_start_hook_skips_member_role(tmp_path: Path) -> None:
+@pytest.mark.parametrize("hook_name", ["SessionStart", "PostToolUse"])
+def test_index_hooks_skip_member_role(tmp_path: Path, hook_name: str) -> None:
     hooks = json.loads((Path(__file__).resolve().parents[1] / "hooks" / "hooks.json").read_text())
-    command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    command = hooks["hooks"][hook_name][0]["hooks"][0]["command"]
     assert "COCOINDEX_CODE_INDEXING_ROLE" in command
     assert "ccc index" in command
 
     project = tmp_path / "project"
     (project / ".cocoindex_code").mkdir(parents=True)
+    (project / ".cocoindex_code" / "settings.yml").write_text("{}\n")
     marker = tmp_path / "indexed"
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -811,3 +813,8 @@ def test_session_start_hook_skips_member_role(tmp_path: Path) -> None:
     env["COCOINDEX_CODE_INDEXING_ROLE"] = "leader"
     subprocess.run(["sh", "-c", command], check=True, env=env)
     assert marker.read_text() == "indexed"
+
+    marker.unlink()
+    env["COCOINDEX_CODE_DIR"] = str(project / ".cocoindex_code")
+    subprocess.run(["sh", "-c", command], check=True, env=env)
+    assert not marker.exists()

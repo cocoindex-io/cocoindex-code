@@ -39,6 +39,7 @@ from .chunking import LoadedChunker
 from .embedder_params import resolve_embedder_params
 from .project import Project
 from .protocol import (
+    MEMBER_EMBEDDING_CONTRACT_CAPABILITY,
     MEMBER_READONLY_CAPABILITY,
     DaemonEnvRequest,
     DaemonEnvResponse,
@@ -86,6 +87,7 @@ from .settings import (
     user_settings_path,
 )
 from .shared import Embedder, check_embedding, configure_mps_environment, create_embedder
+from .snapshot_metadata import embedding_contract
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +178,9 @@ class ProjectRegistry:
         indexing_params: dict[str, Any] | None = None,
         query_params: dict[str, Any] | None = None,
         clear_mps_cache_after_index: bool = False,
+        embedding_contract: str | None = None,
     ) -> None:
+        self._embedding_contract = embedding_contract
         self._projects = {}
         self._embedder = embedder
         self._clear_mps_cache_after_index = clear_mps_cache_after_index
@@ -197,6 +201,7 @@ class ProjectRegistry:
                 self._embedder,
                 indexing_params=self.indexing_params,
                 query_params=self.query_params,
+                embedding_contract=self._embedding_contract,
                 chunker_registry=_resolve_chunker_registry(project_settings.chunkers),
                 clear_mps_cache_after_index=self._clear_mps_cache_after_index,
             )
@@ -230,6 +235,7 @@ class ProjectRegistry:
             query=query,
             target_sqlite_db_path=db_path,
             embedder=self._require_embedder(),
+            expected_embedding_contract=self._embedding_contract,
             query_params=self.query_params,
             languages=languages,
             paths=paths,
@@ -398,7 +404,7 @@ async def handle_connection(
                     pid=os.getpid(),
                     global_settings_mtime_us=settings_mtime_us,
                     warnings=list(handshake_warnings),
-                    capabilities=[MEMBER_READONLY_CAPABILITY],
+                    capabilities=[MEMBER_READONLY_CAPABILITY, MEMBER_EMBEDDING_CONTRACT_CAPABILITY],
                 )
             )
         )
@@ -844,6 +850,7 @@ def run_daemon(
     indexing_params: dict[str, Any] = {}
     query_params: dict[str, Any] = {}
     clear_mps_cache_after_index = False
+    snapshot_contract: str | None = None
     handshake_warnings: list[str] = []
     daemon_settings = DaemonSettings()
     if user_settings_path().is_file():
@@ -860,6 +867,7 @@ def run_daemon(
         except ValueError:
             logger.exception("Invalid embedder params in global_settings.yml")
             sys.exit(1)
+        snapshot_contract = embedding_contract(user_settings.embedding)
         indexing_params = embedder_params.indexing
         query_params = embedder_params.query
         if embedder_params.used_backward_compat:
@@ -894,6 +902,7 @@ def run_daemon(
         indexing_params=indexing_params,
         query_params=query_params,
         clear_mps_cache_after_index=clear_mps_cache_after_index,
+        embedding_contract=snapshot_contract,
     )
 
     sock_path = daemon_socket_path()
