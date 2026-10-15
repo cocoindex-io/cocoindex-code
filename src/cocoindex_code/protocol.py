@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import msgspec as _msgspec
 
+MEMBER_READONLY_CAPABILITY = "member-readonly-v1"
+
 # ---------------------------------------------------------------------------
 # Requests (tagged union via struct tag)
 # ---------------------------------------------------------------------------
@@ -24,10 +26,19 @@ class SearchRequest(_msgspec.Struct, tag="search"):
     paths: list[str] | None = None
     limit: int = 5
     offset: int = 0
+    # Default True preserves the historical load-time indexing behavior for
+    # older clients. Member-mode clients set this False on every request.
+    allow_indexing: bool = True
+    # A member resolves its shared DB mapping in the requesting process and
+    # sends the exact snapshot path. This remains request-scoped even when the
+    # long-lived daemon was started with different environment variables.
+    index_db_path: str | None = None
 
 
 class ProjectStatusRequest(_msgspec.Struct, tag="project_status"):
     project_root: str
+    allow_indexing: bool = True
+    index_db_path: str | None = None
 
 
 class DaemonStatusRequest(_msgspec.Struct, tag="daemon_status"):
@@ -98,6 +109,8 @@ class HandshakeResponse(_msgspec.Struct, tag="handshake"):
     # Non-fatal daemon-side warnings surfaced to the client on every handshake.
     # The client dedupes and prints them to stderr (see client._print_handshake_warnings).
     warnings: list[str] = []
+    # Optional protocol behaviors. A default keeps old daemon replies decodable.
+    capabilities: list[str] = []
 
 
 class IndexResponse(_msgspec.Struct, tag="index"):

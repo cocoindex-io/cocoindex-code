@@ -18,7 +18,13 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import BaseModel, Field
 
 from ._version import __version__
-from .settings import DaemonSettings, load_user_settings, user_settings_root_note
+from .settings import (
+    DaemonSettings,
+    IndexingRole,
+    get_indexing_role,
+    load_user_settings,
+    user_settings_root_note,
+)
 
 _MCP_INSTRUCTIONS = (
     "Code search and codebase understanding tools."
@@ -68,6 +74,7 @@ def _with_note(message: str | None, note: str | None) -> str | None:
 
 def create_mcp_server(project_root: str) -> MCPServer:
     """Create a lightweight MCP server that delegates to the daemon."""
+    indexing_role = get_indexing_role()
     mcp = MCPServer("cocoindex-code", instructions=_MCP_INSTRUCTIONS, version=__version__)
 
     @mcp.tool(
@@ -109,9 +116,10 @@ def create_mcp_server(project_root: str) -> MCPServer:
             description="Number of results to skip for pagination",
         ),
         refresh_index: bool = Field(
-            default=True,
+            default=indexing_role is IndexingRole.LEADER,
             description=(
                 "Whether to incrementally update the index before searching."
+                " Ignored when COCOINDEX_CODE_INDEXING_ROLE=member."
                 " Set to False for faster consecutive queries"
                 " when the codebase hasn't changed."
             ),
@@ -135,7 +143,7 @@ def create_mcp_server(project_root: str) -> MCPServer:
         note: str | None = None
         try:
             note = user_settings_root_note(Path(project_root), Path.cwd())
-            if refresh_index:
+            if refresh_index and indexing_role is IndexingRole.LEADER:
                 await loop.run_in_executor(None, lambda: _client.index(project_root))
             resp = await loop.run_in_executor(
                 None,
@@ -260,6 +268,17 @@ def main() -> None:
     subparsers.add_parser("serve", help="Run the MCP server (default)")
     subparsers.add_parser("index", help="Build/refresh the index and report stats")
     args = parser.parse_args()
+    try:
+        indexing_role = get_indexing_role()
+    except ValueError as exc:
+        parser.exit(1, f"Error: {exc}\n")
+    if args.command == "index" and indexing_role is IndexingRole.MEMBER:
+        parser.exit(
+            1,
+            "Error: Indexing is disabled because "
+            "COCOINDEX_CODE_INDEXING_ROLE=member. Ask the team leader to publish "
+            "a new shared index snapshot.\n",
+        )
 
     # --- Discover project root ---
     cwd = Path.cwd()
@@ -392,10 +411,9 @@ def main() -> None:
         async def _serve() -> None:
             from .cli import _bg_index
 
-            background_tasks = {
-                asyncio.create_task(_bg_index(str(project_root))),
-                asyncio.create_task(run_heartbeat_loop()),
-            }
+            background_tasks = {asyncio.create_task(run_heartbeat_loop())}
+            if indexing_role is IndexingRole.LEADER:
+                background_tasks.add(asyncio.create_task(_bg_index(str(project_root))))
             try:
                 await mcp_server.run_stdio_async()
             finally:

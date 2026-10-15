@@ -10,10 +10,17 @@ from __future__ import annotations
 
 import sqlite3
 import struct
+from pathlib import Path
 
 import pytest
 
-from cocoindex_code.query import _checked, _full_scan_query, _knn_query
+from cocoindex_code.query import (
+    _checked,
+    _full_scan_query,
+    _knn_query,
+    open_readonly_index,
+    query_codebase_readonly,
+)
 
 DIM = 4
 
@@ -124,3 +131,97 @@ def test_bare_distance_column_is_null_outside_the_knn_plan(conn: sqlite3.Connect
 def test_checked_passes_through_rows_with_distances() -> None:
     rows = [("src/main.py", "python", "body", 1, 5, 0.5)]
     assert _checked(rows, "knn unfiltered") is rows
+
+
+async def test_member_query_does_not_create_a_missing_index(tmp_path: Path) -> None:
+    missing = tmp_path / "shared" / "target_sqlite.db"
+
+    class _EmbedderMustNotRun:
+        async def embed(self, _query: str, **_kwargs: object) -> None:
+            pytest.fail("missing snapshot must fail before embedding")
+
+    with pytest.raises(RuntimeError, match="team leader"):
+        await query_codebase_readonly(
+            query="anything",
+            target_sqlite_db_path=missing,
+            embedder=_EmbedderMustNotRun(),
+            query_params={},
+        )
+
+    assert not missing.exists()
+    assert not missing.parent.exists()
+
+
+def _write_vec_snapshot(path: Path, *, first_content: str = "fibonacci") -> None:
+    sqlite_vec = pytest.importorskip("sqlite_vec")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [(0, "src/main.py", "python", first_content, 1, 5, _ROWS[0][6]), *_ROWS[1:]]
+    conn = sqlite3.connect(path)
+    try:
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        conn.execute(_DDL)
+        conn.executemany(
+            "INSERT INTO code_chunks_vec"
+            "(id, file_path, language, content, start_line, end_line, embedding)"
+            " VALUES (?,?,?,?,?,?,?)",
+            [(*row[:6], _vec(row[6])) for row in rows],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_open_readonly_index_enforces_query_only(tmp_path: Path) -> None:
+    snapshot = tmp_path / "shared" / "target_sqlite.db"
+    _write_vec_snapshot(snapshot)
+
+    db = open_readonly_index(snapshot)
+    try:
+        with db.readonly() as conn:
+            query_only = conn.execute("PRAGMA query_only").fetchone()
+            assert query_only is not None
+            assert query_only[0] == 1
+            with pytest.raises(sqlite3.OperationalError, match="readonly|read-only|query_only"):
+                conn.execute("CREATE TABLE member_must_not_write (id INTEGER)")
+    finally:
+        db.close()
+
+    with sqlite3.connect(snapshot) as verify:
+        tables = {
+            row[0]
+            for row in verify.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    assert "member_must_not_write" not in tables
+
+
+def test_open_readonly_index_sees_atomically_replaced_snapshot(tmp_path: Path) -> None:
+    published = tmp_path / "shared" / "target_sqlite.db"
+    first = tmp_path / "shared" / "first.db"
+    second = tmp_path / "shared" / "second.db"
+    _write_vec_snapshot(first, first_content="fibonacci")
+    _write_vec_snapshot(second, first_content="replacement snapshot")
+    first.replace(published)
+
+    first_handle = open_readonly_index(published)
+    try:
+        with first_handle.readonly() as conn:
+            before = conn.execute("SELECT content FROM code_chunks_vec WHERE id = 0").fetchone()
+        assert before == ("fibonacci",)
+        second.replace(published)
+        with first_handle.readonly() as conn:
+            still_open = conn.execute("SELECT content FROM code_chunks_vec WHERE id = 0").fetchone()
+        assert still_open == ("fibonacci",)
+    finally:
+        first_handle.close()
+
+    next_handle = open_readonly_index(published)
+    try:
+        with next_handle.readonly() as conn:
+            after = conn.execute("SELECT content FROM code_chunks_vec WHERE id = 0").fetchone()
+        assert after == ("replacement snapshot",)
+    finally:
+        next_handle.close()
