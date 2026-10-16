@@ -26,9 +26,11 @@ __all__ = [
 #   - ``normalize_embeddings`` (sentence-transformers): query._l2_to_score
 #     assumes unit vectors.
 #   - ``encoding_format`` (litellm): litellm_embedder hardcodes "float".
+# ``prompt`` (litellm) is prepended to each text client-side, for servers such
+# as llama.cpp that apply no model prompts of their own.
 _ACCEPTED_KWARGS: dict[str, frozenset[str]] = {
     "sentence-transformers": frozenset({"prompt_name"}),
-    "litellm": frozenset({"input_type"}),
+    "litellm": frozenset({"input_type", "prompt"}),
 }
 
 
