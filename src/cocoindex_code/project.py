@@ -45,6 +45,7 @@ from .shared import (
     Embedder,
     clear_mps_allocator_cache,
 )
+from .snapshot_metadata import begin_snapshot_update, finish_snapshot_update
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ def _use_empty_context_default_executor(loop: asyncio.AbstractEventLoop) -> None
 
 
 class Project:
+    _embedding_contract: str | None = None
     _env: coco.Environment
     _app: coco.App[[], None]
     _project_root: Path
@@ -132,8 +134,21 @@ class Project:
     ) -> None:
         """Run indexing (lock must already be held)."""
         try:
+            certifiable = False
+            contract = self._embedding_contract
+            if contract is not None:
+                certifiable = begin_snapshot_update(self._env.get_context(SQLITE_DB), contract)
+                if not certifiable:
+                    logger.warning(
+                        "Index embedding provenance is unknown; leader search remains available, "
+                        "but shared member search requires a leader-local reset/rebuild."
+                    )
+            errors = 0
+            completed = False
             handle = self._app.update()
             async for snapshot in handle.watch():
+                errors = snapshot.stats.total.num_errors
+                completed = snapshot.status is coco.UpdateStatus.READY
                 file_stats = snapshot.stats.by_component.get("process_file")
                 if file_stats is not None:
                     progress = IndexingProgress(
@@ -148,6 +163,9 @@ class Project:
                     if on_progress is not None:
                         on_progress(progress)
                     await asyncio.sleep(0.1)
+            if certifiable and completed and errors == 0:
+                assert contract is not None
+                finish_snapshot_update(self._env.get_context(SQLITE_DB), contract)
         finally:
             try:
                 if self._clear_mps_cache_after_index:
@@ -236,10 +254,16 @@ class Project:
     ) -> list[SearchResult]:
         """Search within this project."""
         target_db = _target_sqlite_db_path(self._project_root)
+        if not target_db.is_file():
+            raise RuntimeError(
+                f"Index database not found at {target_db}. "
+                "Please refresh the index before searching."
+            )
         results = await query_codebase(
             query=query,
-            target_sqlite_db_path=target_db,
-            env=self._env,
+            db=self._env.get_context(SQLITE_DB),
+            embedder=self._env.get_context(EMBEDDER),
+            query_params=self._env.get_context(QUERY_EMBED_PARAMS),
             limit=limit,
             offset=offset,
             languages=languages,
@@ -316,6 +340,7 @@ class Project:
         query_params: dict[str, Any],
         chunker_registry: Mapping[str, LoadedChunker] | None = None,
         clear_mps_cache_after_index: bool = False,
+        embedding_contract: str | None = None,
     ) -> Project:
         """Create a project with explicit embedder and per-call params.
 
@@ -331,6 +356,8 @@ class Project:
                 no extras.
             query_params: Extra kwargs spread into ``embedder.embed()`` for the
                 query side.
+            embedding_contract: Resolved daemon embedding identity for shared snapshots.
+                Existing indices without provenance remain available to leader searches.
             chunker_registry: Optional mapping of file suffix (e.g. ``".toml"``)
                 to a ``LoadedChunker``. When a suffix matches, the registered
                 chunker is called instead of the built-in splitter.
@@ -370,6 +397,7 @@ class Project:
         )
 
         result = Project.__new__(Project)
+        result._embedding_contract = embedding_contract
         result._env = env
         result._app = app
         result._project_root = project_root

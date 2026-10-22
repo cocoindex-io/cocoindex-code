@@ -39,6 +39,8 @@ from .chunking import LoadedChunker
 from .embedder_params import resolve_embedder_params
 from .project import Project
 from .protocol import (
+    MEMBER_EMBEDDING_CONTRACT_CAPABILITY,
+    MEMBER_READONLY_CAPABILITY,
     DaemonEnvRequest,
     DaemonEnvResponse,
     DaemonProjectInfo,
@@ -57,18 +59,21 @@ from .protocol import (
     IndexStreamResponse,
     IndexWaitingNotice,
     ProjectStatusRequest,
+    ProjectStatusResponse,
     RemoveProjectRequest,
     RemoveProjectResponse,
     Request,
     Response,
     SearchRequest,
     SearchResponse,
+    SearchResult,
     SearchStreamResponse,
     StopRequest,
     StopResponse,
     decode_request,
     encode_response,
 )
+from .query import open_readonly_index, query_codebase_readonly
 from .settings import (
     ChunkerMapping,
     DaemonSettings,
@@ -82,6 +87,7 @@ from .settings import (
     user_settings_path,
 )
 from .shared import Embedder, check_embedding, configure_mps_environment, create_embedder
+from .snapshot_metadata import embedding_contract
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +178,9 @@ class ProjectRegistry:
         indexing_params: dict[str, Any] | None = None,
         query_params: dict[str, Any] | None = None,
         clear_mps_cache_after_index: bool = False,
+        embedding_contract: str | None = None,
     ) -> None:
+        self._embedding_contract = embedding_contract
         self._projects = {}
         self._embedder = embedder
         self._clear_mps_cache_after_index = clear_mps_cache_after_index
@@ -193,11 +201,91 @@ class ProjectRegistry:
                 self._embedder,
                 indexing_params=self.indexing_params,
                 query_params=self.query_params,
+                embedding_contract=self._embedding_contract,
                 chunker_registry=_resolve_chunker_registry(project_settings.chunkers),
                 clear_mps_cache_after_index=self._clear_mps_cache_after_index,
             )
             self._projects[project_root] = project
         return self._projects[project_root]
+
+    def _require_embedder(self) -> Embedder:
+        if self._embedder is None:
+            raise RuntimeError(
+                "Daemon has no global settings loaded. Run `ccc init` to set up cocoindex-code."
+            )
+        return self._embedder
+
+    async def search_readonly(
+        self,
+        index_db_path: str,
+        query: str,
+        languages: list[str] | None,
+        paths: list[str] | None,
+        limit: int,
+        offset: int,
+    ) -> list[SearchResult]:
+        """Search a member's published snapshot without loading a Project.
+
+        Avoiding ``Project.create`` is important here: that factory constructs
+        the indexing app, opens LMDB, and opens SQLite read/write. Member mode
+        must work against a directory on which the caller has no write access.
+        """
+        db_path = Path(index_db_path)
+        results = await query_codebase_readonly(
+            query=query,
+            target_sqlite_db_path=db_path,
+            embedder=self._require_embedder(),
+            expected_embedding_contract=self._embedding_contract,
+            query_params=self.query_params,
+            languages=languages,
+            paths=paths,
+            limit=limit,
+            offset=offset,
+        )
+        return [
+            SearchResult(
+                file_path=result.file_path,
+                language=result.language,
+                content=result.content,
+                start_line=result.start_line,
+                end_line=result.end_line,
+                score=result.score,
+            )
+            for result in results
+        ]
+
+    def get_status_readonly(self, index_db_path: str) -> ProjectStatusResponse:
+        """Inspect a published snapshot without starting or preparing indexing."""
+        db_path = Path(index_db_path)
+        if not db_path.is_file():
+            return ProjectStatusResponse(
+                indexing=False,
+                total_chunks=0,
+                total_files=0,
+                languages={},
+                index_exists=False,
+            )
+
+        db = open_readonly_index(db_path)
+        try:
+            with db.readonly() as conn:
+                total_chunks = conn.execute("SELECT COUNT(*) FROM code_chunks_vec").fetchone()[0]
+                total_files = conn.execute(
+                    "SELECT COUNT(DISTINCT file_path) FROM code_chunks_vec"
+                ).fetchone()[0]
+                lang_rows = conn.execute(
+                    "SELECT language, COUNT(*) as cnt FROM code_chunks_vec"
+                    " GROUP BY language ORDER BY cnt DESC"
+                ).fetchall()
+        finally:
+            db.close()
+        return ProjectStatusResponse(
+            indexing=False,
+            total_chunks=total_chunks,
+            total_files=total_files,
+            languages={lang: count for lang, count in lang_rows},
+            index_exists=True,
+        )
 
     def remove_project(self, project_root: str) -> bool:
         """Remove a project from the registry. Returns True if it was loaded."""
@@ -316,6 +404,7 @@ async def handle_connection(
                     pid=os.getpid(),
                     global_settings_mtime_us=settings_mtime_us,
                     warnings=list(handshake_warnings),
+                    capabilities=[MEMBER_READONLY_CAPABILITY, MEMBER_EMBEDDING_CONTRACT_CAPABILITY],
                 )
             )
         )
@@ -561,6 +650,24 @@ async def _dispatch(
             return project.stream_index()
 
         if isinstance(req, SearchRequest):
+            if not req.allow_indexing:
+                if req.index_db_path is None:
+                    raise RuntimeError("Read-only search requires an explicit index database path")
+                results = await registry.search_readonly(
+                    index_db_path=req.index_db_path,
+                    query=req.query,
+                    languages=req.languages,
+                    paths=req.paths,
+                    limit=req.limit,
+                    offset=req.offset,
+                )
+                return SearchResponse(
+                    success=True,
+                    results=results,
+                    total_returned=len(results),
+                    offset=req.offset,
+                )
+
             project = await registry.get_project(req.project_root)
             await project.ensure_indexing_started()
 
@@ -582,6 +689,10 @@ async def _dispatch(
             )
 
         if isinstance(req, ProjectStatusRequest):
+            if not req.allow_indexing:
+                if req.index_db_path is None:
+                    raise RuntimeError("Read-only status requires an explicit index database path")
+                return registry.get_status_readonly(req.index_db_path)
             project = await registry.get_project(req.project_root)
             await project.ensure_indexing_started()
             return project.get_status()
@@ -739,6 +850,7 @@ def run_daemon(
     indexing_params: dict[str, Any] = {}
     query_params: dict[str, Any] = {}
     clear_mps_cache_after_index = False
+    snapshot_contract: str | None = None
     handshake_warnings: list[str] = []
     daemon_settings = DaemonSettings()
     if user_settings_path().is_file():
@@ -755,6 +867,7 @@ def run_daemon(
         except ValueError:
             logger.exception("Invalid embedder params in global_settings.yml")
             sys.exit(1)
+        snapshot_contract = embedding_contract(user_settings.embedding)
         indexing_params = embedder_params.indexing
         query_params = embedder_params.query
         if embedder_params.used_backward_compat:
@@ -789,6 +902,7 @@ def run_daemon(
         indexing_params=indexing_params,
         query_params=query_params,
         clear_mps_cache_after_index=clear_mps_cache_after_index,
+        embedding_contract=snapshot_contract,
     )
 
     sock_path = daemon_socket_path()
