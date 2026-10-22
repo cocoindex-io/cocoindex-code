@@ -2,35 +2,54 @@
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import logging
 import os
 import pathlib
 import sys
 import traceback as _tb
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Union
+from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Protocol, Union, runtime_checkable
 
 import cocoindex as coco
 import numpy as np
 import numpy.typing as npt
 from cocoindex.connectors import sqlite
+from cocoindex.resources.schema import VectorSchema
 
 if TYPE_CHECKING:
     from cocoindex.ops.litellm import LiteLLMEmbedder
     from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 
-from .settings import EmbeddingSettings
+from .settings import CUSTOM_PROVIDER, EmbeddingSettings
 
 logger = logging.getLogger(__name__)
 
 SBERT_PREFIX = "sbert/"
 DEFAULT_LITELLM_MIN_INTERVAL_MS = 5
 
+
+@runtime_checkable
+class CustomEmbedder(Protocol):
+    """What a ``provider: custom`` factory must return.
+
+    An async ``embed`` (one text in, one float32 vector out; extra kwargs are
+    the user's ``indexing_params`` / ``query_params``) and cocoindex's
+    ``VectorSchemaProvider`` method, so the vector column can be sized.
+    """
+
+    def embed(self, text: str, /, **kwargs: Any) -> Awaitable[npt.NDArray[np.float32]]: ...
+
+    def __coco_vector_schema__(self) -> Awaitable[VectorSchema]: ...
+
+
 # Type alias
 Embedder = Union[
     "SentenceTransformerEmbedder",
     "LiteLLMEmbedder",
+    CustomEmbedder,
 ]
 
 # Context keys
@@ -126,11 +145,54 @@ async def check_embedding(
         return EmbeddingCheckResult(dim=None, error=msg, traceback=_tb.format_exc())
 
 
+def load_custom_embedder_factory(spec: str) -> Any:
+    """Import the ``"module.path:callable"`` named by ``embedding.embedder``.
+
+    Raises ``ValueError`` with the spec in the message for a malformed spec, a
+    module that does not import, an attribute that does not exist, or one that
+    is not callable, so a settings typo fails at daemon start with a clear line
+    rather than deep inside the first embed call.
+    """
+    module_path, sep, attr = spec.partition(":")
+    if not sep or not module_path or not attr:
+        raise ValueError(f'embedding.embedder must be "module.path:callable", got {spec!r}')
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError as e:
+        raise ValueError(f"embedding.embedder {spec!r}: cannot import {module_path!r}: {e}") from e
+    factory = getattr(module, attr, None)
+    if factory is None:
+        raise ValueError(f"embedding.embedder {spec!r}: {module_path!r} has no attribute {attr!r}")
+    if not callable(factory):
+        raise ValueError(f"embedding.embedder {spec!r}: {attr!r} is not callable")
+    return factory
+
+
+def _create_custom_embedder(
+    settings: EmbeddingSettings,
+    indexing_params: dict[str, Any] | None,
+) -> CustomEmbedder:
+    assert settings.embedder is not None  # enforced by EmbeddingSettings.__post_init__
+    factory = load_custom_embedder_factory(settings.embedder)
+    instance = factory(settings, dict(indexing_params) if indexing_params else {})
+    if not isinstance(instance, CustomEmbedder):
+        raise ValueError(
+            f"embedding.embedder {settings.embedder!r} returned {type(instance).__name__}, "
+            "which lacks an async embed() method and/or __coco_vector_schema__()"
+        )
+    logger.info("Embedding model (custom %s): %s", settings.embedder, settings.model)
+    return instance
+
+
 def create_embedder(
     settings: EmbeddingSettings,
     indexing_params: dict[str, Any] | None = None,
 ) -> Embedder:
     """Create and return an embedder instance based on settings.
+
+    ``provider: custom`` loads the factory named by ``settings.embedder`` and
+    calls it as ``factory(settings, indexing_params)``; the result must satisfy
+    cocoindex's ``VectorSchemaProvider`` and expose an async ``embed()``.
 
     For LiteLLM embedders, *indexing_params* (e.g. ``{"input_type": "passage"}``)
     are passed to the constructor as default kwargs forwarded into every
@@ -147,6 +209,8 @@ def create_embedder(
     :data:`INDEXING_EMBED_PARAMS`.
     """
     instance: Embedder
+    if settings.provider == CUSTOM_PROVIDER:
+        return _create_custom_embedder(settings, indexing_params)
     if settings.provider == "sentence-transformers":
         from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
 

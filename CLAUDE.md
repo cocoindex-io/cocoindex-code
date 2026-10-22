@@ -59,7 +59,7 @@ The daemon idle-exits after `daemon.idle_timeout_minutes` (default 180, 0 = neve
 
 The embedder is created once at daemon startup (`create_embedder()` in `shared.py`) and stored in the `ProjectRegistry`. Two param dicts (`indexing_params`, `query_params`) are threaded through CocoIndex context keys so asymmetric models (Cohere, Voyage, nomic-embed) can use different kwargs for document vs. query embedding.
 
-Two install flavors: `[full]` bundles `sentence-transformers` (local inference); slim uses only LiteLLM (cloud APIs). The `PacedLiteLLMEmbedder` in `litellm_embedder.py` adds rate-limiting between requests.
+Two install flavors: `[full]` bundles `sentence-transformers` (local inference); slim uses only LiteLLM (cloud APIs). The `PacedLiteLLMEmbedder` in `litellm_embedder.py` adds rate-limiting between requests. A third path, `provider: custom`, loads a user factory named by `embedding.embedder` (`"module.path:callable"`) through `load_custom_embedder_factory()` in `shared.py`; its params are passed through unvalidated and the result must satisfy `VectorSchemaProvider`.
 
 ### Settings and Project Discovery
 
