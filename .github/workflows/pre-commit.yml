@@ -1,13 +1,72 @@
 name: Pre-commit
 
+# The tiers and the rest of this workflow's shape follow
+# https://github.com/cocoindex-io/.github/blob/main/CI.md: pull requests run
+# `fast-check` alone when `main` has a merge queue, the queue runs the full
+# matrix on the commit that lands, and drafts run nothing. `ci-gate` is the
+# one check to require.
 on:
   pull_request:
+    # `ready_for_review` starts CI when a draft is marked ready. `stacked`
+    # starts it when a pull request joins a stack.
+    types: [opened, synchronize, reopened, ready_for_review, stacked]
+  merge_group:
   push:
     branches:
       - main
+  # A push the merge queue already tested skips the full tier, so a nightly
+  # run keeps main's caches current.
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+# A new push to a pull request cancels its running CI. Other runs get a group
+# of their own.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
+  changes:
+    # Drafts run no CI. The matrix needs this job, so it skips too.
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    permissions:
+      # ci-mode reads the commit's checks to skip a push the queue tested.
+      checks: read
+      contents: read
+    outputs:
+      full: ${{ steps.mode.outputs.full }}
+    steps:
+      - id: mode
+        uses: cocoindex-io/.github/actions/ci-mode@v1
+
+  # Lint, format and type checks on one runner: the fast tier, which every
+  # ready pull request runs.
+  fast-check:
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --python 3.11 --python-preference only-managed
+
+      - name: Lint & format (prek)
+        run: uv run prek run --all-files --verbose --show-diff-on-failure --skip pytest
+
+  # The full tier: lint and tests on every supported platform.
   pre-commit:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     runs-on: ${{ matrix.os }}
     # Free-threaded Python (3.14t) lacks pre-built wheels for tokenizers;
     # the fallback source build is fragile across macOS toolchain updates.
@@ -45,3 +104,20 @@ jobs:
 
       - name: Test (pytest)
         run: uv run pytest tests/ -v
+
+  # Passes when every job above passed or was skipped by the tier. Fails on a
+  # failed or cancelled job, and when `changes` itself didn't succeed (its
+  # skipped dependents would otherwise look like a pass).
+  ci-gate:
+    if: always() && github.event.pull_request.draft != true
+    needs: [changes, fast-check, pre-commit]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$RESULTS"
+          jq -e '
+            .changes.result == "success"
+            and all(.[]; .result == "success" or .result == "skipped")
+          ' <<<"$RESULTS" >/dev/null

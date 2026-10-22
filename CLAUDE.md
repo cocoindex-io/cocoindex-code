@@ -22,6 +22,15 @@ uv run prek run --all-files            # Full CI suite (lint, format, mypy, pyte
 
 Docker E2E tests are excluded by default (need `pytest -m docker_e2e` to run them).
 
+### Pull Requests and CI
+
+Open a pull request as a draft and mark it ready once `uv run prek run --all-files`
+passes: drafts run no CI. When `main` has a merge queue, a ready pull request runs
+only `fast-check`, and the queue runs the full matrix on the commit that lands.
+For a full run on a branch before then, use `gh workflow run pre-commit.yml --ref <branch>`.
+The CI tiers, the merge queue and stacked pull requests are described in
+[CI.md](https://github.com/cocoindex-io/.github/blob/main/CI.md).
+
 
 ## Architecture
 
