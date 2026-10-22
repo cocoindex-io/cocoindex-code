@@ -180,6 +180,31 @@ codex mcp add cocoindex-code -- ccc mcp
 </details>
 
 <details>
+<summary>Cursor</summary>
+
+After installing `ccc` above, run `ccc init` in your project root once to configure the project and embedding model. Then add this to `.cursor/mcp.json` in that project:
+
+```json
+{
+  "mcpServers": {
+    "cocoindex-code": {
+      "type": "stdio",
+      "command": "ccc",
+      "args": ["mcp"],
+      "env": {
+        "COCOINDEX_CODE_HOST_CWD": "${workspaceFolder}"
+      }
+    }
+  }
+}
+```
+
+Cursor expands `${workspaceFolder}` to the project root, so the server uses the right project regardless of Cursor's launch directory.
+
+If Cursor cannot find `ccc`, replace the `command` value with the absolute path to the installed `ccc` executable. Enable `cocoindex-code` in Cursor's MCP server list. See [Cursor's MCP documentation](https://cursor.com/docs/mcp) for configuration details.
+</details>
+
+<details>
 <summary>OpenCode</summary>
 
 ```bash
