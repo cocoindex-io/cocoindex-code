@@ -14,7 +14,7 @@ from cocoindex.resources.id import IdGenerator
 
 from .chunking import CHUNKER_REGISTRY
 from .file_walk import build_matcher
-from .settings import load_project_settings
+from .settings import DEFAULT_LANGUAGE_MAP, load_project_settings
 from .shared import (
     CODEBASE_DIR,
     EMBEDDER,
@@ -57,6 +57,7 @@ async def process_file(
     suffix = file.file_path.path.suffix
     language = (
         language_overrides.get(suffix)
+        or DEFAULT_LANGUAGE_MAP.get(suffix)
         or detect_code_language(filename=file.file_path.path.name)
         or "text"
     )
