@@ -857,6 +857,7 @@ embedding:
 | kotlin | | `.kt`, `.kts` |
 | lua | | `.lua` |
 | markdown | md | `.md`, `.mdx` |
+| nix | | `.nix` |
 | pascal | pas, dpr, delphi | `.pas`, `.dpr` |
 | php | | `.php` |
 | python | | `.py` |
