@@ -12,6 +12,7 @@
 - **[Local Sentence-Transformers](#sentence-transformers-local)**
 - **[LiteLLM Remote (Cloud Providers)](#litellm-remote-cloud-providers)**
 - **[LiteLLM Local](#local-litellm-providers)**
+- [Custom Embedder (`provider: custom`)](#custom-embedder-provider-custom)
 - [Choosing Based on Your Content](#choosing-based-on-your-content)
 - [Pacing & Rate Limits](#pacing--rate-limits)
 
@@ -206,6 +207,22 @@ envs:
 [Back to top](#table-of-contents)
 
 ---
+
+## Custom Embedder (`provider: custom`)
+
+When neither path fits (a provider litellm does not cover, a thinner dependency tree, a house embedding service), point the daemon at your own factory. The factory is an importable `"module.path:callable"` that cocoindex-code calls as `factory(settings, indexing_params)` once at daemon start; it must return an object with an async `embed(text, **params)` method returning a NumPy vector and an async `__coco_vector_schema__()` returning `cocoindex.resources.schema.VectorSchema` (cocoindex's `VectorSchemaProvider`). Give it a `__coco_memo_key__()` too, so cached embeddings are invalidated when the model or its request options change.
+
+```yaml
+embedding:
+  provider: custom
+  embedder: my_embedders.voyage:make_embedder   # module.path:callable
+  model: voyage-4-large                         # passed to your factory in settings.model
+  min_interval_ms: 20                           # also available to the factory
+  indexing_params: {input_type: document}
+  query_params: {input_type: query}
+```
+
+`indexing_params` and `query_params` are not validated for a custom embedder: whatever keys you put there are passed to your `embed()` verbatim, the indexing side also reaching the factory as its second argument so defaults can be baked in. The package that provides the factory has to be importable by the daemon's interpreter, for example installed into the same environment (`uv tool install cocoindex-code --with my-embedders`). `ccc init` does not offer this provider; write the settings file by hand. A malformed `embedder` value, a module that does not import, or a factory that returns something without the contract fails at daemon start with the spec named in the error.
 
 ## Choosing Based on Your Content
 

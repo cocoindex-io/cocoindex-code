@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, NamedTuple
 
 from .embedder_defaults import LEGACY_QUERY_PROMPT_MODELS
-from .settings import EmbeddingSettings
+from .settings import CUSTOM_PROVIDER, EmbeddingSettings
 
 __all__ = [
     "EmbedderParams",
@@ -48,7 +48,13 @@ def validate_params(
     indexing_params: dict[str, Any] | None,
     query_params: dict[str, Any] | None,
 ) -> None:
-    """Raise ``ValueError`` if either dict contains keys not accepted by *provider*."""
+    """Raise ``ValueError`` if either dict contains keys not accepted by *provider*.
+
+    A ``custom`` embedder owns its own kwargs: whatever its ``embed()`` accepts
+    is passed through verbatim, so nothing is validated here.
+    """
+    if provider == CUSTOM_PROVIDER:
+        return
     accepted = accepted_kwargs_for(provider)
     for side, params in (("indexing_params", indexing_params), ("query_params", query_params)):
         if not params:

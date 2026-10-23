@@ -94,10 +94,18 @@ DEFAULT_EXCLUDED_PATTERNS: list[str] = [
 # ---------------------------------------------------------------------------
 
 
+CUSTOM_PROVIDER = "custom"
+
+
 @dataclass
 class EmbeddingSettings:
     model: str
     provider: str = "litellm"
+    # ``provider: custom`` only: ``"module.path:callable"`` naming a factory that
+    # returns the embedder. The factory is called as ``factory(settings,
+    # indexing_params)`` and must return an object with an async ``embed``
+    # method and ``__coco_vector_schema__`` (cocoindex's ``VectorSchemaProvider``).
+    embedder: str | None = None
     device: str | None = None
     min_interval_ms: int | None = None
     # PyTorch MPS allocator limits used by CocoIndex's isolated GPU runner.
@@ -110,6 +118,17 @@ class EmbeddingSettings:
     query_params: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        if self.provider == CUSTOM_PROVIDER:
+            if not self.embedder or ":" not in self.embedder:
+                raise ValueError(
+                    'embedding.provider "custom" requires embedding.embedder set to '
+                    '"module.path:callable"'
+                )
+        elif self.embedder is not None:
+            raise ValueError(
+                f"embedding.embedder is only used with provider {CUSTOM_PROVIDER!r} "
+                f"(got provider {self.provider!r})"
+            )
         ratios = (
             ("mps_low_watermark_ratio", self.mps_low_watermark_ratio),
             ("mps_high_watermark_ratio", self.mps_high_watermark_ratio),
@@ -498,6 +517,8 @@ def _embedding_settings_to_dict(embedding: EmbeddingSettings) -> dict[str, Any]:
         "provider": embedding.provider,
         "model": embedding.model,
     }
+    if embedding.embedder is not None:
+        d["embedder"] = embedding.embedder
     if embedding.device is not None:
         d["device"] = embedding.device
     if embedding.min_interval_ms is not None:
@@ -537,6 +558,8 @@ def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
     emb_kwargs: dict[str, Any] = {"model": emb_dict["model"]}
     if "provider" in emb_dict:
         emb_kwargs["provider"] = emb_dict["provider"]
+    if "embedder" in emb_dict:
+        emb_kwargs["embedder"] = emb_dict["embedder"]
     if "device" in emb_dict:
         emb_kwargs["device"] = emb_dict["device"]
     if "min_interval_ms" in emb_dict:
@@ -709,6 +732,13 @@ _PARAMS_COMMENT_BY_PROVIDER: dict[str, str] = {
         "  #\n"
         "  # Extra kwargs passed to the embedder. Supported keys:\n"
         "  #   input_type\n"
+        "  # indexing_params: {}\n"
+        "  # query_params: {}\n"
+    ),
+    "custom": (
+        "  #\n"
+        "  # Extra kwargs passed to the embedder, whatever your factory's embed()\n"
+        "  # accepts; cocoindex-code does not validate them for a custom embedder.\n"
         "  # indexing_params: {}\n"
         "  # query_params: {}\n"
     ),
