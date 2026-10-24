@@ -25,6 +25,7 @@ from cocoindex_code.settings import (
     _reset_db_path_mapping_cache,
     _reset_host_path_mapping_cache,
     _user_settings_from_dict,
+    _user_settings_to_dict,
     default_project_settings,
     default_user_settings,
     find_parent_with_marker,
@@ -909,3 +910,87 @@ def test_project_settings_parses_human_readable_max_file_size(tmp_path: Path) ->
     path = save_project_settings(tmp_path, ProjectSettings())
     path.write_text(path.read_text() + "\nmax_file_size: 500KB\n")
     assert load_project_settings(tmp_path).max_file_size == 500 * 1024
+
+
+def test_user_settings_round_trip_include_exclude_and_max_file_size() -> None:
+    settings = UserSettings(
+        embedding=EmbeddingSettings(provider="litellm", model="custom-model"),
+        include_patterns=["**/*.py", "**/*.rs"],
+        exclude_patterns=["**/raw/**", "**/imgs/**"],
+        max_file_size=1024 * 1024,
+    )
+    d = _user_settings_to_dict(settings)
+    assert d["include_patterns"] == ["**/*.py", "**/*.rs"]
+    assert d["exclude_patterns"] == ["**/raw/**", "**/imgs/**"]
+    assert d["max_file_size"] == 1024 * 1024
+
+    loaded = _user_settings_from_dict(d)
+    assert loaded.include_patterns == ["**/*.py", "**/*.rs"]
+    assert loaded.exclude_patterns == ["**/raw/**", "**/imgs/**"]
+    assert loaded.max_file_size == 1024 * 1024
+
+
+def test_user_settings_rejects_invalid_patterns() -> None:
+    base = {"embedding": {"provider": "litellm", "model": "m"}}
+    with pytest.raises(ValueError, match="include_patterns must be a list of strings"):
+        _user_settings_from_dict({**base, "include_patterns": "not-a-list"})
+
+    with pytest.raises(ValueError, match="include_patterns must be a list of strings"):
+        _user_settings_from_dict({**base, "include_patterns": [123]})
+
+    with pytest.raises(ValueError, match="exclude_patterns must be a list of strings"):
+        _user_settings_from_dict({**base, "exclude_patterns": "not-a-list"})
+
+    with pytest.raises(ValueError, match="exclude_patterns must be a list of strings"):
+        _user_settings_from_dict({**base, "exclude_patterns": [None]})
+
+
+def test_project_settings_inherits_user_settings_defaults(tmp_path: Path) -> None:
+    user_settings = UserSettings(
+        embedding=EmbeddingSettings(provider="litellm", model="m"),
+        include_patterns=["**/*.py", "**/*.ts"],
+        exclude_patterns=["**/build/**", "**/raw/**"],
+        max_file_size=200 * 1024,
+    )
+    # Project settings file without patterns or max_file_size
+    path = tmp_path / ".cocoindex_code" / "settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("language_overrides: []\n")
+
+    loaded = load_project_settings(tmp_path, user_settings=user_settings)
+    assert loaded.include_patterns == ["**/*.py", "**/*.ts"]
+    assert loaded.exclude_patterns == ["**/build/**", "**/raw/**"]
+    assert loaded.max_file_size == 200 * 1024
+
+
+def test_project_settings_overrides_user_settings_defaults(tmp_path: Path) -> None:
+    user_settings = UserSettings(
+        embedding=EmbeddingSettings(provider="litellm", model="m"),
+        include_patterns=["**/*.py"],
+        exclude_patterns=["**/global_exclude/**"],
+        max_file_size=200 * 1024,
+    )
+    # Project settings overrides exclude_patterns and max_file_size
+    path = tmp_path / ".cocoindex_code" / "settings.yml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("exclude_patterns:\n  - '**/local_exclude/**'\nmax_file_size: 50KB\n")
+
+    loaded = load_project_settings(tmp_path, user_settings=user_settings)
+    # include_patterns was not set in project, so it inherits user settings
+    assert loaded.include_patterns == ["**/*.py"]
+    # exclude_patterns was set in project, so it completely replaces user settings
+    assert loaded.exclude_patterns == ["**/local_exclude/**"]
+    assert loaded.max_file_size == 50 * 1024
+
+
+def test_default_project_settings_with_user_settings() -> None:
+    user_settings = UserSettings(
+        embedding=EmbeddingSettings(provider="litellm", model="m"),
+        include_patterns=["**/*.go"],
+        exclude_patterns=["**/vendor/**"],
+        max_file_size=100 * 1024,
+    )
+    ps = default_project_settings(user_settings=user_settings)
+    assert ps.include_patterns == ["**/*.go"]
+    assert ps.exclude_patterns == ["**/vendor/**"]
+    assert ps.max_file_size == 100 * 1024
