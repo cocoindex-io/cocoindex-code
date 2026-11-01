@@ -22,6 +22,7 @@ class SearchRequest(_msgspec.Struct, tag="search"):
     query: str
     languages: list[str] | None = None
     paths: list[str] | None = None
+    exclude_paths: list[str] | None = None
     limit: int = 5
     offset: int = 0
 
