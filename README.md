@@ -3,15 +3,15 @@
 </p>
 
 
-<h1 align="center">AST-based semantic code search that just works</h1>
+<h1 align="center">AST-based semantic code search</h1>
 
 ![effect](https://github.com/user-attachments/assets/cb3a4cae-0e1f-49c4-890b-7bb93317ab60)
 
 
-A lightweight, effective **(AST-based)** semantic code search tool for your codebase. Built on [CocoIndex](https://github.com/cocoindex-io/cocoindex) — a Rust-based ultra performant data transformation engine. Use it from the CLI, or integrate with Claude, Codex, Cursor — any coding agent — via [Skill](#skill-recommended) or [MCP](#mcp-server).
+CocoIndex Code provides AST-based semantic search for your codebase, built on the [CocoIndex](https://github.com/cocoindex-io/cocoindex) Rust data transformation engine. Use it from the CLI or connect Claude, Codex, Cursor, and other coding agents through a [Skill](#skill-recommended) or [MCP](#mcp-server).
 
-- Instant token saving by 70%.
-- **1 min setup** — install and go, zero config needed!
+- 70% token savings.
+- 1 min setup with default settings.
 
 <div align="center">
 
@@ -25,7 +25,7 @@ A lightweight, effective **(AST-based)** semantic code search tool for your code
 [![release](https://github.com/cocoindex-io/cocoindex/actions/workflows/release.yml/badge.svg?event=push&color=5B5BD6)](https://github.com/cocoindex-io/cocoindex/actions/workflows/release.yml)
 
 
-🌟 Please help star [CocoIndex](https://github.com/cocoindex-io/cocoindex) if you like this project!
+Star [CocoIndex](https://github.com/cocoindex-io/cocoindex) if you find it useful.
 
 [Deutsch](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=de) |
 [English](https://readme-i18n.com/cocoindex-io/cocoindex-code?lang=en) |
@@ -40,7 +40,9 @@ A lightweight, effective **(AST-based)** semantic code search tool for your code
 </div>
 
 
-## Get Started — zero config, let's go!
+<a id="get-started--zero-config-lets-go"></a>
+
+## Get Started
 
 ### Install
 
@@ -73,7 +75,7 @@ Install the `ccc` skill so your coding agent automatically uses semantic search 
 npx skills add cocoindex-io/cocoindex-code
 ```
 
-That's it — no `ccc init` or `ccc index` needed. The skill teaches the agent to handle initialization, indexing, and searching on its own. It will automatically keep the index up to date as you work.
+The skill teaches the agent to handle initialization, indexing, and searching, so you don't need to run `ccc init` or `ccc index` yourself. The agent keeps the index up to date as you work.
 
 The agent uses semantic search automatically when it would be helpful. You can also nudge it explicitly — just ask it to search the codebase, e.g. *"find how user sessions are managed"*, or type `/ccc` to invoke the skill directly.
 
@@ -240,7 +242,7 @@ Prefer the marketplace install above. Manual project MCP (`.omp/mcp.json`):
 ```
 </details>
 
-Once configured, the agent automatically decides when semantic code search is helpful — finding code by description, exploring unfamiliar codebases, fuzzy/conceptual matches, or locating implementations without knowing exact names.
+Once configured, the agent can use semantic search to find code by description, explore unfamiliar codebases, and locate implementations without exact names.
 
 > **Note:** The `cocoindex-code` command (without subcommand) still works as an MCP server for backward compatibility. It auto-creates settings from environment variables on first run.
 
@@ -433,8 +435,8 @@ ccc() {
 }
 ```
 
-Now `cd` into any project under your workspace and run `ccc init`, `ccc index`,
-`ccc search ...`, `ccc status`, etc. — it just works.
+Now `cd` into a project under your workspace and run `ccc init`, `ccc index`,
+`ccc search ...`, or `ccc status`.
 
 ### Connect your coding agent
 
@@ -523,11 +525,11 @@ docker build -t cocoindex-code:local -f docker/Dockerfile .
 ```
 
 ## Features
-- **Semantic Code Search**: Find relevant code using natural language queries when grep doesn't work well, and save tokens immediately.
-- **Ultra Performant**: ⚡ Built on top of ultra performant [Rust indexing engine](https://github.com/cocoindex-io/cocoindex). Only re-indexes changed files for fast updates.
+- **Semantic Code Search**: Find relevant code using natural language queries when grep doesn't work well.
+- **Incremental indexing**: The [Rust indexing engine](https://github.com/cocoindex-io/cocoindex) re-indexes only changed files.
 - **Multi-Language Support**: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++, C#, SQL, Shell, and more.
-- **Embedded**: Portable and just works, no database setup required!
-- **Flexible Embeddings**: Local SentenceTransformers via the `[full]` extra (free, no API key!) or 100+ cloud providers via LiteLLM.
+- **Embedded storage**: No database setup required.
+- **Embedding providers**: Local SentenceTransformers via the `[full]` extra, with no API key, or 100+ cloud providers via LiteLLM.
 
 ## Configuration
 
@@ -897,7 +899,7 @@ Both source and target must be absolute paths. If no mapping matches, the defaul
 
 ## Troubleshooting
 
-Run `ccc doctor` to diagnose common issues. It checks your settings, daemon health, embedding model, file matching, and index status — all in one command.
+Run `ccc doctor` to check your settings, daemon health, embedding model, file matching, and index status.
 
 ### `sqlite3.Connection object has no attribute enable_load_extension`
 
@@ -909,7 +911,7 @@ Some Python installations (e.g. the one pre-installed on macOS) ship with a SQLi
 brew install python3
 ```
 
-Then re-install cocoindex-code (see [Get Started](#get-started--zero-config-lets-go) for install options):
+Then re-install cocoindex-code (see [Get Started](#get-started) for install options):
 
 Using pipx:
 ```bash
@@ -924,7 +926,7 @@ uv tool install --upgrade cocoindex-code
 
 ### `MDB_MAP_FULL: Environment mapsize limit reached`
 
-The index is stored in an LMDB database whose maximum size is fixed when the daemon starts. The default ceiling is **4 GiB**, which is plenty for most projects but can be exhausted by very large codebases (tens of thousands of files), especially with high-dimensional embedding models like `nomic-ai/CodeRankEmbed`.
+The index is stored in an LMDB database whose maximum size is fixed when the daemon starts. The default ceiling is **4 GiB**, which codebases with tens of thousands of files can exhaust, especially with high-dimensional embedding models like `nomic-ai/CodeRankEmbed`.
 
 Raise the ceiling with the `COCOINDEX_LMDB_MAP_SIZE` environment variable (value in **bytes**). LMDB only grows the file as data is written, so a high limit doesn't pre-allocate disk — it's safe to set it generously:
 
@@ -974,15 +976,15 @@ export COCOINDEX_DISABLE_USAGE_TRACKING=1
 ```
 
 ## Large codebase / Enterprise
-[CocoIndex](https://github.com/cocoindex-io/cocoindex) is an ultra efficient indexing engine that also works on large codebases at scale for enterprises. In enterprise scenarios it is a lot more efficient to share indexes with teammates when there are large or many repos. We also have advanced features like branch dedupe etc designed for enterprise users.
+Teams indexing large or multiple repositories can share [CocoIndex](https://github.com/cocoindex-io/cocoindex) indexes across developers. Enterprise features include deduplication across branches.
 
-> Indexing a very large codebase and hitting `MDB_MAP_FULL`? Raise the LMDB map size — see [`MDB_MAP_FULL: Environment mapsize limit reached`](#mdb_map_full-environment-mapsize-limit-reached) under Troubleshooting.
+> If indexing fails with `MDB_MAP_FULL`, raise the LMDB map size. See [`MDB_MAP_FULL: Environment mapsize limit reached`](#mdb_map_full-environment-mapsize-limit-reached) under Troubleshooting.
 
-If you need help with remote setup, please email our maintainer linghua@cocoindex.io, happy to help!
+For help with remote setup, email linghua@cocoindex.io.
 
 ## Contributing
 
-We welcome contributions! This project uses [uv](https://docs.astral.sh/uv/getting-started/installation/) for development, and every PR is gated on the same lint, format, type-check, and test suite in CI. **Please run these checks locally before opening a PR** — failing pre-commit checks are the most common cause of red CI on incoming PRs.
+We welcome contributions. This project uses [uv](https://docs.astral.sh/uv/getting-started/installation/) for development. CI checks lint, formatting, types, and tests for every PR. Run the same checks locally before opening a PR; failed pre-commit checks are the most common cause of red CI on incoming PRs.
 
 ### 1. Install the dev dependencies
 
