@@ -15,6 +15,11 @@ on:
         required: false
         type: boolean
         default: false
+      mcp_registry_version:
+        description: 'Publish server.json to the MCP registry for this version, which must be on PyPI already (for example 0.2.43). Use it to retry a registry publish that failed during a release.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -110,6 +115,118 @@ jobs:
           gh release upload
           '${{ github.ref_name }}' dist/*
           --repo '${{ github.repository }}'
+
+  publish-to-mcp-registry:
+    name: Publish server.json to the MCP registry
+    # The registry stores metadata only. On publish it reads this version from
+    # PyPI and checks that the README there carries the line
+    # `mcp-name: io.github.cocoindex-io/cocoindex-code`, so this job runs after
+    # the PyPI upload. Nothing else depends on it: a failure here leaves the
+    # PyPI, GitHub Release and Docker jobs untouched, and
+    # `mcp_registry_version` on a manual run retries it.
+    #
+    # A GitHub pre-release is skipped. A PEP 440 pre-release version such as
+    # `0.3.0rc1` is not semantic versioning, and the registry marks every
+    # version it cannot parse as "latest".
+    if: >-
+      ${{
+        !cancelled() && !failure() && (
+          (github.event_name == 'release' && !github.event.release.prerelease)
+          || (github.event_name == 'workflow_dispatch' && inputs.mcp_registry_version != '')
+        )
+      }}
+    needs:
+      - publish-to-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # GitHub OIDC proves that this workflow runs in the `cocoindex-io`
+      # organization, which grants the `io.github.cocoindex-io/*` namespace.
+      # No stored secret.
+      id-token: write
+    env:
+      # Pinned on purpose. To upgrade, set the new release tag here; the
+      # download step verifies the Sigstore bundle of that tag.
+      MCP_PUBLISHER_VERSION: v1.8.7
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set the version in server.json
+        # server.json in the repository holds the placeholder `0.0.0`, because
+        # the package version comes from the git tag (hatch-vcs). A release
+        # uses its tag (`v0.2.43` -> `0.2.43`); a manual run uses the input.
+        env:
+          INPUT_VERSION: ${{ inputs.mcp_registry_version }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "release" ]; then
+              version="${GITHUB_REF_NAME#v}"
+          else
+              version="${INPUT_VERSION#v}"
+          fi
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::'$version' is not a MAJOR.MINOR.PATCH version"
+              exit 1
+          fi
+          jq --arg v "$version" '.version = $v | .packages[].version = $v' server.json > server.tmp
+          mv server.tmp server.json
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          cat server.json
+
+      - name: Wait for the version on PyPI
+        # A new version can take a while to show up in the PyPI JSON API (see
+        # the note on v0.2.24 in the Docker job). The registry reads the same
+        # API, so wait until the version is there with the ownership marker.
+        run: |
+          set -euo pipefail
+          name="$(jq -r '.name' server.json)"
+          package="$(jq -r '.packages[0].identifier' server.json)"
+          url="https://pypi.org/pypi/${package}/${VERSION}/json"
+          for attempt in $(seq 1 30); do
+              if curl --fail --silent --location "$url" --output pypi.json; then
+                  if jq -e --arg marker "mcp-name: ${name}" \
+                      '.info.description | contains($marker)' pypi.json >/dev/null; then
+                      echo "${package} ${VERSION} is on PyPI with the marker 'mcp-name: ${name}'."
+                      exit 0
+                  fi
+                  echo "::error::${package} ${VERSION} is on PyPI, but its README has no 'mcp-name: ${name}' line."
+                  exit 1
+              fi
+              echo "Attempt ${attempt}: ${package} ${VERSION} is not on PyPI yet. Next try in 20 s."
+              sleep 20
+          done
+          echo "::error::${package} ${VERSION} did not show up on PyPI within 10 minutes."
+          exit 1
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Download and verify mcp-publisher
+        run: |
+          set -euo pipefail
+          os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+          archive="mcp-publisher_${os}_${arch}.tar.gz"
+          base_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+
+          curl --fail --location --silent --show-error --output "$archive" "$base_url/$archive"
+          curl --fail --location --silent --show-error --output "$archive.sigstore.json" "$base_url/$archive.sigstore.json"
+          cosign verify-blob \
+            --bundle "$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$archive"
+          tar xzf "$archive" mcp-publisher
+          rm -f "$archive" "$archive.sigstore.json"
+
+      - name: Validate server.json
+        run: ./mcp-publisher validate server.json
+
+      - name: Log in to the MCP registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json to the MCP registry
+        run: ./mcp-publisher publish server.json
 
   publish-docker:
     name: Build & push Docker image (${{ matrix.variant }})

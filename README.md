@@ -163,6 +163,9 @@ Skill-only (no MCP, no auto-index): install the skill via `npx skills add cocoin
 
 ### MCP Server
 
+<!-- Ownership marker for the official MCP registry. It must match "name" in server.json. Keep the next line. -->
+<!-- mcp-name: io.github.cocoindex-io/cocoindex-code -->
+
 Alternatively, use `ccc mcp` to run as an MCP server:
 
 <details>

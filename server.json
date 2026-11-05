@@ -1,0 +1,47 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.cocoindex-io/cocoindex-code",
+  "title": "CocoIndex Code",
+  "description": "Semantic code search over a local repository, with AST-based chunks and incremental re-indexing.",
+  "repository": {
+    "url": "https://github.com/cocoindex-io/cocoindex-code",
+    "source": "github",
+    "id": "1146989733"
+  },
+  "websiteUrl": "https://github.com/cocoindex-io/cocoindex-code#mcp-server",
+  "version": "0.0.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "cocoindex-code",
+      "version": "0.0.0",
+      "runtimeHint": "uvx",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--with",
+          "value": "cocoindex-code[full]",
+          "description": "Install the full extra, which adds sentence-transformers for local embeddings. The default embedding model needs it."
+        }
+      ],
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "serve"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "COCOINDEX_CODE_ROOT_PATH",
+          "description": "Root directory of the codebase to index. Set it when the client does not start the server inside the codebase. If unset, the server uses its working directory.",
+          "format": "filepath",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
