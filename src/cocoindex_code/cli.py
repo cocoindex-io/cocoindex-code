@@ -1164,6 +1164,11 @@ def run_daemon_cmd() -> None:
     run_daemon()
 
 
+def main() -> None:
+    """Run the CLI without expanding literal search patterns on Windows."""
+    app(windows_expand_args=False)
+
+
 # Allow running as module: python -m cocoindex_code.cli
 if __name__ == "__main__":
-    app()
+    main()
