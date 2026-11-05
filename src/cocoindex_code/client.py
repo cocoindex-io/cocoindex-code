@@ -303,6 +303,8 @@ class DaemonVersionError(RuntimeError):
                 f"Daemon version mismatch (daemon={resp.daemon_version}, "
                 f"client={__version__}). Please retry — the daemon may need a restart."
             )
+        elif resp.missing_local_embeddings:
+            message = "Daemon needs a restart to reload its settings or local embedding support."
         else:
             message = (
                 "Daemon is running with stale global settings and needs a restart. Please retry."
@@ -766,4 +768,10 @@ def _needs_restart(resp: HandshakeResponse) -> bool:
     current_mtime = global_settings_mtime_us()
     if current_mtime != resp.global_settings_mtime_us:
         return True
+    if resp.missing_local_embeddings and not _is_daemon_supervised():
+        # A slim client can keep using a full daemon. Only replace a daemon
+        # when this client can supply the dependency it is missing.
+        from .shared import is_sentence_transformers_installed
+
+        return is_sentence_transformers_installed()
     return False
