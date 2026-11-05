@@ -55,6 +55,8 @@ DEFAULT_INCLUDED_PATTERNS: list[str] = [
     "**/*.kt",  # Kotlin
     "**/*.kts",  # Kotlin script
     "**/*.scala",  # Scala
+    "**/*.cls",  # Salesforce Apex classes
+    "**/*.trigger",  # Salesforce Apex triggers
     "**/*.r",  # R
     "**/*.html",  # HTML
     "**/*.htm",  # HTML
