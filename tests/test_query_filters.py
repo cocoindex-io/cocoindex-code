@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 import struct
+from unittest.mock import Mock
 
 import pytest
 
@@ -85,6 +86,32 @@ def test_full_scan_query_combines_language_and_path_filters(conn: sqlite3.Connec
 
     assert [row[0] for row in rows] == ["lib/db.py"]
     assert rows[0][5] == pytest.approx(0.0)
+
+
+def test_full_scan_retries_null_distances_with_exact_filters_and_offset(
+    conn: sqlite3.Connection,
+) -> None:
+    # Simulate the reported planner failure for the first statement. The
+    # fallback still runs against the actual vec0 table and extension.
+    connection = Mock(wraps=conn)
+
+    def execute(sql: str, params: tuple[object, ...]) -> sqlite3.Cursor:
+        if connection.execute.call_count == 1:
+            return conn.execute("SELECT 'src/main.py', 'python', 'fibonacci', 1, 5, NULL")
+        return conn.execute(sql, params)
+
+    connection.execute.side_effect = execute
+    rows = _full_scan_query(
+        connection,
+        _vec((1.0, 0.0, 0.0, 0.0)),
+        limit=1,
+        offset=1,
+        languages=["python", "rust"],
+        paths=["src/*", "no-match/*"],
+    )
+
+    assert [row[:5] for row in rows] == [("src/util.py", "python", "parse csv", 1, 5)]
+    assert rows[0][5] == pytest.approx(2**0.5)
 
 
 def test_knn_query_returns_usable_distances(conn: sqlite3.Connection) -> None:
