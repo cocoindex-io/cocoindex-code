@@ -19,24 +19,15 @@ def _l2_to_score(distance: float) -> float:
 def _checked(rows: list[tuple[Any, ...]], query_shape: str) -> list[tuple[Any, ...]]:
     """Return *rows*, failing loudly if any of them carries a NULL distance.
 
-    ``code_chunks_vec`` is a vec0 virtual table whose ``distance`` is a *hidden*
-    column: sqlite-vec populates it only under the KNN query plan and yields
-    NULL for it on a plain full scan.  A NULL therefore means the plan we asked
-    for is not the plan we got, which is a bug worth reporting rather than a
-    result worth ranking.  Left unchecked, the NULL flows into ``_l2_to_score``
-    and surfaces as an unrelated-looking ``TypeError: unsupported operand
-    type(s) for *: 'NoneType' and 'NoneType'`` (issue #270).
-
-    Only KNN queries need this guard: ``_full_scan_query`` computes its own
-    ``vec_distance_L2(...)``, which works under any plan and raises (never
-    returns NULL) on bad input.
+    The hidden vec0 distance column is populated only by the KNN plan.
+    A scalar distance can also be NULL on some filtered scan plans (#270).
+    A missing distance cannot be ranked or converted to a similarity score.
     """
     bad = next((row for row in rows if row[5] is None), None)
     if bad is not None:
         raise RuntimeError(
             f"Vector index returned a row with no distance ({query_shape}, "
-            f"file_path={bad[0]!r}) — the sqlite-vec KNN query plan was not "
-            "used. Please report this at "
+            f"file_path={bad[0]!r}). Please report this at "
             "https://github.com/cocoindex-io/cocoindex-code/issues along with "
             "the output of `ccc doctor`."
         )
@@ -87,22 +78,20 @@ def _full_scan_query(
 ) -> list[tuple[Any, ...]]:
     """Full scan with SQL-level distance computation and filtering."""
     conditions: list[str] = []
-    params: list[Any] = [embedding_bytes]
+    filter_params: list[str] = []
 
     if languages:
         placeholders = ",".join("?" for _ in languages)
         conditions.append(f"language IN ({placeholders})")
-        params.extend(languages)
+        filter_params.extend(languages)
 
     if paths:
         path_clauses = " OR ".join("file_path GLOB ?" for _ in paths)
         conditions.append(f"({path_clauses})")
-        params.extend(paths)
+        filter_params.extend(paths)
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    params.extend([limit, offset])
-
-    return conn.execute(
+    rows = conn.execute(
         f"""
         SELECT file_path, language, content, start_line, end_line,
                vec_distance_L2(embedding, ?) as distance
@@ -111,8 +100,36 @@ def _full_scan_query(
         ORDER BY distance
         LIMIT ? OFFSET ?
         """,
-        params,
+        (embedding_bytes, *filter_params, limit, offset),
     ).fetchall()
+    if all(row[5] is not None for row in rows):
+        return rows
+
+    # Separate the vec0 scan from distance evaluation when the direct scan
+    # returns NULL. Filter before materializing and fetch payloads after ranking
+    # so the temporary table only holds matching IDs and vectors.
+    return _checked(
+        conn.execute(
+            f"""
+            WITH candidates AS MATERIALIZED (
+                SELECT id, embedding FROM code_chunks_vec {where}
+            ),
+            ranked AS MATERIALIZED (
+                SELECT id, vec_distance_L2(embedding, ?) AS l2
+                FROM candidates
+                ORDER BY l2
+                LIMIT ? OFFSET ?
+            )
+            SELECT chunks.file_path, chunks.language, chunks.content,
+                   chunks.start_line, chunks.end_line, ranked.l2
+            FROM ranked
+            JOIN code_chunks_vec AS chunks ON chunks.id = ranked.id
+            ORDER BY ranked.l2
+            """,
+            (*filter_params, embedding_bytes, limit, offset),
+        ).fetchall(),
+        "materialized full scan",
+    )
 
 
 async def query_codebase(
