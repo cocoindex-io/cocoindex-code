@@ -28,6 +28,7 @@ DEFAULT_INCLUDED_PATTERNS: list[str] = [
     "**/*.rs",  # Rust
     "**/*.go",  # Go
     "**/*.java",  # Java
+    "**/*.jl",  # Julia
     "**/*.c",  # C
     "**/*.h",  # C/C++ headers
     "**/*.cpp",  # C++
