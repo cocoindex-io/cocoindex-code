@@ -859,6 +859,7 @@ embedding:
 | java | | `.java` |
 | javascript | js | `.js` |
 | json | | `.json` |
+| julia | | `.jl` |
 | kotlin | | `.kt`, `.kts` |
 | lua | | `.lua` |
 | markdown | md | `.md`, `.mdx` |
