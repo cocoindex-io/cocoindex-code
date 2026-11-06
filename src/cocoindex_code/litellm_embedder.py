@@ -18,6 +18,23 @@ logger = logging.getLogger(__name__)
 _RATE_LIMIT_DELAY_RE = re.compile(r"Please try again in ([0-9.]+)(ms|s)", re.IGNORECASE)
 _MAX_RATE_LIMIT_RETRIES = 6
 
+# MongoDB Atlas serves Voyage AI embedding models through an endpoint that
+# speaks the native Voyage API, so a ``mongodb/<voyage-model>`` model name is
+# routed via LiteLLM's ``voyage/`` provider with ``api_base`` pointed at Atlas.
+_MONGODB_PREFIX = "mongodb/"
+_MONGODB_API_BASE = "https://ai.mongodb.com/v1"
+
+
+def _resolve_mongodb_model(model: str) -> tuple[str | None, str]:
+    """Map a ``mongodb/`` model name to a Voyage model plus the Atlas base URL.
+
+    Returns ``(api_base, model)``. For non-MongoDB models ``api_base`` is ``None``
+    and the model is returned unchanged.
+    """
+    if model.startswith(_MONGODB_PREFIX):
+        return _MONGODB_API_BASE, "voyage/" + model[len(_MONGODB_PREFIX) :]
+    return None, model
+
 
 def _get_rate_limit_delay(exc: Exception, attempt: int) -> float | None:
     message = str(exc)
@@ -39,7 +56,9 @@ class PacedLiteLLMEmbedder(LiteLLMEmbedder):
     """LiteLLM embedder that serializes requests and paces them when configured."""
 
     def __init__(self, model: str, *, min_interval_ms: int | None = None, **kwargs: Any) -> None:
+        api_base, model = _resolve_mongodb_model(model)
         super().__init__(model, **kwargs)
+        self._api_base = api_base
         self._min_request_interval_seconds = max(0.0, float(min_interval_ms or 0) / 1000.0)
         self._request_lock: asyncio.Lock | None = None
         self._next_request_at: float = 0.0
@@ -85,6 +104,10 @@ class PacedLiteLLMEmbedder(LiteLLMEmbedder):
             if not self._model.startswith(("voyage/", "bedrock/")):
                 kwargs["encoding_format"] = "float"
                 kwargs["drop_params"] = True
+
+            if self._api_base is not None:
+                kwargs.setdefault("api_base", self._api_base)
+
             response = await self._aembedding_with_rate_limit_retries(
                 model=self._model,
                 input=input,
