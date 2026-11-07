@@ -1,6 +1,7 @@
 """Two configurations can index and search the same checkout independently."""
 
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -10,6 +11,7 @@ from typer.testing import CliRunner
 from cocoindex_code import cli, client, settings
 from cocoindex_code._daemon_paths import daemon_socket_path
 from cocoindex_code.project import Project
+from cocoindex_code.shared import Embedder
 
 
 class _Embedder:
@@ -53,7 +55,7 @@ async def test_profile_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
             )
             assert settings.resolve_db_dir(repo).is_relative_to(tmp_path / "db")
             addresses.add(daemon_socket_path())
-            projects[name] = await Project.create(repo, _Embedder(), {}, {})
+            projects[name] = await Project.create(repo, cast(Embedder, _Embedder()), {}, {})
             await projects[name].run_index()
 
         assert len(addresses) == 2
