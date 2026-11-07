@@ -721,6 +721,49 @@ def search(
 
 
 @app.command()
+def duplicates(
+    threshold: float = _typer.Option(0.88, min=0.0, max=1.0, help="Minimum cosine similarity"),
+    min_lines: int = _typer.Option(5, min=1, help="Minimum lines per chunk"),
+    lang: list[str] = _typer.Option([], "--lang", help="Filter by language"),
+    path: str | None = _typer.Option(None, "--path", help="Filter by file path glob"),
+    json_output: bool = _typer.Option(False, "--json", help="Output groups as JSON"),
+) -> None:
+    """Find groups of similar chunks in the existing index."""
+    import math
+    import sqlite3
+
+    from ._duplicates import find_duplicate_groups
+
+    if not math.isfinite(threshold):
+        raise _typer.BadParameter("must be finite", param_hint="--threshold")
+    project_root = require_project_root()
+    try:
+        groups = find_duplicate_groups(
+            target_sqlite_db_path(project_root),
+            threshold=threshold,
+            min_lines=min_lines,
+            languages=lang,
+            path=path,
+        )
+    except (sqlite3.Error, ValueError) as exc:
+        _typer.echo(f"Duplicate scan failed: {exc}", err=True)
+        raise _typer.Exit(code=1) from exc
+
+    if json_output:
+        sys.stdout.buffer.write(_msgspec.json.encode(groups) + b"\n")
+        sys.stdout.buffer.flush()
+    elif not groups:
+        _typer.echo("No similar chunks found.")
+    else:
+        for index, group in enumerate(groups, 1):
+            _typer.echo(f"Group {index} ({len(group)} chunks)")
+            for chunk in group:
+                _echo_search_text(
+                    f"  {chunk.file_path}:{chunk.start_line}-{chunk.end_line} [{chunk.language}]"
+                )
+
+
+@app.command()
 def grep(
     pattern: str = _typer.Argument(
         ...,

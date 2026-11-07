@@ -161,6 +161,22 @@ OMP does **not** execute Claude `hooks/hooks.json` command hooks. The TypeScript
 
 Skill-only (no MCP, no auto-index): install the skill via `npx skills add cocoindex-io/cocoindex-code`, or run `ccc search` / `ccc index` from the shell.
 
+### Find similar code across a repository
+
+Build the index with `ccc index`, then run:
+
+```bash
+ccc duplicates --threshold 0.88 --min-lines 5 --lang python --path 'src/*'
+ccc duplicates --threshold 0.9 --json
+```
+
+The command reads stored embeddings without running the model or refreshing
+the index. Each group is connected by threshold-matching pairs. Two chunks in
+the same group can be connected through a third chunk even if their own score
+is below the threshold. Similarity is a candidate for review, not proof of
+equivalence. The exact comparison takes quadratic time in the number of
+selected chunks, so use file and language filters on large indexes.
+
 ### MCP Server
 
 <!-- Ownership marker for the official MCP registry. It must match "name" in server.json. Keep the next line. -->
@@ -295,6 +311,7 @@ The background daemon starts automatically on first use.
 | `ccc search <query>` | Semantic search across the codebase |
 | `ccc grep <pattern> [path]` | Structural code search by example (no index needed) |
 | `ccc status` | Show index stats (chunk count, file count, language breakdown) |
+| `ccc duplicates` | Group similar chunks from the existing index |
 | `ccc mcp` | Run as MCP server in stdio mode |
 | `ccc doctor` | Run diagnostics — checks settings, daemon, model, file matching, and index health |
 | `ccc reset` | Delete index databases. `--all` also removes settings. `-f` skips confirmation. |
