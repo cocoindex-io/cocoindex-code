@@ -70,6 +70,7 @@ from .protocol import (
     encode_response,
 )
 from .settings import (
+    PROFILE_ENV,
     ChunkerMapping,
     DaemonSettings,
     UserSettings,
@@ -744,9 +745,13 @@ def run_daemon(
     if user_settings_path().is_file():
         user_settings = load_user_settings()
         daemon_settings = user_settings.daemon
-        settings_env_keys = list(user_settings.envs.keys())
+        settings_env_keys = []
         for key, value in user_settings.envs.items():
+            if key == PROFILE_ENV:
+                logger.warning("%s must be set before starting ccc; ignoring it in envs", key)
+                continue
             os.environ[key] = value
+            settings_env_keys.append(key)
         clear_mps_cache_after_index = configure_mps_environment(user_settings.embedding)
         # Resolve params BEFORE constructing the embedder so invalid configs
         # fail fast without paying the model-load cost.

@@ -161,6 +161,28 @@ OMP does **not** execute Claude `hooks/hooks.json` command hooks. The TypeScript
 
 Skill-only (no MCP, no auto-index): install the skill via `npx skills add cocoindex-io/cocoindex-code`, or run `ccc search` / `ccc index` from the shell.
 
+### Compare indexes in one checkout
+
+Set `COCOINDEX_CODE_PROFILE` to use a named profile with its own embedding
+configuration, file filters, databases, and daemon:
+
+```bash
+COCOINDEX_CODE_PROFILE=baseline ccc init
+COCOINDEX_CODE_PROFILE=baseline ccc index
+COCOINDEX_CODE_PROFILE=experiment ccc init
+COCOINDEX_CODE_PROFILE=experiment ccc index
+COCOINDEX_CODE_PROFILE=experiment ccc search "parse configuration"
+```
+
+Each `init` prompts for a model on first use. Edit
+`.cocoindex_code/profiles/profile-<name>/settings.yml` in the checkout to set
+profile-specific file filters. The corresponding global settings live under
+`~/.cocoindex_code/profiles/profile-<name>/global_settings.yml` (or under
+`COCOINDEX_CODE_DIR`). Use the same environment variable for `ccc status`,
+`ccc reset`, or when launching the MCP server. Unset it to use the original
+settings and index. In PowerShell, set it with
+`$env:COCOINDEX_CODE_PROFILE = "experiment"`.
+
 ### MCP Server
 
 <!-- Ownership marker for the official MCP registry. It must match "name" in server.json. Keep the next line. -->

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
-from .settings import user_settings_dir
+from .settings import profile_directory, user_settings_dir
 
 # Max bytes in sockaddr_un.sun_path, including the NUL terminator: 104 on the
 # BSDs (incl. macOS), 108 on Linux. Exceeding it makes bind() fail with
@@ -38,7 +38,7 @@ def daemon_runtime_dir() -> Path:
     """
     override = os.environ.get("COCOINDEX_CODE_RUNTIME_DIR")
     if override:
-        return Path(override)
+        return profile_directory(Path(override))
     return user_settings_dir()
 
 
