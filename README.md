@@ -164,7 +164,7 @@ Skill-only (no MCP, no auto-index): install the skill via `npx skills add cocoin
 ### Compare indexes in one checkout
 
 Set `COCOINDEX_CODE_PROFILE` to use a named profile with its own embedding
-configuration, file filters, databases, and daemon:
+configuration, file filters, databases, and daemon.
 
 ```bash
 COCOINDEX_CODE_PROFILE=baseline ccc init
