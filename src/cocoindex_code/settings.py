@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -192,6 +193,28 @@ _SETTINGS_DIR_NAME = ".cocoindex_code"
 _SETTINGS_FILE_NAME = "settings.yml"  # project-level
 _USER_SETTINGS_FILE_NAME = "global_settings.yml"  # user-level
 
+PROFILE_ENV = "COCOINDEX_CODE_PROFILE"
+_PROFILE_DIR = "profiles"
+
+
+def profile_directory(base: Path) -> Path:
+    """Scope a settings, database, or runtime directory to the selected profile."""
+    profile = os.environ.get(PROFILE_ENV)
+    if not profile:
+        return base
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", profile):
+        raise ValueError(
+            f"{PROFILE_ENV} must be 1–64 lowercase letters, digits, underscores, or hyphens "
+            "and start with a letter or digit"
+        )
+    return base / _PROFILE_DIR / f"profile-{profile}"
+
+
+def project_has_profiles(project_root: Path) -> bool:
+    profiles = project_root / _SETTINGS_DIR_NAME / _PROFILE_DIR
+    return any(path.is_file() for path in profiles.glob(f"profile-*/{_SETTINGS_FILE_NAME}"))
+
+
 _ENV_DB_PATH_MAPPING = "COCOINDEX_CODE_DB_PATH_MAPPING"
 _ENV_HOST_PATH_MAPPING = "COCOINDEX_CODE_HOST_PATH_MAPPING"
 
@@ -269,8 +292,8 @@ def resolve_db_dir(project_root: Path) -> Path:
     for mapping in _db_path_mapping:
         if resolved == mapping.source or resolved.is_relative_to(mapping.source):
             rel = resolved.relative_to(mapping.source)
-            return mapping.target / rel
-    return project_root / _SETTINGS_DIR_NAME
+            return profile_directory(mapping.target / rel)
+    return profile_directory(project_root / _SETTINGS_DIR_NAME)
 
 
 def get_db_path_mappings() -> list[PathMapping]:
@@ -333,7 +356,7 @@ def cocoindex_db_path(project_root: Path) -> Path:
     return resolve_db_dir(project_root) / _COCOINDEX_DB_NAME
 
 
-def user_settings_dir() -> Path:
+def _base_user_settings_dir() -> Path:
     """Return ``~/.cocoindex_code/``.
 
     Respects ``COCOINDEX_CODE_DIR`` env var for overriding the base directory.
@@ -344,6 +367,11 @@ def user_settings_dir() -> Path:
     return Path.home() / _SETTINGS_DIR_NAME
 
 
+def user_settings_dir() -> Path:
+    """Return the user settings directory for the selected profile."""
+    return profile_directory(_base_user_settings_dir())
+
+
 def user_settings_path() -> Path:
     """Return ``~/.cocoindex_code/global_settings.yml``."""
     return user_settings_dir() / _USER_SETTINGS_FILE_NAME
@@ -351,7 +379,7 @@ def user_settings_path() -> Path:
 
 def project_settings_path(project_root: Path) -> Path:
     """Return ``$PROJECT_ROOT/.cocoindex_code/settings.yml``."""
-    return project_root / _SETTINGS_DIR_NAME / _SETTINGS_FILE_NAME
+    return profile_directory(project_root / _SETTINGS_DIR_NAME) / _SETTINGS_FILE_NAME
 
 
 def is_user_settings_root(directory: Path) -> bool:
@@ -362,7 +390,7 @@ def is_user_settings_root(directory: Path) -> bool:
     A project there covers every directory below it, so ccc never creates one
     automatically; ``ccc init`` run there by hand still does.
     """
-    return (directory / _SETTINGS_DIR_NAME).resolve() == user_settings_dir().resolve()
+    return (directory / _SETTINGS_DIR_NAME).resolve() == _base_user_settings_dir().resolve()
 
 
 def auto_init_refusal(directory: Path) -> str | None:
@@ -409,7 +437,7 @@ def find_project_root(start: Path) -> Path | None:
     """
     current = start.resolve()
     while True:
-        if (current / _SETTINGS_DIR_NAME / _SETTINGS_FILE_NAME).is_file():
+        if project_settings_path(current).is_file():
             return current
         parent = current.parent
         if parent == current:
@@ -425,7 +453,7 @@ def find_legacy_project_root(start: Path) -> Path | None:
     """
     current = start.resolve()
     while True:
-        if (current / _SETTINGS_DIR_NAME / _COCOINDEX_DB_NAME).exists():
+        if (profile_directory(current / _SETTINGS_DIR_NAME) / _COCOINDEX_DB_NAME).exists():
             return current
         parent = current.parent
         if parent == current:
@@ -452,9 +480,7 @@ def find_parent_with_marker(start: Path) -> Path | None:
         parent = current.parent
         if parent == current:
             return None
-        if (current / _SETTINGS_DIR_NAME / _SETTINGS_FILE_NAME).is_file() or (
-            current / ".git"
-        ).is_dir():
+        if project_settings_path(current).is_file() or (current / ".git").is_dir():
             return current
         current = parent
 

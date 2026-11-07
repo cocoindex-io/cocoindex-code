@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 from ._version import __version__
 from .settings import (
     DEFAULT_ST_MODEL,
+    PROFILE_ENV,
     EmbeddingSettings,
     auto_init_refusal,
     cocoindex_db_path,
@@ -33,6 +34,7 @@ from .settings import (
     find_project_root,
     format_path_for_display,
     normalize_input_path,
+    project_has_profiles,
     project_settings_path,
     resolve_db_dir,
     save_initial_user_settings,
@@ -61,6 +63,11 @@ def _apply_host_cwd() -> None:
     cwd-driven discovery (``find_project_root`` etc.) sees the user's real
     project subtree. Unset → no-op.
     """
+    try:
+        user_settings_path()
+    except ValueError as e:
+        raise _typer.BadParameter(str(e), param_hint=PROFILE_ENV) from e
+
     host_cwd = os.environ.get("COCOINDEX_CODE_HOST_CWD")
     if not host_cwd:
         return
@@ -818,7 +825,6 @@ def reset(
 ) -> None:
     """Reset project databases and optionally remove settings."""
     project_root = require_project_root()
-    cocoindex_dir = project_root / ".cocoindex_code"
     db_dir = resolve_db_dir(project_root)
 
     db_files = [
@@ -867,20 +873,16 @@ def reset(
             f.unlink(missing_ok=True)
 
     if all_:
-        # Remove db_dir if empty and different from cocoindex_dir
-        if db_dir != cocoindex_dir:
+        for directory in {db_dir, settings_file.parent}:
             try:
-                db_dir.rmdir()
+                directory.rmdir()
             except OSError:
                 pass  # Not empty or doesn't exist
-        # Remove .cocoindex_code/ if empty
-        try:
-            cocoindex_dir.rmdir()
-        except OSError:
-            pass  # Not empty
 
-        # Remove from .gitignore
-        remove_from_gitignore(project_root)
+        # The shared ignore entry still protects any other initialized profile.
+        default_settings = project_root / ".cocoindex_code" / "settings.yml"
+        if not default_settings.is_file() and not project_has_profiles(project_root):
+            remove_from_gitignore(project_root)
         _typer.echo("Project fully reset.")
     else:
         _typer.echo("Databases deleted.")
