@@ -161,22 +161,6 @@ OMP does **not** execute Claude `hooks/hooks.json` command hooks. The TypeScript
 
 Skill-only (no MCP, no auto-index): install the skill via `npx skills add cocoindex-io/cocoindex-code`, or run `ccc search` / `ccc index` from the shell.
 
-### Find similar code across a repository
-
-Build the index with `ccc index` before running `ccc duplicates`.
-
-```bash
-ccc duplicates --threshold 0.88 --min-lines 5 --lang python --path 'src/*'
-ccc duplicates --threshold 0.9 --json
-```
-
-The command reads stored embeddings without running the model or refreshing
-the index. Each group is connected by threshold-matching pairs. Two chunks in
-the same group can be connected through a third chunk even if their own score
-is below the threshold. Treat similarity groups as candidates for manual
-review. The exact comparison takes quadratic time in the number of
-selected chunks, so use file and language filters on large indexes.
-
 ### MCP Server
 
 <!-- Ownership marker for the official MCP registry. It must match "name" in server.json. Keep the next line. -->
@@ -331,6 +315,22 @@ ccc search --refresh database schema                 # update index first, then 
 ```
 
 By default, `ccc search` scopes results to your current working directory (relative to the project root). Use `--path` to override.
+
+### Find similar code across a repository
+
+Build the index with `ccc index` before running `ccc duplicates`.
+
+```bash
+ccc duplicates --threshold 0.88 --min-lines 5 --lang python --path 'src/*'
+ccc duplicates --threshold 0.9 --json
+```
+
+The command reads stored embeddings without running the model or refreshing
+the index. Each group is connected by threshold-matching pairs. Two chunks in
+the same group can be connected through a third chunk even if their own score
+is below the threshold. Treat similarity groups as candidates for manual
+review. The exact comparison takes quadratic time in the number of
+selected chunks, so use file and language filters on large indexes.
 
 ### Structural Search (`ccc grep`)
 
