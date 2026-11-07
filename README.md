@@ -163,7 +163,7 @@ Skill-only (no MCP, no auto-index): install the skill via `npx skills add cocoin
 
 ### Find similar code across a repository
 
-Build the index with `ccc index`, then run:
+Build the index with `ccc index` before running `ccc duplicates`.
 
 ```bash
 ccc duplicates --threshold 0.88 --min-lines 5 --lang python --path 'src/*'
@@ -173,8 +173,8 @@ ccc duplicates --threshold 0.9 --json
 The command reads stored embeddings without running the model or refreshing
 the index. Each group is connected by threshold-matching pairs. Two chunks in
 the same group can be connected through a third chunk even if their own score
-is below the threshold. Similarity is a candidate for review, not proof of
-equivalence. The exact comparison takes quadratic time in the number of
+is below the threshold. Treat similarity groups as candidates for manual
+review. The exact comparison takes quadratic time in the number of
 selected chunks, so use file and language filters on large indexes.
 
 ### MCP Server
