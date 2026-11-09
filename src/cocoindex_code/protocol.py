@@ -152,6 +152,13 @@ class ProjectStatusResponse(_msgspec.Struct, tag="project_status"):
     languages: dict[str, int]
     progress: IndexingProgress | None = None
     index_exists: bool = True
+    # A status is stale while an update is running, when no successful index
+    # fingerprint exists, or when the current source-tree fingerprint differs
+    # from the one recorded at the end of the last successful update.
+    stale: bool = True
+    # Unix timestamp in microseconds of the successful index update that
+    # produced the fingerprint. Optional for indexes created by older versions.
+    indexed_at_us: int | None = None
 
 
 class DaemonProjectInfo(_msgspec.Struct):

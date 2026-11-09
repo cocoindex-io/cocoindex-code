@@ -321,6 +321,12 @@ def _reset_host_path_mapping_cache() -> None:
 
 _TARGET_SQLITE_DB_NAME = "target_sqlite.db"
 _COCOINDEX_DB_NAME = "cocoindex.db"
+_INDEX_STATE_NAME = "index_state.json"
+
+
+def index_state_path(project_root: Path) -> Path:
+    """Return the path to the derived index-freshness state for a project."""
+    return resolve_db_dir(project_root) / _INDEX_STATE_NAME
 
 
 def target_sqlite_db_path(project_root: Path) -> Path:

@@ -244,6 +244,7 @@ def test_session_reset_databases(e2e_project: Path) -> None:
     # DB files should be gone
     assert not (e2e_project / ".cocoindex_code" / "cocoindex.db").exists()
     assert not (e2e_project / ".cocoindex_code" / "target_sqlite.db").exists()
+    assert not (e2e_project / ".cocoindex_code" / "index_state.json").exists()
 
     # Re-index — project is still initialized, just databases gone. Same daemon, so
     # the reset must have released the project's LMDB env.

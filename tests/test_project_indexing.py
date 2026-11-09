@@ -63,6 +63,12 @@ class _ControlledProject(Project):  # type: ignore[misc]
         self._initial_index_started = None
         self._indexing_stats = None
 
+    def _record_index_state(self) -> None:
+        """Controlled lifecycle tests have no filesystem-backed project."""
+
+    def _clear_index_state(self) -> None:
+        """Controlled lifecycle tests have no filesystem-backed project."""
+
 
 async def test_projects_can_prepare_indexes_concurrently() -> None:
     release = asyncio.Event()

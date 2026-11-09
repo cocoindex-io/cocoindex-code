@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
@@ -32,6 +33,7 @@ from .settings import (
     find_parent_with_marker,
     find_project_root,
     format_path_for_display,
+    index_state_path,
     normalize_input_path,
     project_settings_path,
     resolve_db_dir,
@@ -210,6 +212,12 @@ def print_index_stats(status: ProjectStatusResponse) -> None:
     _typer.echo("\nIndex stats:")
     _typer.echo(f"  Chunks: {status.total_chunks}")
     _typer.echo(f"  Files:  {status.total_files}")
+    if not status.indexing:
+        if status.stale:
+            _typer.echo("  Freshness: stale (run `ccc index`)")
+        elif status.indexed_at_us is not None:
+            indexed_at = datetime.fromtimestamp(status.indexed_at_us / 1_000_000).astimezone()
+            _typer.echo(f"  Freshness: up to date (indexed {indexed_at:%Y-%m-%d %H:%M:%S %Z})")
     if status.languages:
         _typer.echo("  Languages:")
         for lang, count in sorted(status.languages.items(), key=lambda x: -x[1]):
@@ -824,6 +832,7 @@ def reset(
     db_files = [
         cocoindex_db_path(project_root),
         target_sqlite_db_path(project_root),
+        index_state_path(project_root),
     ]
     settings_file = project_settings_path(project_root)
 

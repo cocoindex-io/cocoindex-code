@@ -318,11 +318,15 @@ def test_encode_decode_project_status_without_progress() -> None:
         total_chunks=50,
         total_files=10,
         languages={"python": 50},
+        stale=False,
+        indexed_at_us=1_700_000_000_000_000,
     )
     data = encode_response(resp)
     decoded = decode_response(data)
     assert isinstance(decoded, ProjectStatusResponse)
     assert decoded.progress is None
+    assert decoded.stale is False
+    assert decoded.indexed_at_us == 1_700_000_000_000_000
 
 
 def test_all_response_types_round_trip() -> None:
