@@ -19,10 +19,10 @@ if TYPE_CHECKING:
         DoctorCheckResult,
         IndexingProgress,
         ProjectStatusResponse,
-        SearchResponse,
     )
 
 from ._version import __version__
+from .protocol import SearchResponse
 from .settings import (
     DEFAULT_ST_MODEL,
     EmbeddingSettings,
@@ -286,6 +286,20 @@ def _run_index_with_progress(project_root: str) -> None:
         raise _typer.Exit(code=1)
 
 
+def _fetch_project_status(project_root: str) -> ProjectStatusResponse:
+    """Ask the daemon for the project's index status. Exits on failure."""
+    from . import client as _client
+
+    try:
+        return _client.project_status(project_root)
+    except RuntimeError as e:
+        # Let DaemonStartError propagate to the decorator for consistent handling.
+        if isinstance(e, _client.DaemonStartError):
+            raise
+        _typer.echo(f"Failed to get project status: {e}", err=True)
+        raise _typer.Exit(code=1)
+
+
 def _search_with_wait_spinner(
     project_root: str,
     query: str,
@@ -294,7 +308,10 @@ def _search_with_wait_spinner(
     limit: int = 10,
     offset: int = 0,
 ) -> SearchResponse:
-    """Run search, showing a spinner if waiting for load-time indexing."""
+    """Run search, showing a spinner if waiting for load-time indexing.
+
+    A failed request comes back as an unsuccessful ``SearchResponse`` carrying the error.
+    """
     from rich.console import Console as _Console
     from rich.live import Live as _Live
     from rich.spinner import Spinner as _Spinner
@@ -311,15 +328,21 @@ def _search_with_wait_spinner(
                 refresh=True,
             )
 
-        resp = _client.search(
-            project_root=project_root,
-            query=query,
-            languages=languages,
-            paths=paths,
-            limit=limit,
-            offset=offset,
-            on_waiting=_on_waiting,
-        )
+        try:
+            resp = _client.search(
+                project_root=project_root,
+                query=query,
+                languages=languages,
+                paths=paths,
+                limit=limit,
+                offset=offset,
+                on_waiting=_on_waiting,
+            )
+        except RuntimeError as e:
+            # Let DaemonStartError propagate to the decorator for consistent handling.
+            if isinstance(e, _client.DaemonStartError):
+                raise
+            resp = SearchResponse(success=False, message=str(e))
 
     return resp
 
@@ -667,12 +690,10 @@ def init(
 @_catch_daemon_start_error
 def index() -> None:
     """Create/update index for the codebase."""
-    from . import client as _client
-
     project_root = str(require_project_root(auto_init=True))
     print_project_header(project_root)
     _run_index_with_progress(project_root)
-    print_index_stats(_client.project_status(project_root))
+    print_index_stats(_fetch_project_status(project_root))
 
 
 @app.command()
@@ -714,10 +735,10 @@ def search(
         sys.stdout.buffer.write(_msgspec.json.encode(resp))
         sys.stdout.buffer.write(b"\n")
         sys.stdout.buffer.flush()
-        if not resp.success:
-            raise _typer.Exit(code=1)
     else:
         print_search_results(resp)
+    if not resp.success:
+        raise _typer.Exit(code=1)
 
 
 @app.command()
@@ -797,8 +818,6 @@ def grep(
 @_catch_daemon_start_error
 def status() -> None:
     """Show project status."""
-    from . import client as _client
-
     project_root_path = require_project_root()
     project_root = str(project_root_path)
     print_project_header(project_root)
@@ -808,7 +827,7 @@ def status() -> None:
     if db_path.exists():
         _typer.echo(f"Index DB: {format_path_for_display(db_path)}")
 
-    print_index_stats(_client.project_status(project_root))
+    print_index_stats(_fetch_project_status(project_root))
 
 
 @app.command()
