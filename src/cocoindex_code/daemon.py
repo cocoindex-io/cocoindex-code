@@ -18,14 +18,17 @@ import weakref
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import timedelta
+from io import BufferedWriter
 from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
 from types import ModuleType
 from typing import Any, ParamSpec, TypeVar
 
 from ._daemon_paths import (
+    DAEMON_ALREADY_RUNNING_EXIT_CODE,
     clear_last_exit_marker,
     connection_family,
+    daemon_lock_path,
     daemon_log_path,
     daemon_pid_path,
     daemon_runtime_dir,
@@ -82,6 +85,11 @@ from .settings import (
     user_settings_path,
 )
 from .shared import Embedder, check_embedding, configure_mps_environment, create_embedder
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 logger = logging.getLogger(__name__)
 
@@ -660,6 +668,34 @@ class EmptyContextThreadPoolExecutor(ThreadPoolExecutor):
         return contextvars.Context().run(super().submit, fn, *args, **kwargs)
 
 
+def _lock_runtime_dir() -> BufferedWriter | None:
+    """Take the exclusive daemon lock on the runtime dir, without waiting.
+
+    Returns the open lock file, which holds the lock until
+    ``_unlock_runtime_dir``, or None when another daemon holds it. The OS
+    drops the lock when its holder exits, so a crashed daemon never leaves it
+    held; the file itself stays behind, which is harmless.
+    """
+    # Never written, so on Windows (which locks from the file position) every
+    # daemon locks the same byte, offset 0.
+    lock_file = open(daemon_lock_path(), "ab")
+    try:
+        if sys.platform == "win32":
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, PermissionError):  # held: flock / msvcrt.locking
+        lock_file.close()
+        return None
+    return lock_file
+
+
+def _unlock_runtime_dir(lock_file: BufferedWriter) -> None:
+    if sys.platform == "win32":
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+    lock_file.close()
+
+
 if sys.platform != "win32":  # Windows uses named pipes via Listener
 
     class _UnixListener:
@@ -673,8 +709,10 @@ if sys.platform != "win32":  # Windows uses named pipes via Listener
         """
 
         def __init__(self, path: str) -> None:
-            # Take over the path from a crashed or displaced daemon's socket file,
-            # which would otherwise make bind() fail.
+            # Take over the path from a crashed daemon's leftover socket file,
+            # which would otherwise make bind() fail. No live daemon listens
+            # there: the caller holds the runtime dir's lock, which a daemon
+            # gives up only once it has closed its listener.
             try:
                 os.unlink(path)
             except FileNotFoundError:
@@ -722,12 +760,24 @@ def run_daemon(
     to serve connections, and performs cleanup when shutdown is requested via
     ``StopRequest``, a signal (SIGTERM / SIGINT), or the idle timeout.
 
+    Exits at once with ``DAEMON_ALREADY_RUNNING_EXIT_CODE`` when another
+    daemon holds the runtime dir: two daemons there would both bind the
+    socket path, and the one bound first would keep running unreachable.
+
     ``idle_timeout`` and ``idle_check_interval`` exist so tests can run a
     seconds-scale idle timeout in-process; production leaves them at their
     defaults and the timeout comes from ``daemon.idle_timeout_minutes`` in
     ``global_settings.yml`` (the dataclass default when the file is missing).
     """
     daemon_runtime_dir().mkdir(parents=True, exist_ok=True)
+
+    # Before anything else: a second daemon must not load a model it will
+    # never serve, or touch the PID file, last-exit marker or log of the
+    # daemon that is running (or still starting) here. It exits without a
+    # word, as its stderr is normally that daemon's log.
+    runtime_lock = _lock_runtime_dir()
+    if runtime_lock is None:
+        sys.exit(DAEMON_ALREADY_RUNNING_EXIT_CODE)
 
     # No-settings mode: start even when global_settings.yml is missing so the
     # client can complete its handshake, detect the mtime mismatch once
@@ -921,13 +971,16 @@ def run_daemon(
         #    but it's harmless there and keeps this path exercised on every
         #    platform rather than only on Windows CI.  If a replacement daemon
         #    owns the path, the wake-up reaches it instead: one extra
-        #    connection, which only counts as activity there.
+        #    connection, which only counts as activity there.  Then hand the
+        #    runtime dir to the next daemon: a client that finds the socket
+        #    gone starts one, which must not find the lock still held.
         shutting_down.set()
         try:
             Client(sock_path, family=connection_family()).close()
         except OSError:
             pass
         listener.close()
+        _unlock_runtime_dir(runtime_lock)
         accept_thread.join(timeout=5)
 
         # 2. Cancel handler tasks (they may be blocked in run_in_executor)
