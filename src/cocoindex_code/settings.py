@@ -75,6 +75,9 @@ DEFAULT_INCLUDED_PATTERNS: list[str] = [
     "**/*.f90",  # Fortran
     "**/*.f95",  # Fortran
     "**/*.f03",  # Fortran
+    "**/*.cls",  # Salesforce Apex Class
+    "**/*.trigger",  # Salesforce Apex Trigger
+    "**/*.apex",  # Salesforce Apex Anonymous/Script
 ]
 
 DEFAULT_EXCLUDED_PATTERNS: list[str] = [
@@ -88,6 +91,14 @@ DEFAULT_EXCLUDED_PATTERNS: list[str] = [
     "**/vendor/*",  # PHP vendor directory
     "**/.cocoindex_code",  # Our own index directory
 ]
+
+# Built-in extension-to-language mappings for languages without separate tree-sitter grammars
+# or with specialized extensions (e.g. Salesforce Apex uses Java grammar/syntax).
+DEFAULT_LANGUAGE_MAP: dict[str, str] = {
+    ".cls": "java",
+    ".trigger": "java",
+    ".apex": "java",
+}
 
 # ---------------------------------------------------------------------------
 # Dataclasses
