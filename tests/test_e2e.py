@@ -428,6 +428,34 @@ def test_session_search_json_output(e2e_project: Path) -> None:
     assert payload["success"] is True
 
 
+def test_session_search_and_status_report_daemon_errors(e2e_project: Path) -> None:
+    """`search` and `status` report a daemon-side failure the way `index` does:
+    a message on stderr and exit code 1, not an unhandled exception."""
+    # Settings the daemon cannot parse make it fail to load the project.
+    settings_dir = e2e_project / ".cocoindex_code"
+    settings_dir.mkdir()
+    (settings_dir / "settings.yml").write_text("include_patterns: [unclosed\n")
+
+    result = runner.invoke(app, ["index"], catch_exceptions=False)
+    assert result.exit_code == 1, result.output
+    assert "Indexing failed: Daemon error: Error loading" in result.stderr
+
+    result = runner.invoke(app, ["search", "fibonacci"], catch_exceptions=False)
+    assert result.exit_code == 1, result.output
+    assert "Search failed: Daemon error: Error loading" in result.stderr
+
+    # --json still emits the failure as JSON on stdout.
+    result = runner.invoke(app, ["search", "fibonacci", "--json"], catch_exceptions=False)
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stdout)
+    assert payload["success"] is False
+    assert payload["message"].startswith("Daemon error: Error loading")
+
+    result = runner.invoke(app, ["status"], catch_exceptions=False)
+    assert result.exit_code == 1, result.output
+    assert "Failed to get project status: Daemon error: Error loading" in result.stderr
+
+
 def test_session_subdirectory_path_default(e2e_project: Path) -> None:
     """Search from a subdirectory defaults path filter to that subdirectory."""
     runner.invoke(app, ["init"], catch_exceptions=False)
