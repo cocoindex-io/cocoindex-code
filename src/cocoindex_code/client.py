@@ -21,6 +21,7 @@ from typing import NamedTuple
 import msgspec
 
 from ._daemon_paths import (
+    DAEMON_ALREADY_RUNNING_EXIT_CODE,
     SocketIdentity,
     connection_family,
     daemon_log_path,
@@ -181,13 +182,7 @@ def _connect_and_handshake() -> Connection:
         if _daemon_ensured:
             _handle_vanished_daemon()
 
-    if _is_daemon_supervised():
-        # Supervisor is responsible for (re)starting the daemon — just wait
-        # for the socket to reappear.
-        _wait_for_daemon()
-    else:
-        proc = start_daemon()
-        _wait_for_daemon(proc=proc)
+    started = bring_up_daemon()
 
     # Verify the fresh daemon is reachable
     for _attempt in range(10):
@@ -195,6 +190,8 @@ def _connect_and_handshake() -> Connection:
             result = _raw_connect_and_handshake()
             _daemon_ensured = True
             _ensured_daemon_pid = result.resp.pid
+            if started is not None:
+                _reap_unless_daemon(started, result.resp.pid)
             return result.conn
         except (ConnectionRefusedError, OSError):
             time.sleep(0.5)
@@ -543,6 +540,38 @@ def is_daemon_running() -> bool:
     return os.path.exists(daemon_socket_path())
 
 
+def bring_up_daemon() -> subprocess.Popen[bytes] | None:
+    """Start a daemon and wait for its socket. Returns the process started.
+
+    Under an external supervisor only wait, and return None: the supervisor
+    starts the daemon, and a daemon started here as well would race the
+    supervisor's.
+    """
+    if _is_daemon_supervised():
+        _wait_for_daemon()
+        return None
+    proc = start_daemon()
+    _wait_for_daemon(proc=proc)
+    return proc
+
+
+def _reap_unless_daemon(proc: subprocess.Popen[bytes], daemon_pid: int | None) -> None:
+    """Wait for *proc*, a daemon this client started, unless it is the one
+    that answered (pid *daemon_pid*): then it lost the start to that one and is
+    exiting. Unreaped, it would stay a zombie of a long-lived client (the MCP
+    server) until that client starts another process.
+
+    POSIX only: Windows has no zombies, and there *proc* is a launcher
+    (``ccc.exe``, or a venv's ``python.exe``) whose pid is not the daemon's.
+    """
+    if sys.platform == "win32" or daemon_pid in (None, proc.pid):
+        return
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass  # still running after all; leave it to subprocess
+
+
 def start_daemon() -> subprocess.Popen[bytes]:
     """Start the daemon as a background process.
 
@@ -718,11 +747,12 @@ def _wait_for_daemon(
     exits before the socket appears, raises ``DaemonStartError`` immediately
     with the daemon log content — no need to wait for the full timeout.
 
-    Socket existence is checked *before* ``proc.poll()`` so that races with a
-    supervisor (e.g. the Docker entrypoint restart loop) don't spuriously raise
-    ``DaemonStartError``: if the supervisor wins the bind and our subprocess
-    exits because the socket is already in use, the socket is still ready — we
-    should return success, not flag a failure.
+    The exception is a process that exits with
+    ``DAEMON_ALREADY_RUNNING_EXIT_CODE``: another daemon, such as one a
+    concurrent client started, holds the runtime dir, so wait for that
+    daemon's socket instead. Socket existence is checked *before*
+    ``proc.poll()`` for the same reason: once a daemon's socket is up, it no
+    longer matters how our own process fared.
     """
     deadline = time.monotonic() + timeout
     sock_path = daemon_socket_path()
@@ -741,6 +771,9 @@ def _wait_for_daemon(
         # Daemon socket not yet up — if we spawned a subprocess that already
         # exited, bail out with its log.
         if proc is not None and proc.poll() is not None:
+            if proc.returncode == DAEMON_ALREADY_RUNNING_EXIT_CODE:
+                proc = None
+                continue
             log = _read_daemon_log()
             msg = "Daemon process exited before it became ready."
             if log:

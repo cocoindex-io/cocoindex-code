@@ -38,7 +38,7 @@ The CI tiers, the merge queue and stacked pull requests are described in
 
 The tool runs as a **long-lived background daemon** (`daemon.py`) that accepts connections over a Unix socket (Windows: named pipe). The `ccc` CLI and MCP server communicate with it via short-lived **per-request connections** (`client.py`): connect → handshake → send one request → receive response(s) → close.
 
-The daemon is auto-started by `client.py` when not running. It is restarted automatically when the `global_settings.yml` mtime changes (version bump or settings edit), detected via the `HandshakeResponse.global_settings_mtime_us` field.
+The daemon is auto-started by `client.py` when not running. It is restarted automatically when the `global_settings.yml` mtime changes (version bump or settings edit), detected via the `HandshakeResponse.global_settings_mtime_us` field. At most one daemon runs per runtime dir: a daemon holds an exclusive lock on `daemon.lock` there until it has closed its listener, and one started while that lock is held (clients racing to auto-start) exits at once with `DAEMON_ALREADY_RUNNING_EXIT_CODE`, while its client waits for the running daemon.
 
 The daemon idle-exits after `daemon.idle_timeout_minutes` (default 180, 0 = never) without client activity. A live MCP session sends heartbeats by default; users can set `daemon.keep_alive_with_mcp: false` to allow idle exit during a connected session. Clients transparently restart the daemon on the next real request. Graceful exits leave a `last_exit` marker file so the client can tell an expected exit from a crash (which triggers a loud restart, capped after consecutive crashes).
 

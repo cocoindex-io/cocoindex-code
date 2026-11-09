@@ -1111,14 +1111,13 @@ def daemon_status() -> None:
 @_catch_daemon_start_error
 def daemon_restart() -> None:
     """Restart the daemon."""
-    from .client import _wait_for_daemon, start_daemon, stop_daemon
+    from .client import bring_up_daemon, stop_daemon
 
     _typer.echo("Stopping daemon...")
     stop_daemon()
 
     _typer.echo("Starting daemon...")
-    proc = start_daemon()
-    _wait_for_daemon(proc=proc)
+    bring_up_daemon()
     _typer.echo("Daemon restarted.")
 
 

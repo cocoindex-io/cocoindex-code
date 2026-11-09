@@ -27,10 +27,10 @@ _SUN_PATH_MAX = 104 if sys.platform == "darwin" else 108
 def daemon_runtime_dir() -> Path:
     """Return the directory that holds daemon runtime artifacts.
 
-    Holds ``daemon.sock``, ``daemon.pid``, ``daemon.log``. Kept separate from
-    the user-settings dir so that (e.g. in Docker) the socket can live on the
-    container's native filesystem while ``global_settings.yml`` lives on a
-    bind mount.
+    Holds ``daemon.sock``, ``daemon.lock``, ``daemon.pid``, ``daemon.log``.
+    Kept separate from the user-settings dir so that (e.g. in Docker) the
+    socket can live on the container's native filesystem while
+    ``global_settings.yml`` lives on a bind mount.
 
     Override with ``COCOINDEX_CODE_RUNTIME_DIR``. Defaults to
     :func:`user_settings_dir` for backward compatibility — non-Docker users
@@ -117,6 +117,18 @@ def unlink_socket_if_owned(path: str, identity: SocketIdentity | None) -> None:
         os.unlink(path)
     except OSError:
         pass
+
+
+def daemon_lock_path() -> Path:
+    """Return the path of the lock a daemon holds while it owns the runtime dir."""
+    return daemon_runtime_dir() / "daemon.lock"
+
+
+# Exit status of a daemon that found another daemon holding the runtime dir's
+# lock (two clients auto-starting one at once). Its client then waits for that
+# daemon's socket instead of reporting a failed start. Distinct from the 1 of
+# an uncaught exception and the 2 of a usage error.
+DAEMON_ALREADY_RUNNING_EXIT_CODE = 75
 
 
 def daemon_pid_path() -> Path:

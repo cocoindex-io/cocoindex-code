@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -43,6 +44,36 @@ def test_is_daemon_supervised_reads_env_var(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setenv("COCOINDEX_CODE_DAEMON_SUPERVISED", "0")
     assert client._is_daemon_supervised() is False
+
+
+def test_daemon_restart_leaves_the_start_to_the_supervisor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under a supervisor, `ccc daemon restart` stops the daemon and waits for
+    the supervisor to start the next one. A daemon it started as well would
+    race the supervisor's for the runtime dir.
+    """
+    from typer.testing import CliRunner
+
+    from cocoindex_code.cli import app
+
+    monkeypatch.setenv("COCOINDEX_CODE_DAEMON_SUPERVISED", "1")
+    calls: list[str] = []
+
+    def no_start() -> subprocess.Popen[bytes]:
+        raise AssertionError("`ccc daemon restart` started a daemon under a supervisor")
+
+    def wait_for_daemon(timeout: float = 30.0, proc: subprocess.Popen[bytes] | None = None) -> None:
+        calls.append("wait for the supervisor's daemon" if proc is None else "wait for ours")
+
+    monkeypatch.setattr(client, "stop_daemon", lambda: calls.append("stop"))
+    monkeypatch.setattr(client, "start_daemon", no_start)
+    monkeypatch.setattr(client, "_wait_for_daemon", wait_for_daemon)
+
+    result = CliRunner().invoke(app, ["daemon", "restart"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert calls == ["stop", "wait for the supervisor's daemon"]
 
 
 def test_print_handshake_warnings_dedupes_within_process(
