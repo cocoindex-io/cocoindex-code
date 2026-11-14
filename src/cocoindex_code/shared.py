@@ -169,9 +169,13 @@ def create_embedder(
             if settings.min_interval_ms is not None
             else DEFAULT_LITELLM_MIN_INTERVAL_MS
         )
+        model_kwargs: dict[str, Any] = {}
+        if settings.dimensions is not None:
+            model_kwargs["dimensions"] = settings.dimensions
         instance = PacedLiteLLMEmbedder(
             settings.model,
             min_interval_ms=min_interval_ms,
+            **model_kwargs,
             **(dict(indexing_params) if indexing_params else {}),
         )
         logger.info(

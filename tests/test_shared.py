@@ -54,6 +54,15 @@ def test_create_embedder_litellm_passes_indexing_params_as_constructor_default()
     assert embedder._kwargs == {"input_type": "search_document"}
 
 
+def test_create_embedder_litellm_passes_dimensions_to_every_call() -> None:
+    embedder = create_embedder(
+        EmbeddingSettings(provider="litellm", model="voyage/voyage-4-large", dimensions=512),
+        indexing_params={"input_type": "document"},
+    )
+    assert isinstance(embedder, PacedLiteLLMEmbedder)
+    assert embedder._kwargs == {"dimensions": 512, "input_type": "document"}
+
+
 def test_create_embedder_sentence_transformers_ignores_indexing_params() -> None:
     """The SentenceTransformer constructor doesn't accept arbitrary kwargs;
     indexing_params is silently ignored for that provider.

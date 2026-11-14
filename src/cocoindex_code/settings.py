@@ -100,6 +100,9 @@ class EmbeddingSettings:
     provider: str = "litellm"
     device: str | None = None
     min_interval_ms: int | None = None
+    # Output vector size for LiteLLM models that support truncation (e.g. Voyage
+    # Matryoshka models). Model-wide: indexing and query must use the same size.
+    dimensions: int | None = None
     # PyTorch MPS allocator limits used by CocoIndex's isolated GPU runner.
     mps_low_watermark_ratio: float = 0.4
     mps_high_watermark_ratio: float = 0.5
@@ -110,6 +113,17 @@ class EmbeddingSettings:
     query_params: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        if self.dimensions is not None:
+            if isinstance(self.dimensions, bool) or not isinstance(self.dimensions, int):
+                raise ValueError("embedding.dimensions must be a positive integer")
+            if self.dimensions <= 0:
+                raise ValueError("embedding.dimensions must be a positive integer")
+            if self.provider != "litellm":
+                raise ValueError(
+                    "embedding.dimensions is only supported with provider 'litellm', "
+                    f"not {self.provider!r}"
+                )
+
         ratios = (
             ("mps_low_watermark_ratio", self.mps_low_watermark_ratio),
             ("mps_high_watermark_ratio", self.mps_high_watermark_ratio),
@@ -502,6 +516,8 @@ def _embedding_settings_to_dict(embedding: EmbeddingSettings) -> dict[str, Any]:
         d["device"] = embedding.device
     if embedding.min_interval_ms is not None:
         d["min_interval_ms"] = embedding.min_interval_ms
+    if embedding.dimensions is not None:
+        d["dimensions"] = embedding.dimensions
     defaults = EmbeddingSettings(model=embedding.model)
     if embedding.mps_low_watermark_ratio != defaults.mps_low_watermark_ratio:
         d["mps_low_watermark_ratio"] = embedding.mps_low_watermark_ratio
@@ -541,6 +557,8 @@ def _user_settings_from_dict(d: dict[str, Any]) -> UserSettings:
         emb_kwargs["device"] = emb_dict["device"]
     if "min_interval_ms" in emb_dict:
         emb_kwargs["min_interval_ms"] = emb_dict["min_interval_ms"]
+    if "dimensions" in emb_dict:
+        emb_kwargs["dimensions"] = emb_dict["dimensions"]
     if "mps_low_watermark_ratio" in emb_dict:
         emb_kwargs["mps_low_watermark_ratio"] = float(emb_dict["mps_low_watermark_ratio"])
     if "mps_high_watermark_ratio" in emb_dict:

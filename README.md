@@ -550,6 +550,7 @@ embedding:
   model: Snowflake/snowflake-arctic-embed-xs
   device: mps                                        # optional: cpu, cuda, mps (auto-detected if omitted)
   min_interval_ms: 300                               # optional: pace LiteLLM embedding requests to reduce 429s; defaults to 5 for LiteLLM
+  dimensions: 512                                    # optional (litellm only): output vector size for models that support it, e.g. Voyage Matryoshka models
   mps_low_watermark_ratio: 0.4                       # optional: PyTorch allocator soft limit
   mps_high_watermark_ratio: 0.5                      # optional: PyTorch allocator hard limit
 
@@ -597,7 +598,9 @@ embedding:
 
 OpenAI embeddings (`text-embedding-3-*`, `text-embedding-ada-002`) are intentionally not in the list: they're symmetric and have no equivalent knob.
 
-**Accepted keys:** `prompt_name` (sentence-transformers) and `input_type` (litellm). Other keys are rejected at daemon startup with a clear error. Note: `dimensions` is intentionally not exposed here — output dimension must be identical for indexing and query, so it's a model-wide setting rather than a per-side knob.
+**Accepted keys:** `prompt_name` (sentence-transformers) and `input_type` (litellm). Other keys are rejected at daemon startup with a clear error. Note: `dimensions` is intentionally not accepted here — output dimension must be identical for indexing and query, so it's a model-wide setting (`embedding.dimensions`) rather than a per-side knob.
+
+**Output dimension.** Set `embedding.dimensions` (LiteLLM only) to a size the model supports, for example `512` for `voyage/voyage-4-large`. Indexing fails if the model returns a different size, and the provider's own error (for example Voyage's list of accepted values) is shown if the size is not supported. Changing it re-embeds the whole index on the next indexing run.
 
 **Doctor checks both sides.** `ccc doctor` exercises the model once with `indexing_params` and once with `query_params`, reporting each as a separate `Model Check (indexing)` / `Model Check (query)` entry — so a misconfiguration on one side is diagnosable without hiding behind the other.
 

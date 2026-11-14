@@ -94,3 +94,56 @@ async def test_run_embedding_request_omits_encoding_format_for_native_providers(
 
     assert "encoding_format" not in seen_kwargs
     assert "drop_params" not in seen_kwargs
+
+
+@pytest.mark.asyncio
+async def test_get_dim_fails_when_model_ignores_requested_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LiteLLM drops params a model doesn't support; indexing must not silently
+    continue at the model's native size."""
+
+    async def fake_aembedding(*, model: str, input: list[str], **kwargs: Any) -> Any:
+        return SimpleNamespace(data=[{"embedding": [0.0] * 1536}])
+
+    monkeypatch.setattr("cocoindex_code.litellm_embedder.litellm.aembedding", fake_aembedding)
+
+    embedder = PacedLiteLLMEmbedder("some/model", dimensions=256)
+    with pytest.raises(ValueError, match="does not support a configurable output dimension"):
+        await embedder._get_dim()
+
+
+@pytest.mark.asyncio
+async def test_get_dim_accepts_requested_dimensions(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def fake_aembedding(*, model: str, input: list[str], **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return SimpleNamespace(data=[{"embedding": [0.0] * 256}])
+
+    monkeypatch.setattr("cocoindex_code.litellm_embedder.litellm.aembedding", fake_aembedding)
+
+    embedder = PacedLiteLLMEmbedder("voyage/voyage-4-large", dimensions=256)
+    assert await embedder._get_dim() == 256
+    assert seen["dimensions"] == 256
+
+
+@pytest.mark.asyncio
+async def test_embed_fails_when_model_ignores_requested_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_aembedding(*, model: str, input: list[str], **kwargs: Any) -> Any:
+        return SimpleNamespace(data=[{"embedding": [0.0] * 1536}])
+
+    monkeypatch.setattr("cocoindex_code.litellm_embedder.litellm.aembedding", fake_aembedding)
+
+    embedder = PacedLiteLLMEmbedder("some/model", dimensions=256)
+    with pytest.raises(ValueError, match="does not support a configurable output dimension"):
+        await embedder.embed("hello")
+
+
+def test_dimensions_change_the_embedder_memo_key() -> None:
+    """A changed size must invalidate memoized embeddings and the stored index."""
+    small = PacedLiteLLMEmbedder("voyage/voyage-4-large", dimensions=256)
+    large = PacedLiteLLMEmbedder("voyage/voyage-4-large", dimensions=512)
+    assert small.__coco_memo_key__() != large.__coco_memo_key__()

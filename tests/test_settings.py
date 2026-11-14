@@ -25,6 +25,7 @@ from cocoindex_code.settings import (
     _reset_db_path_mapping_cache,
     _reset_host_path_mapping_cache,
     _user_settings_from_dict,
+    _user_settings_to_dict,
     default_project_settings,
     default_user_settings,
     find_parent_with_marker,
@@ -129,6 +130,29 @@ def test_embedding_safety_settings_require_ordered_mps_limits() -> None:
             mps_low_watermark_ratio=0.6,
             mps_high_watermark_ratio=0.5,
         )
+
+
+@pytest.mark.parametrize("value", [0, -256, True, 256.5, "256"])
+def test_embedding_dimensions_rejects_invalid_values(value: object) -> None:
+    with pytest.raises(ValueError, match="dimensions must be a positive integer"):
+        EmbeddingSettings(model="voyage/voyage-4-large", dimensions=value)
+
+
+def test_embedding_dimensions_rejected_for_sentence_transformers() -> None:
+    with pytest.raises(ValueError, match="only supported with provider 'litellm'"):
+        EmbeddingSettings(
+            provider="sentence-transformers",
+            model="Snowflake/snowflake-arctic-embed-xs",
+            dimensions=256,
+        )
+
+
+def test_embedding_dimensions_round_trip() -> None:
+    settings = UserSettings(
+        embedding=EmbeddingSettings(model="voyage/voyage-4-large", dimensions=512)
+    )
+    loaded = _user_settings_from_dict(_user_settings_to_dict(settings))
+    assert loaded.embedding.dimensions == 512
 
 
 def test_removed_custom_mps_worker_settings_are_ignored() -> None:
