@@ -709,6 +709,7 @@ _PARAMS_COMMENT_BY_PROVIDER: dict[str, str] = {
         "  #\n"
         "  # Extra kwargs passed to the embedder. Supported keys:\n"
         "  #   input_type\n"
+        "  #   prompt\n"
         "  # indexing_params: {}\n"
         "  # query_params: {}\n"
     ),

@@ -15,6 +15,7 @@ from cocoindex_code.settings import EmbeddingSettings
 def test_validate_params_accepts_known_keys() -> None:
     validate_params("sentence-transformers", {}, {"prompt_name": "query"})
     validate_params("litellm", {"input_type": "passage"}, {"input_type": "query"})
+    validate_params("litellm", {"prompt": "title: none | text: "}, {"prompt": "query: "})
 
 
 def test_validate_params_rejects_dimensions() -> None:

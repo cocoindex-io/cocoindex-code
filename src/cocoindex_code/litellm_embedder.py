@@ -75,7 +75,11 @@ class PacedLiteLLMEmbedder(LiteLLMEmbedder):
         assert last_exc is not None
         raise last_exc
 
-    async def run_embedding_request(self, *, input: list[str], **kwargs: Any) -> Any:
+    async def run_embedding_request(
+        self, *, input: list[str], prompt: str | None = None, **kwargs: Any
+    ) -> Any:
+        if prompt is not None:
+            input = [prompt + text for text in input]
         lock = self._get_request_lock()
         async with lock:
             now = time.monotonic()
@@ -121,9 +125,12 @@ class PacedLiteLLMEmbedder(LiteLLMEmbedder):
         self,
         texts: list[str],
         input_type: str | None = None,
+        prompt: str | None = None,
     ) -> list[NDArray[np.float32]]:
         kwargs = dict(self._kwargs)
         if input_type is not None:
             kwargs["input_type"] = input_type
+        if prompt is not None:
+            kwargs["prompt"] = prompt
         response = await self.run_embedding_request(input=texts, **kwargs)
         return [np.array(item["embedding"], dtype=np.float32) for item in response.data]
