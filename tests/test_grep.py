@@ -137,6 +137,23 @@ def test_grep_language_filter(codebase: Path) -> None:
     assert {fm.path for fm in results} and all(fm.path.endswith(".rs") for fm in results)
 
 
+def test_grep_nix_binding_with_default_patterns(tmp_path: Path) -> None:
+    nix_file = tmp_path / "default.nix"
+    nix_file.write_text("{ pkgs, ... }: { package-name = pkgs.callPackage ./package.nix {}; }\n")
+    req = g.GrepRequest(
+        pattern=r"package-name = \VALUE;",
+        root=tmp_path,
+        languages=frozenset({"nix"}),
+    )
+
+    results = run_grep(req)
+
+    assert len(results) == 1
+    assert results[0].path == nix_file.as_posix()
+    value = results[0].matches[0].captures["VALUE"][0].text
+    assert value == "pkgs.callPackage ./package.nix {}"
+
+
 def test_grep_single_file(codebase: Path) -> None:
     req = g.GrepRequest(pattern=r"def \NAME(\(ARGS*\)):", root=codebase / "a.py")
     results = run_grep(req)
