@@ -40,6 +40,8 @@ DEFAULT_INCLUDED_PATTERNS: list[str] = [
     "**/*.dart",  # Dart
     "**/*.ex",  # Elixir
     "**/*.exs",  # Elixir scripts
+    "**/*.cls",  # Apex
+    "**/*.trigger",  # Apex
     "**/*.sql",  # SQL
     "**/*.sh",  # Shell
     "**/*.bash",  # Bash

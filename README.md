@@ -846,6 +846,7 @@ embedding:
 
 | Language | Aliases | File Extensions |
 |----------|---------|-----------------|
+| apex | | `.cls`, `.trigger` |
 | c | | `.c` |
 | cpp | c++ | `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp` |
 | csharp | csharp, cs | `.cs` |
