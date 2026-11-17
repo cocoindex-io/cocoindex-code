@@ -354,7 +354,16 @@ class Project:
 
         context = coco.ContextProvider()
         context.provide(CODEBASE_DIR, project_root)
-        context.provide(SQLITE_DB, coco_sqlite.connect(str(target_sqlite_db), load_vec=True))
+        try:
+            db_conn = coco_sqlite.connect(str(target_sqlite_db), load_vec=True)
+        except sqlite3.OperationalError as exc:
+            raise RuntimeError(
+                f"Cannot open the project database {target_sqlite_db} (project root:"
+                f" {project_root}): {exc}. Check that .cocoindex_code is writable by the"
+                " current user; a stray root-owned marker directory (e.g."
+                " /.cocoindex_code) may have hijacked project-root discovery."
+            ) from exc
+        context.provide(SQLITE_DB, db_conn)
         context.provide(EMBEDDER, embedder)
         context.provide(INDEXING_EMBED_PARAMS, dict(indexing_params))
         context.provide(QUERY_EMBED_PARAMS, dict(query_params))

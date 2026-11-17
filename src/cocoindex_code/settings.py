@@ -402,14 +402,34 @@ def user_settings_root_note(root: Path, start: Path) -> str | None:
     )
 
 
-def find_project_root(start: Path) -> Path | None:
-    """Walk up from *start* looking for ``.cocoindex_code/settings.yml``.
+def project_settings_serviceable(project_root: Path) -> bool:
+    """True when the current user can read and write ``project_root/.cocoindex_code``.
 
-    Returns the directory containing it, or ``None``.
+    Every project operation creates or updates the SQLite database inside that
+    directory, so a marker that exists but cannot be written to is unusable.
+    This typically happens with a stray root-owned ``/.cocoindex_code`` left
+    behind by a system-level install.
+    """
+    settings_dir = project_root / _SETTINGS_DIR_NAME
+    return os.access(settings_dir, os.R_OK | os.W_OK | os.X_OK)
+
+
+def find_project_root(start: Path) -> Path | None:
+    """Walk up from *start* looking for a *usable* ``.cocoindex_code/settings.yml``.
+
+    A candidate whose ``.cocoindex_code`` directory exists but is not writable
+    by the current user is skipped and the walk continues, so a stray marker
+    (e.g. a root-owned ``/.cocoindex_code`` found when starting from ``/``)
+    cannot hijack project-root resolution. Callers surface a clear "no project
+    found" error in that case instead of failing later inside SQLite.
+
+    Returns the directory containing the usable marker, or ``None``.
     """
     current = start.resolve()
     while True:
-        if (current / _SETTINGS_DIR_NAME / _SETTINGS_FILE_NAME).is_file():
+        marker = current / _SETTINGS_DIR_NAME
+        has_settings = (marker / _SETTINGS_FILE_NAME).is_file()
+        if has_settings and project_settings_serviceable(current):
             return current
         parent = current.parent
         if parent == current:

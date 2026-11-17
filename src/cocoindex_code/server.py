@@ -247,6 +247,7 @@ def main() -> None:
         find_legacy_project_root,
         find_project_root,
         project_settings_path,
+        project_settings_serviceable,
         save_project_settings,
         save_user_settings,
         user_settings_path,
@@ -276,6 +277,13 @@ def main() -> None:
             # Use marker-based discovery
             legacy_root = find_legacy_project_root(cwd)
             project_root = legacy_root if legacy_root is not None else cwd
+
+    if not project_settings_serviceable(Path(project_root)):
+        sys.exit(
+            f"Error: {project_root} is not serviceable: its .cocoindex_code directory is"
+            " not writable by the current user. Run the server from a project you can"
+            " write to, or set COCOINDEX_CODE_ROOT_PATH to the project directory."
+        )
 
     # --- Auto-create project settings if needed ---
     proj_settings_file = project_settings_path(project_root)

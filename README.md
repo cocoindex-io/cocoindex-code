@@ -962,7 +962,7 @@ If you previously configured `cocoindex-code` via environment variables, the `co
 |---------------------|-----------------|
 | `COCOINDEX_CODE_EMBEDDING_MODEL` | `embedding.model` in `global_settings.yml` |
 | `COCOINDEX_CODE_DEVICE` | `embedding.device` in `global_settings.yml` |
-| `COCOINDEX_CODE_ROOT_PATH` | Run `ccc init` in your project root instead |
+| `COCOINDEX_CODE_ROOT_PATH` | Project root for the MCP server (`ccc mcp`); overrides CWD discovery, same as `--project-root` |
 | `COCOINDEX_CODE_EXCLUDED_PATTERNS` | `exclude_patterns` in project `settings.yml` |
 | `COCOINDEX_CODE_EXTRA_EXTENSIONS` | `include_patterns` + `language_overrides` in project `settings.yml` |
 

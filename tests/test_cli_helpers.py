@@ -720,3 +720,15 @@ def test_resolve_embedding_choice_validates_st_model(
     assert callable(validate)
     assert validate("ollama/nomic-embed-text") is not True  # rejected (returns message)
     assert validate("Snowflake/snowflake-arctic-embed-xs") is True
+
+
+def test_mcp_root_override_prefers_explicit_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COCOINDEX_CODE_ROOT_PATH", "/env/root")
+    assert cli._mcp_root_override(Path("/explicit/root")) == Path("/explicit/root")
+
+
+def test_mcp_root_override_uses_env_without_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COCOINDEX_CODE_ROOT_PATH", "/env/root")
+    assert cli._mcp_root_override(None) == Path("/env/root")
+    monkeypatch.delenv("COCOINDEX_CODE_ROOT_PATH")
+    assert cli._mcp_root_override(None) is None

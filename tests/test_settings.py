@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 import tempfile
@@ -909,3 +910,39 @@ def test_project_settings_parses_human_readable_max_file_size(tmp_path: Path) ->
     path = save_project_settings(tmp_path, ProjectSettings())
     path.write_text(path.read_text() + "\nmax_file_size: 500KB\n")
     assert load_project_settings(tmp_path).max_file_size == 500 * 1024
+
+
+def _write_marker(project: Path) -> None:
+    marker = project / ".cocoindex_code"
+    marker.mkdir(parents=True, exist_ok=True)
+    (marker / "settings.yml").write_text("include_patterns: []")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_find_project_root_skips_unwritable_marker(tmp_path: Path) -> None:
+    outer = tmp_path / "outer"
+    _write_marker(outer)
+    (outer / ".cocoindex_code").chmod(0o555)
+    subdir = outer / "sub"
+    subdir.mkdir()
+    try:
+        assert find_project_root(subdir) is None
+    finally:
+        (outer / ".cocoindex_code").chmod(0o755)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_find_project_root_finds_inner_writable_project_below_unwritable_marker(
+    tmp_path: Path,
+) -> None:
+    outer = tmp_path / "outer"
+    _write_marker(outer)
+    (outer / ".cocoindex_code").chmod(0o555)
+    project = outer / "project"
+    _write_marker(project)
+    subdir = project / "src"
+    subdir.mkdir(parents=True)
+    try:
+        assert find_project_root(subdir) == project
+    finally:
+        (outer / ".cocoindex_code").chmod(0o755)
