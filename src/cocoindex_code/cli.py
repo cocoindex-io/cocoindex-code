@@ -80,8 +80,15 @@ def _apply_host_cwd() -> None:
 # ---------------------------------------------------------------------------
 
 
-def require_project_root(*, auto_init: bool = False) -> Path:
+def require_project_root(
+    *, auto_init: bool = False, override: Path | None = None
+) -> Path:
     """Find the project root by walking up from CWD.
+
+    When ``override`` is given (``ccc mcp --project-root`` or
+    ``COCOINDEX_CODE_ROOT_PATH``), it is used as-is: MCP launchers start the
+    server in an unrelated working directory, so discovery from the CWD cannot
+    be trusted there.
 
     Reports missing global settings before a missing project (more fundamental).
     With ``auto_init``, a missing project is initialized with default settings
@@ -92,7 +99,10 @@ def require_project_root(*, auto_init: bool = False) -> Path:
     still exit with code 1 rather than silently committing to a default model.
     """
     cwd = Path.cwd()
-    root = find_project_root(cwd)
+    if override is not None:
+        root: Path | None = override.resolve()
+    else:
+        root = find_project_root(cwd)
     # Decide where auto-init would write, and whether it may, before the interactive
     # model setup below, so a refusal never comes after a wasted prompt.
     new_root = _auto_init_root(cwd) if root is None and auto_init else None
@@ -110,6 +120,8 @@ def require_project_root(*, auto_init: bool = False) -> Path:
     if new_root is not None:
         _create_project_settings(new_root)
         return new_root
+    if override is not None:
+        return root
     if root is None:
         _typer.echo(
             "Error: Not in an initialized project directory.\n"
@@ -1046,13 +1058,44 @@ def doctor(
     _typer.echo("  Check logs above for further troubleshooting.")
 
 
+def _mcp_root_override(explicit: Path | None) -> Path | None:
+    """Resolve the MCP launch override: ``--project-root`` flag, then env.
+
+    MCP clients (editors, agent harnesses) start the server in an unrelated
+    working directory — often the filesystem root — where discovery can latch
+    onto a stray ``.cocoindex_code`` marker. An explicit flag or the
+    ``COCOINDEX_CODE_ROOT_PATH`` environment variable is the reliable contract
+    there; CWD discovery stays best-effort.
+    """
+    if explicit is not None:
+        return explicit
+    env_root = os.environ.get("COCOINDEX_CODE_ROOT_PATH")
+    return Path(env_root) if env_root else None
+
+
 @app.command()
 @_catch_daemon_start_error
-def mcp() -> None:
+def mcp(
+    root: Path | None = _typer.Option(
+        None,
+        "--project-root",
+        help="Serve this directory as the project root instead of discovering it from the CWD.",
+    ),
+) -> None:
     """Run as MCP server (stdio mode)."""
     import asyncio
 
-    project_root = str(require_project_root())
+    override = _mcp_root_override(root)
+    if override is None and find_project_root(Path.cwd()) is None:
+        _typer.echo(
+            "Error: No initialized project found from the current directory.\n"
+            "MCP launchers usually start in an unrelated CWD; pass"
+            " --project-root <dir> or set COCOINDEX_CODE_ROOT_PATH.",
+            err=True,
+        )
+        raise _typer.Exit(code=1)
+
+    project_root = str(require_project_root(override=override))
 
     async def _run_mcp() -> None:
         from .server import create_mcp_server, run_heartbeat_loop
