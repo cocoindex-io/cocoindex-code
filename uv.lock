@@ -454,7 +454,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "questionary", specifier = ">=2.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "sqlite-vec", specifier = ">=0.1.7" },
+    { name = "sqlite-vec", specifier = ">=0.1.9" },
     { name = "typer", specifier = ">=0.9.0" },
 ]
 provides-extras = ["dev", "embeddings-local", "full"]
