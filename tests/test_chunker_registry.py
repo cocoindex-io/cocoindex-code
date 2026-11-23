@@ -23,7 +23,7 @@ from cocoindex_code.chunking import (
     TextPosition,
 )
 from cocoindex_code.project import Project
-from cocoindex_code.settings import ProjectSettings
+from cocoindex_code.settings import ProjectSettings, project_settings_path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -95,6 +95,24 @@ flag = true
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+async def test_julia_is_indexed_with_default_settings(
+    tmp_path: Path, stub_embedder: StubEmbedder
+) -> None:
+    (tmp_path / "hello.jl").write_text('println("hello")\n')
+    settings_path = project_settings_path(tmp_path)
+    settings_path.parent.mkdir()
+    settings_path.write_text("{}\n")
+    project = await Project.create(tmp_path, stub_embedder, indexing_params={}, query_params={})
+    try:
+        await project.run_index()
+        chunks = _query_chunks(tmp_path)
+        assert [(chunk["file_path"], chunk["language"]) for chunk in chunks] == [
+            ("hello.jl", "julia")
+        ]
+    finally:
+        project.close()
 
 
 async def test_default_registry_is_empty(tmp_path: Path, stub_embedder: StubEmbedder) -> None:
