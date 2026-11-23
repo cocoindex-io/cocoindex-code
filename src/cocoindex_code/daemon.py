@@ -22,7 +22,7 @@ from io import BufferedWriter
 from multiprocessing.connection import Client, Connection, Listener
 from pathlib import Path
 from types import ModuleType
-from typing import Any, ParamSpec, TypeVar
+from typing import Any, NamedTuple, ParamSpec, TypeVar
 
 from ._daemon_paths import (
     DAEMON_ALREADY_RUNNING_EXIT_CODE,
@@ -676,17 +676,33 @@ class EmptyContextThreadPoolExecutor(ThreadPoolExecutor):
         return contextvars.Context().run(super().submit, fn, *args, **kwargs)
 
 
-def _lock_runtime_dir() -> BufferedWriter | None:
+class _RuntimeDirLock(NamedTuple):
+    """A daemon's hold on the runtime dir's lock, from ``_lock_runtime_dir``."""
+
+    # The open lock file, which holds the lock until ``_unlock_runtime_dir``.
+    # None when the daemon runs without the lock, because of ``error``.
+    file: BufferedWriter | None
+    error: OSError | None = None
+
+
+def _lock_runtime_dir() -> _RuntimeDirLock | None:
     """Take the exclusive daemon lock on the runtime dir, without waiting.
 
-    Returns the open lock file, which holds the lock until
-    ``_unlock_runtime_dir``, or None when another daemon holds it. The OS
-    drops the lock when its holder exits, so a crashed daemon never leaves it
-    held; the file itself stays behind, which is harmless.
+    Returns None when another daemon holds it. The OS drops the lock when its
+    holder exits, so a crashed daemon never leaves it held; the file itself
+    stays behind, which is harmless.
+
+    Any other failure means the lock cannot be had here, such as ENOLCK from
+    ``flock`` on NFS, where Linux emulates it with fcntl locks: the result
+    then carries the error instead of a file, and the daemon runs without
+    the lock, as daemons did before it existed.
     """
-    # Never written, so on Windows (which locks from the file position) every
-    # daemon locks the same byte, offset 0.
-    lock_file = open(daemon_lock_path(), "ab")
+    try:
+        # Never written, so on Windows (which locks from the file position)
+        # every daemon locks the same byte, offset 0.
+        lock_file = open(daemon_lock_path(), "ab")
+    except OSError as e:
+        return _RuntimeDirLock(file=None, error=e)
     try:
         if sys.platform == "win32":
             msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
@@ -695,13 +711,18 @@ def _lock_runtime_dir() -> BufferedWriter | None:
     except (BlockingIOError, PermissionError):  # held: flock / msvcrt.locking
         lock_file.close()
         return None
-    return lock_file
+    except OSError as e:
+        lock_file.close()
+        return _RuntimeDirLock(file=None, error=e)
+    return _RuntimeDirLock(file=lock_file)
 
 
-def _unlock_runtime_dir(lock_file: BufferedWriter) -> None:
+def _unlock_runtime_dir(lock: _RuntimeDirLock) -> None:
+    if lock.file is None:  # running without the lock
+        return
     if sys.platform == "win32":
-        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-    lock_file.close()
+        msvcrt.locking(lock.file.fileno(), msvcrt.LK_UNLCK, 1)
+    lock.file.close()
 
 
 def _remove_pid_file_if_ours(pid_path: Path) -> None:
@@ -729,7 +750,9 @@ if sys.platform != "win32":  # Windows uses named pipes via Listener
             # Take over the path from a crashed daemon's leftover socket file,
             # which would otherwise make bind() fail. No live daemon listens
             # there: the caller holds the runtime dir's lock, which a daemon
-            # gives up only once it has closed its listener.
+            # gives up only once it has closed its listener. (Unless the
+            # filesystem cannot lock: then this can displace a live daemon,
+            # as it always could before the lock.)
             try:
                 os.unlink(path)
             except FileNotFoundError:
@@ -874,6 +897,13 @@ def run_daemon(
         )
 
         logger.info("Daemon starting (PID %d, version %s)", os.getpid(), __version__)
+        if runtime_lock.error is not None:
+            logger.warning(
+                "Could not lock %s (%s); running without it, so clients that start "
+                "a daemon at the same moment may start two.",
+                daemon_lock_path(),
+                runtime_lock.error,
+            )
 
         start_time = time.monotonic()
         registry = ProjectRegistry(

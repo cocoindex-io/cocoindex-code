@@ -25,6 +25,7 @@ from conftest import make_test_user_settings
 import cocoindex_code.daemon as dm
 from cocoindex_code._daemon_paths import (
     connection_family,
+    daemon_log_path,
     daemon_pid_path,
     read_last_exit_marker,
 )
@@ -390,6 +391,37 @@ def test_handshake_reports_missing_local_embeddings(
 # ---------------------------------------------------------------------------
 # Startup: the runtime dir's lock and the PID file
 # ---------------------------------------------------------------------------
+
+
+def test_daemon_runs_without_the_lock_where_it_cannot_be_had(
+    idle_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Locking can fail for reasons other than another daemon holding the
+    lock: on NFS, where Linux emulates flock with fcntl locks, it can fail
+    with ENOLCK. The daemon then runs without the lock, as daemons did before
+    it existed, and says so in its log.
+    """
+
+    def no_locks(*args: object) -> None:
+        raise OSError(errno.ENOLCK, os.strerror(errno.ENOLCK))
+
+    if sys.platform == "win32":
+        monkeypatch.setattr(dm.msvcrt, "locking", no_locks)
+    else:
+        monkeypatch.setattr(dm.fcntl, "flock", no_locks)
+
+    thread, sock_path = _start_daemon_thread(idle_timeout_s=60, idle_check_interval_s=60)
+    try:
+        from cocoindex_code.client import send_heartbeat
+
+        assert send_heartbeat() is True
+        log = daemon_log_path().read_text()
+        assert "running without it" in log
+        assert os.strerror(errno.ENOLCK) in log
+    finally:
+        _stop_daemon_thread(thread, sock_path)
+    assert not thread.is_alive()
+    _assert_cleaned_up(sock_path)
 
 
 @pytest.mark.parametrize("failure", ["settings do not load", "socket cannot be bound"])
