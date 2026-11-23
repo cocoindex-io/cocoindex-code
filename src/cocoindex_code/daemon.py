@@ -812,9 +812,12 @@ def run_daemon(
     daemon_runtime_dir().mkdir(parents=True, exist_ok=True)
 
     # Before anything else: a second daemon must not load a model it will
-    # never serve, or touch the PID file, last-exit marker or log of the
-    # daemon that is running (or still starting) here. It exits without a
-    # word, as its stderr is normally that daemon's log.
+    # never serve, or touch the PID file or last-exit marker of the daemon
+    # that is running (or still starting) here. It exits without a word, as
+    # its stderr is normally daemon.log. That log is not spared, though: the
+    # client that started this process truncated it (start_daemon() opens it
+    # with "w"), so what the running daemon had logged until then is gone,
+    # replaced by NUL bytes once it logs again.
     runtime_lock = _lock_runtime_dir()
     if runtime_lock is None:
         sys.exit(DAEMON_ALREADY_RUNNING_EXIT_CODE)
