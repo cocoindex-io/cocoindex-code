@@ -8,6 +8,7 @@ the right times, and that the socket and PID file are cleaned up.
 
 from __future__ import annotations
 
+import errno
 import os
 import socket
 import sys
@@ -44,6 +45,7 @@ from cocoindex_code.settings import (
     default_project_settings,
     save_project_settings,
     save_user_settings,
+    user_settings_path,
 )
 
 # ---------------------------------------------------------------------------
@@ -383,3 +385,41 @@ def test_handshake_reports_missing_local_embeddings(
             assert "ccc daemon restart" in st_warnings[0]
     finally:
         _stop_daemon_thread(thread, sock_path)
+
+
+# ---------------------------------------------------------------------------
+# Startup: the runtime dir's lock and the PID file
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("failure", ["settings do not load", "socket cannot be bound"])
+def test_failed_start_leaves_no_pid_file(
+    idle_env: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    """A daemon writes its PID file as soon as it holds the runtime dir, so a
+    start that fails after that must remove it again: a later `ccc daemon
+    stop` would signal whichever process gets that PID next. The failed start
+    gives up the lock as well.
+    """
+    expected: type[Exception]
+    if failure == "settings do not load":
+        user_settings_path().write_text("")
+        expected = ValueError
+    else:
+
+        def cannot_bind(*args: object, **kwargs: object) -> None:
+            raise OSError(errno.EADDRINUSE, os.strerror(errno.EADDRINUSE))
+
+        listener = "Listener" if sys.platform == "win32" else "_UnixListener"
+        monkeypatch.setattr(dm, listener, cannot_bind)
+        expected = OSError
+
+    # Keeping the exception keeps the failed daemon's frame, and with it any
+    # lock file it did not close.
+    with pytest.raises(expected) as failed:
+        dm.run_daemon()
+
+    assert not daemon_pid_path().exists(), "the failed start left its PID file behind"
+    lock = dm._lock_runtime_dir()
+    assert lock is not None, f"the start that failed with {failed.value!r} kept the lock"
+    dm._unlock_runtime_dir(lock)

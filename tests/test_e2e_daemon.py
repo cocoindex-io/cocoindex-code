@@ -17,17 +17,21 @@ import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from conftest import make_test_user_settings
+from typer.testing import CliRunner
 
 from cocoindex_code import client
 from cocoindex_code._daemon_paths import (
     DAEMON_ALREADY_RUNNING_EXIT_CODE,
     daemon_lock_path,
     daemon_pid_path,
+    daemon_runtime_dir,
 )
 from cocoindex_code._version import __version__
+from cocoindex_code.cli import app
 from cocoindex_code.client import start_daemon, stop_daemon
 from cocoindex_code.daemon import daemon_socket_path
 from cocoindex_code.settings import (
@@ -294,6 +298,81 @@ def test_crashed_daemon_leftovers_do_not_block_the_next_start(
     assert len(started_daemons) == 2
     assert started_daemons[1].poll() is None
     assert _serving_daemon_pid() != crashed_pid
+
+
+# A daemon whose startup hangs once it holds the runtime dir, as when a model
+# download hangs: its settings load writes the daemon's pid to the file named
+# by argv[1], then waits for the file named by argv[2] to appear, and fails.
+_STALLED_DAEMON = """\
+import os
+import sys
+import time
+from pathlib import Path
+
+import cocoindex_code.daemon as dm
+
+stalled, release = Path(sys.argv[1]), Path(sys.argv[2])
+
+
+def load_user_settings():
+    stalled.write_text(str(os.getpid()))
+    while not release.exists():
+        time.sleep(0.05)
+    raise RuntimeError("loading the settings failed")
+
+
+dm.load_user_settings = load_user_settings
+dm.run_daemon()
+"""
+
+
+class _StalledDaemon(NamedTuple):
+    proc: subprocess.Popen[bytes]
+    pid: int  # the daemon's own pid; on Windows, proc is a launcher
+    release: Path  # creating this file makes the daemon's startup fail
+
+
+@pytest.fixture()
+def stalled_daemon(started_daemons: list[subprocess.Popen[bytes]]) -> Iterator[_StalledDaemon]:
+    """A daemon that holds the runtime dir but is stuck loading its settings."""
+    save_user_settings(make_test_user_settings())  # so that it loads them
+    stalled = daemon_runtime_dir() / "stalled"
+    release = daemon_runtime_dir() / "release"
+    proc = subprocess.Popen([sys.executable, "-c", _STALLED_DAEMON, str(stalled), str(release)])
+    try:
+        deadline = time.monotonic() + 30
+        while not (stalled.exists() and stalled.read_text()):
+            assert proc.poll() is None, "the daemon exited before loading its settings"
+            assert time.monotonic() < deadline, "the daemon never got to its settings"
+            time.sleep(0.05)
+        yield _StalledDaemon(proc, int(stalled.read_text()), release)
+    finally:
+        release.touch()  # a daemon still stalled fails and exits
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=10)
+
+
+def test_stop_reaches_a_daemon_that_is_still_starting(stalled_daemon: _StalledDaemon) -> None:
+    """A daemon still loading its settings and model has no socket yet, and
+    every daemon started meanwhile exits in its favor. Its PID file is there
+    from the moment it holds the runtime dir, so `ccc daemon stop` (and with
+    it `ccc daemon restart`) reaches it. Before, stop said "Daemon is not
+    running." and left it running.
+    """
+    pid_path = daemon_pid_path()
+    assert pid_path.is_file(), "a daemon still starting has no PID file"
+    assert pid_path.read_text().strip() == str(stalled_daemon.pid)
+    assert not client.is_daemon_running()
+
+    result = CliRunner().invoke(app, ["daemon", "stop"], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert "Daemon stopped." in result.output
+    stalled_daemon.proc.wait(timeout=10)
+    assert not pid_path.exists()
 
 
 def test_daemon_env_response_includes_host_path_mappings(

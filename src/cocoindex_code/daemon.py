@@ -704,6 +704,15 @@ def _unlock_runtime_dir(lock_file: BufferedWriter) -> None:
     lock_file.close()
 
 
+def _remove_pid_file_if_ours(pid_path: Path) -> None:
+    """Remove the PID file unless another daemon has written its own there."""
+    try:
+        if pid_path.read_text().strip() == str(os.getpid()):
+            pid_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 if sys.platform != "win32":  # Windows uses named pipes via Listener
 
     class _UnixListener:
@@ -787,91 +796,105 @@ def run_daemon(
     if runtime_lock is None:
         sys.exit(DAEMON_ALREADY_RUNNING_EXIT_CODE)
 
-    # No-settings mode: start even when global_settings.yml is missing so the
-    # client can complete its handshake, detect the mtime mismatch once
-    # `ccc init` writes the file, and trigger a supervisor respawn. The
-    # alternative (auto-creating defaults) would skip the interactive
-    # provider/model picker in `ccc init`.
-    settings_mtime_us = global_settings_mtime_us()  # None when file is missing
-    embedder: Embedder | None
-    indexing_params: dict[str, Any] = {}
-    query_params: dict[str, Any] = {}
-    clear_mps_cache_after_index = False
-    handshake_warnings: list[str] = []
-    missing_local_embeddings = False
-    supervised = os.environ.get("COCOINDEX_CODE_DAEMON_SUPERVISED") == "1"
-    daemon_settings = DaemonSettings()
-    if user_settings_path().is_file():
-        user_settings = load_user_settings()
-        daemon_settings = user_settings.daemon
-        missing_local_embeddings = (
-            user_settings.embedding.provider == "sentence-transformers"
-            and not is_sentence_transformers_installed()
-        )
-        if missing_local_embeddings:
-            if supervised:
-                fix = (
-                    "Install `cocoindex-code[full]` where your supervisor runs the "
-                    "daemon (for Docker, use the `cocoindex/cocoindex-code:full` image)."
-                )
-            else:
-                fix = (
-                    "Install `cocoindex-code[full]` in the environment you use for ccc, "
-                    "then run `ccc daemon restart` from that environment."
-                )
-            handshake_warnings.append(f"The daemon is missing sentence-transformers. {fix}")
-        settings_env_keys = list(user_settings.envs.keys())
-        for key, value in user_settings.envs.items():
-            os.environ[key] = value
-        clear_mps_cache_after_index = configure_mps_environment(user_settings.embedding)
-        # Resolve params BEFORE constructing the embedder so invalid configs
-        # fail fast without paying the model-load cost.
-        try:
-            embedder_params = resolve_embedder_params(user_settings.embedding)
-        except ValueError:
-            logger.exception("Invalid embedder params in global_settings.yml")
-            sys.exit(1)
-        indexing_params = embedder_params.indexing
-        query_params = embedder_params.query
-        if embedder_params.used_backward_compat:
-            handshake_warnings.append(
-                _build_backward_compat_warning(user_settings, user_settings_path())
-            )
-        embedder = create_embedder(user_settings.embedding, indexing_params=indexing_params)
-    else:
-        settings_env_keys = []
-        embedder = None
-
-    # Write PID file; drop the previous daemon's graceful-exit marker so the
-    # marker always refers to the most recent exit.
+    # Write the PID file at once. Until the socket is up, it is how `ccc
+    # daemon stop` finds this daemon, and loading the settings and model
+    # below can take long, or hang, while every daemon started here meanwhile
+    # exits in this one's favor.
     pid_path = daemon_pid_path()
     pid_path.write_text(str(os.getpid()))
-    clear_last_exit_marker()
+    try:
+        # No-settings mode: start even when global_settings.yml is missing so the
+        # client can complete its handshake, detect the mtime mismatch once
+        # `ccc init` writes the file, and trigger a supervisor respawn. The
+        # alternative (auto-creating defaults) would skip the interactive
+        # provider/model picker in `ccc init`.
+        settings_mtime_us = global_settings_mtime_us()  # None when file is missing
+        embedder: Embedder | None
+        indexing_params: dict[str, Any] = {}
+        query_params: dict[str, Any] = {}
+        clear_mps_cache_after_index = False
+        handshake_warnings: list[str] = []
+        missing_local_embeddings = False
+        supervised = os.environ.get("COCOINDEX_CODE_DAEMON_SUPERVISED") == "1"
+        daemon_settings = DaemonSettings()
+        if user_settings_path().is_file():
+            user_settings = load_user_settings()
+            daemon_settings = user_settings.daemon
+            missing_local_embeddings = (
+                user_settings.embedding.provider == "sentence-transformers"
+                and not is_sentence_transformers_installed()
+            )
+            if missing_local_embeddings:
+                if supervised:
+                    fix = (
+                        "Install `cocoindex-code[full]` where your supervisor runs the "
+                        "daemon (for Docker, use the `cocoindex/cocoindex-code:full` image)."
+                    )
+                else:
+                    fix = (
+                        "Install `cocoindex-code[full]` in the environment you use for ccc, "
+                        "then run `ccc daemon restart` from that environment."
+                    )
+                handshake_warnings.append(f"The daemon is missing sentence-transformers. {fix}")
+            settings_env_keys = list(user_settings.envs.keys())
+            for key, value in user_settings.envs.items():
+                os.environ[key] = value
+            clear_mps_cache_after_index = configure_mps_environment(user_settings.embedding)
+            # Resolve params BEFORE constructing the embedder so invalid configs
+            # fail fast without paying the model-load cost.
+            try:
+                embedder_params = resolve_embedder_params(user_settings.embedding)
+            except ValueError:
+                logger.exception("Invalid embedder params in global_settings.yml")
+                sys.exit(1)
+            indexing_params = embedder_params.indexing
+            query_params = embedder_params.query
+            if embedder_params.used_backward_compat:
+                handshake_warnings.append(
+                    _build_backward_compat_warning(user_settings, user_settings_path())
+                )
+            embedder = create_embedder(user_settings.embedding, indexing_params=indexing_params)
+        else:
+            settings_env_keys = []
+            embedder = None
 
-    # Set up logging to file
-    log_path = daemon_log_path()
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        handlers=[logging.FileHandler(str(log_path), mode="w"), logging.StreamHandler()],
-        force=True,
-    )
+        # Drop the previous daemon's graceful-exit marker so the marker always
+        # refers to the most recent exit. Not before the settings and model have
+        # loaded: a client of that daemon reconnecting meanwhile would find no
+        # marker and take its graceful exit for a crash.
+        clear_last_exit_marker()
 
-    logger.info("Daemon starting (PID %d, version %s)", os.getpid(), __version__)
+        # Set up logging to file
+        log_path = daemon_log_path()
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            handlers=[logging.FileHandler(str(log_path), mode="w"), logging.StreamHandler()],
+            force=True,
+        )
 
-    start_time = time.monotonic()
-    registry = ProjectRegistry(
-        embedder,
-        indexing_params=indexing_params,
-        query_params=query_params,
-        clear_mps_cache_after_index=clear_mps_cache_after_index,
-    )
+        logger.info("Daemon starting (PID %d, version %s)", os.getpid(), __version__)
 
-    sock_path = daemon_socket_path()
-    if sys.platform == "win32":
-        listener = Listener(sock_path, family=connection_family())
-    else:
-        listener = _UnixListener(sock_path)
+        start_time = time.monotonic()
+        registry = ProjectRegistry(
+            embedder,
+            indexing_params=indexing_params,
+            query_params=query_params,
+            clear_mps_cache_after_index=clear_mps_cache_after_index,
+        )
+
+        sock_path = daemon_socket_path()
+        if sys.platform == "win32":
+            listener = Listener(sock_path, family=connection_family())
+        else:
+            listener = _UnixListener(sock_path)
+    except BaseException:
+        # A start that failed gives up the runtime dir and leaves no PID file
+        # behind: a later `ccc daemon stop` would signal whichever process
+        # gets that PID next.
+        _remove_pid_file_if_ours(pid_path)
+        _unlock_runtime_dir(runtime_lock)
+        raise
     logger.info("Listening on %s", sock_path)
 
     loop = asyncio.new_event_loop()
@@ -1022,12 +1045,7 @@ def run_daemon(
         loop.close()
 
         # 4. Remove the PID file.
-        try:
-            stored = pid_path.read_text().strip()
-            if stored == str(os.getpid()):
-                pid_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        _remove_pid_file_if_ours(pid_path)
 
         logger.info("Daemon stopped")
 
