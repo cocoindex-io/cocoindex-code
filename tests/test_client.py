@@ -445,6 +445,39 @@ def test_daemon_version_error_message_reflects_cause() -> None:
     assert "version mismatch" not in str(settings_err)
 
 
+@pytest.mark.parametrize(
+    ("daemon_missing", "client_has_dependency", "supervised", "restart"),
+    [
+        (True, True, False, True),
+        (True, False, False, False),
+        (False, False, False, False),
+        (False, True, False, False),
+        (True, True, True, False),
+    ],
+)
+def test_restart_only_when_client_can_supply_missing_local_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+    daemon_missing: bool,
+    client_has_dependency: bool,
+    supervised: bool,
+    restart: bool,
+) -> None:
+    monkeypatch.setattr("cocoindex_code.settings.global_settings_mtime_us", lambda: 123)
+    monkeypatch.setattr(
+        "cocoindex_code.shared.is_sentence_transformers_installed",
+        lambda: client_has_dependency,
+    )
+    monkeypatch.setattr(client, "_is_daemon_supervised", lambda: supervised)
+    response = HandshakeResponse(
+        ok=True,
+        daemon_version="v1",
+        global_settings_mtime_us=123,
+        missing_local_embeddings=daemon_missing,
+    )
+
+    assert client._needs_restart(response) is restart
+
+
 def test_daemon_error_carries_daemon_side_traceback() -> None:
     """Daemon-side tracebacks reach the caller — the client frames alone say nothing.
 
