@@ -2,6 +2,9 @@
 
 import json
 import struct
+import subprocess
+import sys
+import textwrap
 from contextlib import closing
 from pathlib import Path
 
@@ -67,7 +70,8 @@ def test_duplicate_groups_follow_transitive_edges_across_blocks(
         ["duplicates", "--lang", "python", "--path", "src/*", "--threshold", "0.75", "--json"],
     )
     assert result.exit_code == 0, (result.output, result.exception)
-    assert [[chunk["file_path"] for chunk in group] for group in json.loads(result.output)] == [
+    groups = json.loads(result.output)
+    assert [[chunk["file_path"] for chunk in group["chunks"]] for group in groups] == [
         ["src/a.py", "src/b.py", "src/c.py"]
     ]
 
@@ -127,6 +131,39 @@ def test_missing_index_does_not_create_database(index: Path) -> None:
     assert result.exit_code == 1
     assert "Run `ccc index` first" in result.output
     assert not index.exists()
+
+
+def test_index_file_without_table_reports_missing_index(project: Path) -> None:
+    # The daemon creates the file before its first index run creates the table.
+    path = settings.target_sqlite_db_path(project)
+    sqlite.connect(path, load_vec=True).close()
+    assert path.is_file()
+    result = CliRunner().invoke(cli.app, ["duplicates"])
+    assert result.exit_code == 1
+    assert "Run `ccc index` first" in result.output
+
+
+def test_rolls_back_the_journal_of_an_interrupted_write(index: Path) -> None:
+    # The writer spills pages into the database file and dies before it commits.
+    writer = textwrap.dedent(
+        """
+        import os, sqlite3, sys
+
+        conn = sqlite3.connect(sys.argv[1], isolation_level=None)
+        conn.execute("PRAGMA cache_size = 1")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("CREATE TABLE pad (data BLOB)")
+        conn.execute("INSERT INTO pad VALUES (zeroblob(1000000))")
+        os._exit(0)
+        """
+    )
+    subprocess.run([sys.executable, "-c", writer, str(index)], check=True)
+    journal = index.with_name(f"{index.name}-journal")
+    assert journal.exists()
+    result = CliRunner().invoke(cli.app, ["duplicates", "--threshold", "1"])
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert "Group 1 (3 chunks)" in result.output
+    assert not journal.exists()
 
 
 def test_nonfinite_threshold_is_rejected(index: Path) -> None:

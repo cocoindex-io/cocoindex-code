@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from contextlib import closing
 from pathlib import Path
 
@@ -11,6 +10,7 @@ import numpy as np
 from cocoindex.connectors import sqlite
 
 _BLOCK_SIZE = 256
+_NO_INDEX_MESSAGE = "Index not created yet. Run `ccc index` first."
 
 
 class ChunkLocation(msgspec.Struct, frozen=True):
@@ -18,6 +18,10 @@ class ChunkLocation(msgspec.Struct, frozen=True):
     language: str
     start_line: int
     end_line: int
+
+
+class DuplicateGroup(msgspec.Struct, frozen=True):
+    chunks: list[ChunkLocation]
 
 
 def _overlaps(a: ChunkLocation, b: ChunkLocation) -> bool:
@@ -35,7 +39,7 @@ def find_duplicate_groups(
     min_lines: int,
     languages: list[str],
     path: str | None,
-) -> list[list[ChunkLocation]]:
+) -> list[DuplicateGroup]:
     """Read a snapshot and group chunks connected by cosine-similarity matches.
 
     Chunks that share lines of one file never match each other.
@@ -49,33 +53,33 @@ def find_duplicate_groups(
         conditions.append("file_path GLOB ?")
         params.append(path)
 
+    # Connecting would create a missing file. The connection is read-write although the
+    # scan only reads: a read-only one cannot roll back the journal of an interrupted write.
+    if not database.is_file():
+        raise ValueError(_NO_INDEX_MESSAGE)
     locations: list[ChunkLocation] = []
     embeddings = []
-    try:
-        with (
-            closing(
-                sqlite.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True, load_vec=True)
-            ) as db,
-            db.readonly() as conn,
+    with closing(sqlite.connect(database, load_vec=True)) as db, db.readonly() as conn:
+        # The daemon creates the file before its first index run creates the table.
+        tables = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'code_chunks_vec'"
+        )
+        if tables.fetchone() is None:
+            raise ValueError(_NO_INDEX_MESSAGE)
+        for file_path, language, start, end, embedding in conn.execute(
+            f"""
+            SELECT file_path, language, start_line, end_line, embedding
+            FROM code_chunks_vec
+            WHERE {" AND ".join(conditions)}
+            ORDER BY file_path, start_line, end_line, id
+            """,
+            params,
         ):
-            for file_path, language, start, end, embedding in conn.execute(
-                f"""
-                SELECT file_path, language, start_line, end_line, embedding
-                FROM code_chunks_vec
-                WHERE {" AND ".join(conditions)}
-                ORDER BY file_path, start_line, end_line, id
-                """,
-                params,
-            ):
-                vector = np.frombuffer(embedding, dtype=np.float32).astype(np.float64)
-                norm = np.linalg.norm(vector)
-                if np.isfinite(norm) and norm > 0:
-                    locations.append(ChunkLocation(file_path, language, start, end))
-                    embeddings.append(vector / norm)
-    except sqlite3.OperationalError as exc:
-        if not database.is_file() or "no such table: code_chunks_vec" in str(exc):
-            raise ValueError("Index not created yet. Run `ccc index` first.") from exc
-        raise
+            vector = np.frombuffer(embedding, dtype=np.float32).astype(np.float64)
+            norm = np.linalg.norm(vector)
+            if np.isfinite(norm) and norm > 0:
+                locations.append(ChunkLocation(file_path, language, start, end))
+                embeddings.append(vector / norm)
 
     if len(embeddings) < 2:
         return []
@@ -120,4 +124,4 @@ def find_duplicate_groups(
         leader = root(idx)
         if sizes[leader] > 1:
             groups.setdefault(leader, []).append(location)
-    return list(groups.values())
+    return [DuplicateGroup(chunks) for chunks in groups.values()]

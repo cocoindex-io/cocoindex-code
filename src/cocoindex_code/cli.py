@@ -756,8 +756,8 @@ def duplicates(
         _typer.echo("No similar chunks found.")
     else:
         for index, group in enumerate(groups, 1):
-            _typer.echo(f"Group {index} ({len(group)} chunks)")
-            for chunk in group:
+            _typer.echo(f"Group {index} ({len(group.chunks)} chunks)")
+            for chunk in group.chunks:
                 _echo_search_text(
                     f"  {chunk.file_path}:{chunk.start_line}-{chunk.end_line} [{chunk.language}]"
                 )
