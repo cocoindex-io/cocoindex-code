@@ -7,6 +7,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from .schema import QueryResult
 from .shared import EMBEDDER, QUERY_EMBED_PARAMS, SQLITE_DB
 
@@ -20,7 +22,8 @@ def _checked(rows: list[tuple[Any, ...]], query_shape: str) -> list[tuple[Any, .
     """Return *rows*, failing loudly if any of them carries a NULL distance.
 
     The hidden vec0 distance column is populated only by the KNN plan.
-    A scalar distance can also be NULL on some filtered scan plans (#270).
+    A distance is also NULL when either vector has a NaN component: SQLite
+    stores a NaN result as NULL (#270).
     A missing distance cannot be ranked or converted to a similarity score.
     """
     bad = next((row for row in rows if row[5] is None), None)
@@ -91,45 +94,23 @@ def _full_scan_query(
         filter_params.extend(paths)
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    rows = conn.execute(
+    # SQLite stores a NaN result as NULL, so a stored vector with a NaN
+    # component gets a NULL distance, and ORDER BY puts NULLs first. Rank only
+    # the rows that have a distance (#270).
+    return conn.execute(
         f"""
-        SELECT file_path, language, content, start_line, end_line,
-               vec_distance_L2(embedding, ?) as distance
-        FROM code_chunks_vec
-        {where}
-        ORDER BY distance
+        SELECT * FROM (
+            SELECT file_path, language, content, start_line, end_line,
+                   vec_distance_L2(embedding, ?) AS l2
+            FROM code_chunks_vec
+            {where}
+        )
+        WHERE l2 IS NOT NULL
+        ORDER BY l2
         LIMIT ? OFFSET ?
         """,
         (embedding_bytes, *filter_params, limit, offset),
     ).fetchall()
-    if all(row[5] is not None for row in rows):
-        return rows
-
-    # Separate the vec0 scan from distance evaluation when the direct scan
-    # returns NULL. Filter before materializing and fetch payloads after ranking
-    # so the temporary table only holds matching IDs and vectors.
-    return _checked(
-        conn.execute(
-            f"""
-            WITH candidates AS MATERIALIZED (
-                SELECT id, embedding FROM code_chunks_vec {where}
-            ),
-            ranked AS MATERIALIZED (
-                SELECT id, vec_distance_L2(embedding, ?) AS l2
-                FROM candidates
-                ORDER BY l2
-                LIMIT ? OFFSET ?
-            )
-            SELECT chunks.file_path, chunks.language, chunks.content,
-                   chunks.start_line, chunks.end_line, ranked.l2
-            FROM ranked
-            JOIN code_chunks_vec AS chunks ON chunks.id = ranked.id
-            ORDER BY ranked.l2
-            """,
-            (*filter_params, embedding_bytes, limit, offset),
-        ).fetchall(),
-        "materialized full scan",
-    )
 
 
 async def query_codebase(
@@ -160,6 +141,11 @@ async def query_codebase(
 
     # Generate query embedding.
     query_embedding = await embedder.embed(query, **query_params)
+    if not np.isfinite(query_embedding).all():
+        raise RuntimeError(
+            "The embedding model returned a query vector with NaN or infinite "
+            "values, so search results cannot be ranked."
+        )
 
     embedding_bytes = query_embedding.astype("float32").tobytes()
 

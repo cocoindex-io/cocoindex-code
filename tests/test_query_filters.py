@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import sqlite3
 import struct
-from unittest.mock import Mock
 
 import pytest
 
@@ -88,30 +87,29 @@ def test_full_scan_query_combines_language_and_path_filters(conn: sqlite3.Connec
     assert rows[0][5] == pytest.approx(0.0)
 
 
-def test_full_scan_retries_null_distances_with_exact_filters_and_offset(
-    conn: sqlite3.Connection,
-) -> None:
-    # Simulate the reported planner failure for the first statement. The
-    # fallback still runs against the actual vec0 table and extension.
-    connection = Mock(wraps=conn)
+def test_full_scan_skips_vectors_with_nan(conn: sqlite3.Connection) -> None:
+    """SQLite returns a NaN distance as NULL, and NULL sorts first (#270)."""
+    conn.execute(
+        "INSERT INTO code_chunks_vec"
+        "(id, file_path, language, content, start_line, end_line, embedding)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (4, "src/nan.py", "python", "broken", 1, 5, _vec((float("nan"), 0.0, 0.0, 0.0))),
+    )
+    query = _vec((1.0, 0.0, 0.0, 0.0))
 
-    def execute(sql: str, params: tuple[object, ...]) -> sqlite3.Cursor:
-        if connection.execute.call_count == 1:
-            return conn.execute("SELECT 'src/main.py', 'python', 'fibonacci', 1, 5, NULL")
-        return conn.execute(sql, params)
+    rows = _full_scan_query(conn, query, limit=10, offset=0, paths=["src/*"])
+    assert [row[0] for row in rows] == ["src/main.py", "src/util.py"]
 
-    connection.execute.side_effect = execute
-    rows = _full_scan_query(
-        connection,
-        _vec((1.0, 0.0, 0.0, 0.0)),
+    page = _full_scan_query(
+        conn,
+        query,
         limit=1,
         offset=1,
         languages=["python", "rust"],
         paths=["src/*", "no-match/*"],
     )
-
-    assert [row[:5] for row in rows] == [("src/util.py", "python", "parse csv", 1, 5)]
-    assert rows[0][5] == pytest.approx(2**0.5)
+    assert [row[:5] for row in page] == [("src/util.py", "python", "parse csv", 1, 5)]
+    assert page[0][5] == pytest.approx(2**0.5)
 
 
 def test_knn_query_returns_usable_distances(conn: sqlite3.Connection) -> None:
