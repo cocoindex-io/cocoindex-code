@@ -135,9 +135,11 @@ def _connect_and_handshake() -> Connection:
     Returns the open connection for the caller to send exactly one request.
 
     Automatically starts or restarts the daemon when it is absent (first call,
-    or it exited since the last request) or running with
+    or it exited since the last request), running with
     stale global settings (e.g. a ``ccc init`` retry rewrote
-    ``global_settings.yml`` after the daemon loaded it). An ensured daemon
+    ``global_settings.yml`` after the daemon loaded it), or missing the
+    sentence-transformers package that this client has (e.g. the user installed
+    ``cocoindex-code[full]`` after the daemon started). An ensured daemon
     that vanished *without* leaving a graceful-exit marker crashed — that is
     restarted loudly, and given up on after a few consecutive crashes (see
     ``_handle_vanished_daemon``). A genuine *version* mismatch after we have
@@ -157,7 +159,8 @@ def _connect_and_handshake() -> Connection:
         # `resp.ok` is False only for a real version mismatch. Once we have
         # ensured a matching daemon, a fresh version mismatch means the binary
         # was swapped under us — fail fast. A settings-only restart request
-        # (resp.ok True, but the loaded settings mtime moved) is expected;
+        # (resp.ok True, but the loaded settings mtime moved, or the daemon
+        # lacks sentence-transformers and this client has it) is expected;
         # restart the daemon below so it reloads them. (stop_daemon sends a
         # StopRequest, so this restart leaves a graceful-exit marker and the
         # next connect stays silent.)
@@ -286,7 +289,8 @@ def _raw_connect_and_handshake() -> _HandshakeResult:
 
 
 class DaemonVersionError(RuntimeError):
-    """Raised when the daemon has a version or settings mismatch.
+    """Raised when the daemon has a version or settings mismatch, or lacks the
+    sentence-transformers package that this client has.
 
     The first ``_connect_and_handshake()`` call handles this by restarting
     the daemon.  If a mismatch occurs on a subsequent call, it means the
@@ -299,6 +303,11 @@ class DaemonVersionError(RuntimeError):
             message = (
                 f"Daemon version mismatch (daemon={resp.daemon_version}, "
                 f"client={__version__}). Please retry — the daemon may need a restart."
+            )
+        elif resp.missing_local_embeddings:
+            message = (
+                "The daemon still reports sentence-transformers as missing after a restart. "
+                "Please retry."
             )
         else:
             message = (
@@ -799,4 +808,10 @@ def _needs_restart(resp: HandshakeResponse) -> bool:
     current_mtime = global_settings_mtime_us()
     if current_mtime != resp.global_settings_mtime_us:
         return True
+    if resp.missing_local_embeddings and not _is_daemon_supervised():
+        # A slim client can keep using a full daemon. Only replace a daemon
+        # when this client can supply the dependency it is missing.
+        from .shared import is_sentence_transformers_installed
+
+        return is_sentence_transformers_installed()
     return False
