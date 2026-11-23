@@ -95,22 +95,22 @@ def _full_scan_query(
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     # SQLite stores a NaN result as NULL, so a stored vector with a NaN
-    # component gets a NULL distance, and ORDER BY puts NULLs first. Rank only
-    # the rows that have a distance (#270).
-    return conn.execute(
+    # component gets a NULL distance, and a plain ORDER BY puts NULLs first.
+    # Sort them last and drop them here, so they never take the place of a real
+    # match (#270). Filtering them out in SQL instead (`WHERE l2 IS NOT NULL`
+    # around a subquery) makes SQLite compute every distance twice.
+    rows = conn.execute(
         f"""
-        SELECT * FROM (
-            SELECT file_path, language, content, start_line, end_line,
-                   vec_distance_L2(embedding, ?) AS l2
-            FROM code_chunks_vec
-            {where}
-        )
-        WHERE l2 IS NOT NULL
-        ORDER BY l2
+        SELECT file_path, language, content, start_line, end_line,
+               vec_distance_L2(embedding, ?) AS l2
+        FROM code_chunks_vec
+        {where}
+        ORDER BY l2 NULLS LAST
         LIMIT ? OFFSET ?
         """,
         (embedding_bytes, *filter_params, limit, offset),
     ).fetchall()
+    return [row for row in rows if row[5] is not None]
 
 
 async def query_codebase(

@@ -99,6 +99,8 @@ def test_full_scan_skips_vectors_with_nan(conn: sqlite3.Connection) -> None:
 
     rows = _full_scan_query(conn, query, limit=10, offset=0, paths=["src/*"])
     assert [row[0] for row in rows] == ["src/main.py", "src/util.py"]
+    # A page past the last real match holds only the NaN row, which is dropped.
+    assert _full_scan_query(conn, query, limit=1, offset=2, paths=["src/*"]) == []
 
     page = _full_scan_query(
         conn,
