@@ -20,6 +20,14 @@ class ChunkLocation(msgspec.Struct, frozen=True):
     end_line: int
 
 
+def _overlaps(a: ChunkLocation, b: ChunkLocation) -> bool:
+    """Return whether the chunks share lines of one file.
+
+    The splitter overlaps neighboring chunks, so such pairs match without being copies.
+    """
+    return a.file_path == b.file_path and a.start_line <= b.end_line and b.start_line <= a.end_line
+
+
 def find_duplicate_groups(
     database: Path,
     *,
@@ -28,7 +36,10 @@ def find_duplicate_groups(
     languages: list[str],
     path: str | None,
 ) -> list[list[ChunkLocation]]:
-    """Read a snapshot and group chunks connected by cosine-similarity matches."""
+    """Read a snapshot and group chunks connected by cosine-similarity matches.
+
+    Chunks that share lines of one file never match each other.
+    """
     conditions = ["end_line - start_line + 1 >= ?"]
     params: list[str | int] = [min_lines]
     if languages:
@@ -92,8 +103,12 @@ def find_duplicate_groups(
             if left_start == right_start:
                 matches = np.triu(matches, k=1)
             for left_offset, right_offset in zip(*np.nonzero(matches), strict=True):
-                a = root(left_start + int(left_offset))
-                b = root(right_start + int(right_offset))
+                left_index = left_start + int(left_offset)
+                right_index = right_start + int(right_offset)
+                if _overlaps(locations[left_index], locations[right_index]):
+                    continue
+                a = root(left_index)
+                b = root(right_index)
                 if a != b:
                     if sizes[a] < sizes[b]:
                         a, b = b, a

@@ -722,7 +722,7 @@ def search(
 
 @app.command()
 def duplicates(
-    threshold: float = _typer.Option(0.88, min=0.0, max=1.0, help="Minimum cosine similarity"),
+    threshold: float = _typer.Option(0.95, min=0.0, max=1.0, help="Minimum cosine similarity"),
     min_lines: int = _typer.Option(5, min=1, help="Minimum lines per chunk"),
     lang: list[str] = _typer.Option([], "--lang", help="Filter by language"),
     path: str | None = _typer.Option(None, "--path", help="Filter by file path glob"),

@@ -321,16 +321,21 @@ By default, `ccc search` scopes results to your current working directory (relat
 Build the index with `ccc index` before running `ccc duplicates`.
 
 ```bash
-ccc duplicates --threshold 0.88 --min-lines 5 --lang python --path 'src/*'
-ccc duplicates --threshold 0.9 --json
+ccc duplicates                                          # whole index, default threshold 0.95
+ccc duplicates --lang python --path 'src/*'             # filter by language and path
+ccc duplicates --threshold 0.98 --min-lines 10 --json   # near-identical chunks of 10+ lines
 ```
 
 The command reads stored embeddings without running the model or refreshing
-the index. Each group is connected by threshold-matching pairs. Two chunks in
-the same group can be connected through a third chunk even if their own score
-is below the threshold. Treat similarity groups as candidates for manual
-review. The exact comparison takes quadratic time in the number of
-selected chunks, so use file and language filters on large indexes.
+the index. Each group is connected by pairs that score at or above
+`--threshold` (default 0.95). Two chunks in the same group can be connected
+through a third chunk even if their own score is below the threshold, so a
+lower threshold can merge many loosely related chunks into one large group.
+Chunks of the same file whose line ranges overlap never match each other,
+because the indexer overlaps neighboring chunks. Treat similarity groups as
+candidates for manual review. The exact comparison takes quadratic time in
+the number of selected chunks, so use file and language filters on large
+indexes.
 
 ### Structural Search (`ccc grep`)
 
