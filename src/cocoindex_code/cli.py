@@ -342,7 +342,7 @@ def _search_with_wait_spinner(
             # Let DaemonStartError propagate to the decorator for consistent handling.
             if isinstance(e, _client.DaemonStartError):
                 raise
-            resp = SearchResponse(success=False, message=str(e))
+            resp = SearchResponse(success=False, offset=offset, message=str(e))
 
     return resp
 

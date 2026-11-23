@@ -445,10 +445,13 @@ def test_session_search_and_status_report_daemon_errors(e2e_project: Path) -> No
     assert "Search failed: Daemon error: Error loading" in result.stderr
 
     # --json still emits the failure as JSON on stdout.
-    result = runner.invoke(app, ["search", "fibonacci", "--json"], catch_exceptions=False)
+    result = runner.invoke(
+        app, ["search", "fibonacci", "--json", "--offset", "5"], catch_exceptions=False
+    )
     assert result.exit_code == 1, result.output
     payload = json.loads(result.stdout)
     assert payload["success"] is False
+    assert payload["offset"] == 5
     assert payload["message"].startswith("Daemon error: Error loading")
 
     result = runner.invoke(app, ["status"], catch_exceptions=False)
