@@ -375,6 +375,52 @@ def test_stop_reaches_a_daemon_that_is_still_starting(stalled_daemon: _StalledDa
     assert not pid_path.exists()
 
 
+@pytest.mark.parametrize("ending", ["fails", "is killed"])
+def test_client_stops_waiting_once_the_daemon_it_deferred_to_is_gone(
+    started_daemons: list[subprocess.Popen[bytes]],
+    stalled_daemon: _StalledDaemon,
+    ending: str,
+) -> None:
+    """A client whose daemon exited in favor of one still starting waits for
+    that one. Once it is gone without having brought its socket up, the
+    client reports the failed start right away, where before it waited out
+    its 30 s timeout and said the daemon "did not start in time".
+    """
+    errors: list[Exception] = []
+
+    def daemon_status() -> None:
+        try:
+            client.daemon_status()
+        except Exception as e:
+            errors.append(e)
+
+    waiter = threading.Thread(target=daemon_status, daemon=True)
+    waiter.start()
+    deadline = time.monotonic() + 30
+    while not started_daemons or started_daemons[0].poll() is None:
+        assert time.monotonic() < deadline, "the client's own daemon did not exit"
+        time.sleep(0.05)
+    assert started_daemons[0].returncode == DAEMON_ALREADY_RUNNING_EXIT_CODE
+    time.sleep(1)
+    assert waiter.is_alive(), "the client gave up on a daemon that is still starting"
+
+    if ending == "fails":
+        stalled_daemon.release.touch()
+    elif sys.platform == "win32":
+        # No SIGKILL on Windows; os.kill calls TerminateProcess, as abrupt.
+        os.kill(stalled_daemon.pid, signal.SIGTERM)
+    else:
+        os.kill(stalled_daemon.pid, signal.SIGKILL)
+    # Reap it: a zombie would still count as a live process.
+    stalled_daemon.proc.wait(timeout=10)
+    waiter.join(timeout=10)
+
+    assert not waiter.is_alive(), "the client still waits for a daemon that is gone"
+    (error,) = errors
+    assert isinstance(error, client.DaemonStartError)
+    assert "Daemon process exited before it became ready." in str(error)
+
+
 def test_daemon_env_response_includes_host_path_mappings(
     e2e_daemon: tuple[str, Path],
 ) -> None:

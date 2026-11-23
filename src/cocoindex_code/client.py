@@ -649,6 +649,14 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
+def _read_daemon_pid() -> int | None:
+    """Return the pid in the daemon's PID file, or None when there is none."""
+    try:
+        return int(daemon_pid_path().read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
 def _wait_for_daemon_exit(timeout: float) -> bool:
     """Wait up to *timeout* seconds for the daemon to finish cleanup.
 
@@ -676,13 +684,9 @@ def stop_daemon() -> None:
     _surfaced_warnings.clear()
     pid_path = daemon_pid_path()
 
-    pid: int | None = None
-    try:
-        pid = int(pid_path.read_text().strip())
-        if pid == os.getpid():
-            pid = None
-    except (FileNotFoundError, ValueError):
-        pass
+    pid = _read_daemon_pid()
+    if pid == os.getpid():
+        pid = None
     # The socket file of the daemon being stopped. Cleanup removes only that
     # one, never a replacement daemon's bound there meanwhile (issue #288).
     sock_identity = socket_identity(daemon_socket_path()) if sys.platform != "win32" else None
@@ -759,12 +763,18 @@ def _wait_for_daemon(
     The exception is a process that exits with
     ``DAEMON_ALREADY_RUNNING_EXIT_CODE``: another daemon, such as one a
     concurrent client started, holds the runtime dir, so wait for that
-    daemon's socket instead. Socket existence is checked *before*
+    daemon's socket instead, and raise as soon as the process named in the
+    PID file is gone too. Socket existence is checked *before*
     ``proc.poll()`` for the same reason: once a daemon's socket is up, it no
     longer matters how our own process fared.
     """
     deadline = time.monotonic() + timeout
     sock_path = daemon_socket_path()
+    # Whether our process has exited in favor of the daemon holding the
+    # runtime dir, and whether at the last check its PID file named no live
+    # process.
+    deferred = False
+    holder_missing = False
     while time.monotonic() < deadline:
         if sys.platform == "win32":
             try:
@@ -777,26 +787,36 @@ def _wait_for_daemon(
             if os.path.exists(sock_path):
                 return
 
-        # Daemon socket not yet up — if we spawned a subprocess that already
+        # Daemon socket not yet up — if the daemon we wait for has already
         # exited, bail out with its log.
         if proc is not None and proc.poll() is not None:
-            if proc.returncode == DAEMON_ALREADY_RUNNING_EXIT_CODE:
-                proc = None
-                continue
-            log = _read_daemon_log()
-            msg = "Daemon process exited before it became ready."
-            if log:
-                msg += f"\n\nDaemon log:\n{log}"
-            raise DaemonStartError(msg, log=log)
+            if proc.returncode != DAEMON_ALREADY_RUNNING_EXIT_CODE:
+                raise _daemon_start_error("Daemon process exited before it became ready.")
+            proc = None
+            deferred = True
+            continue
+        if deferred:
+            # The daemon holding the lock writes its PID file right after
+            # taking it. Take it for gone only on two misses in a row: a
+            # single check can fall between those two steps.
+            holder = _read_daemon_pid()
+            holder_alive = holder is not None and _pid_alive(holder)
+            if holder_missing and not holder_alive:
+                raise _daemon_start_error("Daemon process exited before it became ready.")
+            holder_missing = not holder_alive
 
         time.sleep(0.2)
 
     # Timeout — also include log for diagnostics.
+    raise _daemon_start_error("Daemon did not start in time.")
+
+
+def _daemon_start_error(message: str) -> DaemonStartError:
+    """Build the error for a daemon that failed to start, with its log."""
     log = _read_daemon_log()
-    msg = "Daemon did not start in time."
     if log:
-        msg += f"\n\nDaemon log:\n{log}"
-    raise DaemonStartError(msg, log=log)
+        message += f"\n\nDaemon log:\n{log}"
+    return DaemonStartError(message, log=log)
 
 
 def _needs_restart(resp: HandshakeResponse) -> bool:
