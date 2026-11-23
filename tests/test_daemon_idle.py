@@ -31,6 +31,7 @@ from cocoindex_code._version import __version__
 from cocoindex_code.daemon import IdleReaper
 from cocoindex_code.protocol import (
     HandshakeRequest,
+    HandshakeResponse,
     IndexProgressUpdate,
     IndexRequest,
     IndexResponse,
@@ -340,5 +341,45 @@ def test_daemon_does_not_exit_during_index_run(idle_env: Path) -> None:
         thread.join(timeout=30)
         assert not thread.is_alive(), "daemon did not idle-exit after the index run"
         _assert_cleaned_up(sock_path)
+    finally:
+        _stop_daemon_thread(thread, sock_path)
+
+
+@pytest.mark.parametrize(
+    ("installed", "supervised"),
+    [(False, False), (False, True), (True, False)],
+)
+def test_handshake_reports_missing_local_embeddings(
+    idle_env: Path, monkeypatch: pytest.MonkeyPatch, installed: bool, supervised: bool
+) -> None:
+    """A daemon set to sentence-transformers says in its handshake whether it can
+    import the package, and its warning names the fix for how it was started.
+    """
+    save_user_settings(make_test_user_settings())  # provider: sentence-transformers
+    monkeypatch.setattr(dm, "is_sentence_transformers_installed", lambda: installed)
+    if supervised:
+        monkeypatch.setenv("COCOINDEX_CODE_DAEMON_SUPERVISED", "1")
+    else:
+        monkeypatch.delenv("COCOINDEX_CODE_DAEMON_SUPERVISED", raising=False)
+
+    thread, sock_path = _start_daemon_thread(idle_timeout_s=60, idle_check_interval_s=60)
+    try:
+        conn = Client(sock_path, family=connection_family())
+        conn.send_bytes(encode_request(HandshakeRequest(version=__version__)))
+        resp = decode_response(conn.recv_bytes())
+        conn.close()
+
+        assert isinstance(resp, HandshakeResponse)
+        assert resp.missing_local_embeddings is not installed
+        st_warnings = [w for w in resp.warnings if "sentence-transformers" in w]
+        if installed:
+            assert st_warnings == []
+        elif supervised:
+            assert len(st_warnings) == 1
+            assert "cocoindex/cocoindex-code:full" in st_warnings[0]
+            assert "ccc daemon restart" not in st_warnings[0]
+        else:
+            assert len(st_warnings) == 1
+            assert "ccc daemon restart" in st_warnings[0]
     finally:
         _stop_daemon_thread(thread, sock_path)
