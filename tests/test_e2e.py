@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -454,9 +456,55 @@ def test_session_search_and_status_report_daemon_errors(e2e_project: Path) -> No
     assert payload["offset"] == 5
     assert payload["message"].startswith("Daemon error: Error loading")
 
+    # A failed --refresh step ends the search before it starts.
+    result = runner.invoke(app, ["search", "fibonacci", "--refresh"], catch_exceptions=False)
+    assert result.exit_code == 1, result.output
+    assert "Indexing failed: Daemon error: Error loading" in result.stderr
+
+    result = runner.invoke(
+        app,
+        ["search", "fibonacci", "--refresh", "--json", "--offset", "5"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stdout)
+    assert payload["success"] is False
+    assert payload["offset"] == 5
+    assert payload["message"].startswith("Indexing failed: Daemon error: Error loading")
+
     result = runner.invoke(app, ["status"], catch_exceptions=False)
     assert result.exit_code == 1, result.output
     assert "Failed to get project status: Daemon error: Error loading" in result.stderr
+
+
+def test_session_search_json_reports_daemon_start_failure(
+    e2e_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`search --json` reports a daemon that cannot start as JSON on stdout,
+    with or without `--refresh`."""
+    save_project_settings(e2e_project, default_project_settings())
+
+    def start_daemon_that_exits() -> subprocess.Popen[bytes]:
+        # Exits before it creates the socket, like a daemon that fails on startup.
+        return subprocess.Popen([sys.executable, "-c", "raise SystemExit(1)"])
+
+    monkeypatch.setattr("cocoindex_code.client.start_daemon", start_daemon_that_exits)
+
+    result = runner.invoke(app, ["search", "fibonacci"], catch_exceptions=False)
+    assert result.exit_code == 1, result.output
+    assert "Error: Daemon process exited before it became ready." in result.stderr
+
+    for refresh in ([], ["--refresh"]):
+        result = runner.invoke(
+            app,
+            ["search", "fibonacci", *refresh, "--json", "--offset", "5"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.stdout)
+        assert payload["success"] is False
+        assert payload["offset"] == 5
+        assert payload["message"].startswith("Daemon process exited before it became ready.")
 
 
 def test_session_subdirectory_path_default(e2e_project: Path) -> None:
