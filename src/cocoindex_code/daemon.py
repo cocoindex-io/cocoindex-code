@@ -81,7 +81,13 @@ from .settings import (
     target_sqlite_db_path,
     user_settings_path,
 )
-from .shared import Embedder, check_embedding, configure_mps_environment, create_embedder
+from .shared import (
+    Embedder,
+    check_embedding,
+    configure_mps_environment,
+    create_embedder,
+    is_sentence_transformers_installed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +295,7 @@ async def handle_connection(
     settings_env_names: list[str],
     handshake_warnings: list[str],
     reaper: IdleReaper,
+    missing_local_embeddings: bool,
 ) -> None:
     """Handle a single client connection (per-request model).
 
@@ -316,6 +323,7 @@ async def handle_connection(
                     pid=os.getpid(),
                     global_settings_mtime_us=settings_mtime_us,
                     warnings=list(handshake_warnings),
+                    missing_local_embeddings=missing_local_embeddings,
                 )
             )
         )
@@ -740,10 +748,28 @@ def run_daemon(
     query_params: dict[str, Any] = {}
     clear_mps_cache_after_index = False
     handshake_warnings: list[str] = []
+    missing_local_embeddings = False
+    supervised = os.environ.get("COCOINDEX_CODE_DAEMON_SUPERVISED") == "1"
     daemon_settings = DaemonSettings()
     if user_settings_path().is_file():
         user_settings = load_user_settings()
         daemon_settings = user_settings.daemon
+        missing_local_embeddings = (
+            user_settings.embedding.provider == "sentence-transformers"
+            and not is_sentence_transformers_installed()
+        )
+        if missing_local_embeddings:
+            if supervised:
+                fix = (
+                    "Install `cocoindex-code[full]` where your supervisor runs the "
+                    "daemon (for Docker, use the `cocoindex/cocoindex-code:full` image)."
+                )
+            else:
+                fix = (
+                    "Install `cocoindex-code[full]` in the environment you use for ccc, "
+                    "then run `ccc daemon restart` from that environment."
+                )
+            handshake_warnings.append(f"The daemon is missing sentence-transformers. {fix}")
         settings_env_keys = list(user_settings.envs.keys())
         for key, value in user_settings.envs.items():
             os.environ[key] = value
@@ -808,7 +834,7 @@ def run_daemon(
             if idle_timeout is not None
             else timedelta(minutes=daemon_settings.idle_timeout_minutes)
         ),
-        supervised=os.environ.get("COCOINDEX_CODE_DAEMON_SUPERVISED") == "1",
+        supervised=supervised,
     )
 
     shutdown_reason: str | None = None
@@ -836,6 +862,7 @@ def run_daemon(
                 settings_env_keys,
                 handshake_warnings,
                 reaper,
+                missing_local_embeddings=missing_local_embeddings,
             )
         )
         tasks.add(task)

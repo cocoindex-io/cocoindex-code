@@ -98,6 +98,8 @@ class HandshakeResponse(_msgspec.Struct, tag="handshake"):
     # Non-fatal daemon-side warnings surfaced to the client on every handshake.
     # The client dedupes and prints them to stderr (see client._print_handshake_warnings).
     warnings: list[str] = []
+    # True when the daemon selected local embeddings but lacks the dependency.
+    missing_local_embeddings: bool = False
 
 
 class IndexResponse(_msgspec.Struct, tag="index"):
