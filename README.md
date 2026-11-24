@@ -295,6 +295,7 @@ The background daemon starts automatically on first use.
 | `ccc search <query>` | Semantic search across the codebase |
 | `ccc grep <pattern> [path]` | Structural code search by example (no index needed) |
 | `ccc status` | Show index stats (chunk count, file count, language breakdown) |
+| `ccc duplicates` | Group similar chunks from the existing index |
 | `ccc mcp` | Run as MCP server in stdio mode |
 | `ccc doctor` | Run diagnostics — checks settings, daemon, model, file matching, and index health |
 | `ccc reset` | Delete index databases. `--all` also removes settings. `-f` skips confirmation. |
@@ -314,6 +315,27 @@ ccc search --refresh database schema                 # update index first, then 
 ```
 
 By default, `ccc search` scopes results to your current working directory (relative to the project root). Use `--path` to override.
+
+### Find similar code across a repository
+
+Build the index with `ccc index` before running `ccc duplicates`.
+
+```bash
+ccc duplicates                                          # whole index, default threshold 0.95
+ccc duplicates --lang python --path 'src/*'             # filter by language and path
+ccc duplicates --threshold 0.98 --min-lines 10 --json   # near-identical chunks of 10+ lines
+```
+
+The command reads stored embeddings without running the model or refreshing
+the index. Each group is connected by pairs that score at or above
+`--threshold` (default 0.95). Two chunks in the same group can be connected
+through a third chunk even if their own score is below the threshold, so a
+lower threshold can merge many loosely related chunks into one large group.
+Chunks of the same file whose line ranges overlap never match each other,
+because the indexer overlaps neighboring chunks. Treat similarity groups as
+candidates for manual review. The exact comparison takes quadratic time in
+the number of selected chunks, so use file and language filters on large
+indexes.
 
 ### Structural Search (`ccc grep`)
 
