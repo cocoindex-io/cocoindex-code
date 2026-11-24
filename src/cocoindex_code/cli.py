@@ -1144,13 +1144,14 @@ def daemon_restart() -> None:
 def daemon_stop() -> None:
     """Stop the daemon."""
     from ._daemon_paths import daemon_pid_path
-    from .client import is_daemon_running, stop_daemon
+    from .client import _pid_file_names, _read_daemon_pid, is_daemon_running, stop_daemon
 
     pid_path = daemon_pid_path()
     if not pid_path.exists() and not is_daemon_running():
         _typer.echo("Daemon is not running.")
         return
 
+    pid = _read_daemon_pid()
     stop_daemon()
 
     # Wait for process to exit (check both pid file and socket)
@@ -1158,11 +1159,11 @@ def daemon_stop() -> None:
 
     deadline = time.monotonic() + 5.0
     while time.monotonic() < deadline:
-        if not pid_path.exists() and not is_daemon_running():
+        if not _pid_file_names(pid) and not is_daemon_running():
             break
         time.sleep(0.1)
 
-    if pid_path.exists() or is_daemon_running():
+    if _pid_file_names(pid) or is_daemon_running():
         _typer.echo("Warning: daemon may not have stopped cleanly.", err=True)
     else:
         _typer.echo("Daemon stopped.")

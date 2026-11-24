@@ -464,7 +464,7 @@ def test_client_restarts_daemon_silently_after_graceful_exit(
         conn.recv_bytes()
     finally:
         conn.close()
-    assert client._wait_for_daemon_exit(timeout=10.0), "daemon did not exit"
+    assert client._wait_for_daemon_exit(timeout=10.0, pid=daemon_pid), "daemon did not exit"
 
     # The graceful exit left a marker with the stopped daemon's pid and reason.
     marker = read_last_exit_marker()

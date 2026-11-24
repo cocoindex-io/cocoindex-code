@@ -657,20 +657,31 @@ def _read_daemon_pid() -> int | None:
         return None
 
 
-def _wait_for_daemon_exit(timeout: float) -> bool:
-    """Wait up to *timeout* seconds for the daemon to finish cleanup.
+def _pid_file_names(pid: int | None) -> bool:
+    """Whether the daemon's PID file still names *pid* (with None, whether it exists).
 
-    Returns True when the daemon's PID file is gone (meaning it completed its
-    shutdown sequence).  This is more reliable than checking process liveness
-    because the daemon process may linger as a zombie.
+    A file naming another process belongs to a replacement daemon, which
+    writes its PID file as soon as it takes the lock the stopped daemon let go of.
     """
-    pid_path = daemon_pid_path()
+    if not daemon_pid_path().exists():
+        return False
+    return pid is None or _read_daemon_pid() in (None, pid)
+
+
+def _wait_for_daemon_exit(timeout: float, pid: int | None) -> bool:
+    """Wait up to *timeout* seconds for the daemon *pid* to finish cleanup.
+
+    Returns True once the PID file no longer names it: the daemon removes the
+    file at the end of its shutdown sequence, or a replacement has taken it
+    over. This is more reliable than checking process liveness because the
+    daemon process may linger as a zombie.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not pid_path.exists():
+        if not _pid_file_names(pid):
             return True
         time.sleep(0.1)
-    return not pid_path.exists()
+    return not _pid_file_names(pid)
 
 
 def stop_daemon() -> None:
@@ -706,7 +717,7 @@ def stop_daemon() -> None:
         # because the daemon speaks a different protocol (issue #237).
         pass
 
-    if _wait_for_daemon_exit(timeout=3.0):
+    if _wait_for_daemon_exit(timeout=3.0, pid=pid):
         return
 
     # 2) SIGTERM
@@ -715,7 +726,7 @@ def stop_daemon() -> None:
             os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError):
             pass
-        if _wait_for_daemon_exit(timeout=2.0):
+        if _wait_for_daemon_exit(timeout=2.0, pid=pid):
             return
 
     # 3) SIGKILL (Unix) — on Windows SIGTERM already calls TerminateProcess
@@ -737,12 +748,8 @@ def _cleanup_stale_files(
     """
     unlink_socket_if_owned(daemon_socket_path(), sock_identity)
     if pid is not None:
-        try:
-            stored = pid_path.read_text().strip()
-            if stored == str(pid):
-                pid_path.unlink(missing_ok=True)
-        except (FileNotFoundError, ValueError):
-            pass
+        if _read_daemon_pid() == pid:
+            pid_path.unlink(missing_ok=True)
     else:
         try:
             pid_path.unlink(missing_ok=True)
