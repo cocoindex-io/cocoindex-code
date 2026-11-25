@@ -6,6 +6,7 @@ Uses a stub embedder that records kwargs on each call, wired up via a minimal
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -104,3 +105,44 @@ async def test_search_rejects_nan_query_vector(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="NaN"):
         await project.search(query="foo", paths=["*.py"])
+
+
+class _NaNChunkEmbedder(StubEmbedder):  # type: ignore[misc]
+    """Returns a NaN vector for chunks that mention "broken", as a broken model might."""
+
+    async def embed(self, text: str, **kwargs: Any) -> np.ndarray:
+        vector: np.ndarray = await super().embed(text, **kwargs)
+        if "broken" in text:
+            vector[0] = np.nan
+        return vector
+
+
+@pytest.mark.asyncio
+async def test_index_leaves_out_chunks_with_nan_vectors(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A NaN vector in the index has no usable distance: a plain search's KNN
+    plan returns it with a NULL distance, and the search fails (#270)."""
+    project_root = tmp_path / "proj"
+    project_root.mkdir()
+    save_project_settings(
+        project_root,
+        ProjectSettings(include_patterns=["**/*.py", "**/*.rs"], exclude_patterns=[]),
+    )
+    (project_root / "a.py").write_text("def foo():\n    return 1\n")
+    # Alone in its language partition, as in the report on #327.
+    (project_root / "b.rs").write_text("fn broken() {}\n")
+
+    project = await Project.create(
+        project_root,
+        _NaNChunkEmbedder(),
+        indexing_params={"prompt_name": "passage"},
+        query_params={"prompt_name": "query"},
+    )
+    with caplog.at_level(logging.WARNING, logger="cocoindex_code.indexer"):
+        await project.run_index()
+
+    results = await project.search(query="foo")
+    assert [r.file_path for r in results] == ["a.py"]
+    assert project.get_status().total_chunks == 1
+    assert "Not indexing b.rs" in caplog.text

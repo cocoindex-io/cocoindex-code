@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 
 import cocoindex as coco
+import numpy as np
 from cocoindex.connectors import localfs, sqlite
 from cocoindex.connectors.sqlite import Vec0TableDef
 from cocoindex.ops.text import RecursiveSplitter, detect_code_language
@@ -22,6 +24,8 @@ from .shared import (
     SQLITE_DB,
     CodeChunk,
 )
+
+logger = logging.getLogger(__name__)
 
 # Chunking configuration
 CHUNK_SIZE = 1000
@@ -77,17 +81,33 @@ async def process_file(
         )
 
     id_gen = IdGenerator()
+    file_path = file.file_path.path.as_posix()
 
     async def process(chunk: Chunk) -> None:
+        chunk_id = await id_gen.next_id(chunk.text)
+        embedding = await embedder.embed(chunk.text, **indexing_params)
+        # A vector with a NaN or infinite component has no usable distance.
+        # SQLite returns a NaN distance as NULL, and with such a row in the
+        # index, sqlite-vec's KNN search can return it or drop real matches
+        # from the top k (#270). Leave the chunk out instead.
+        if not np.isfinite(embedding).all():
+            logger.warning(
+                "Not indexing %s:%d-%d: the embedding model returned NaN or "
+                "infinite values for this chunk.",
+                file_path,
+                chunk.start.line,
+                chunk.end.line,
+            )
+            return
         table.declare_row(
             row=CodeChunk(
-                id=await id_gen.next_id(chunk.text),
-                file_path=file.file_path.path.as_posix(),
+                id=chunk_id,
+                file_path=file_path,
                 language=language,
                 content=chunk.text,
                 start_line=chunk.start.line,
                 end_line=chunk.end.line,
-                embedding=await embedder.embed(chunk.text, **indexing_params),
+                embedding=embedding,
             )
         )
 
