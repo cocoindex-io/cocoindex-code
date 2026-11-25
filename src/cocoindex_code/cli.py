@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     )
 
 from ._version import __version__
-from .protocol import SearchResponse
+from .protocol import IndexResponse, SearchResponse
 from .settings import (
     DEFAULT_ST_MODEL,
     EmbeddingSettings,
@@ -241,8 +241,18 @@ def print_search_results(response: SearchResponse) -> None:
         _echo_search_text(r.content)
 
 
-def _run_index_with_progress(project_root: str) -> None:
-    """Run indexing with streaming progress display. Exits on failure."""
+def _print_search_json(response: SearchResponse) -> None:
+    """Print *response* to stdout as one line of JSON (``ccc search --json``)."""
+    sys.stdout.buffer.write(_msgspec.json.encode(response))
+    sys.stdout.buffer.write(b"\n")
+    sys.stdout.buffer.flush()
+
+
+def _run_index_with_progress(project_root: str) -> IndexResponse:
+    """Run indexing with streaming progress display.
+
+    A failed request comes back as an unsuccessful ``IndexResponse`` carrying the error.
+    """
     from rich.console import Console as _Console
     from rich.live import Live as _Live
     from rich.spinner import Spinner as _Spinner
@@ -270,20 +280,16 @@ def _run_index_with_progress(project_root: str) -> None:
         try:
             resp = _client.index(project_root, on_progress=_on_progress, on_waiting=_on_waiting)
         except RuntimeError as e:
-            live.stop()
             # Let DaemonStartError propagate to the decorator for consistent handling.
             if isinstance(e, _client.DaemonStartError):
                 raise
-            _typer.echo(f"Indexing failed: {e}", err=True)
-            raise _typer.Exit(code=1)
+            return IndexResponse(success=False, message=str(e))
 
     # Print the final progress line so it remains visible after the spinner clears
     if last_progress_line is not None:
         _typer.echo(last_progress_line, err=True)
 
-    if not resp.success:
-        _typer.echo(f"Indexing failed: {resp.message}", err=True)
-        raise _typer.Exit(code=1)
+    return resp
 
 
 def _fetch_project_status(project_root: str) -> ProjectStatusResponse:
@@ -692,7 +698,10 @@ def index() -> None:
     """Create/update index for the codebase."""
     project_root = str(require_project_root(auto_init=True))
     print_project_header(project_root)
-    _run_index_with_progress(project_root)
+    resp = _run_index_with_progress(project_root)
+    if not resp.success:
+        _typer.echo(f"Indexing failed: {resp.message}", err=True)
+        raise _typer.Exit(code=1)
     print_index_stats(_fetch_project_status(project_root))
 
 
@@ -708,11 +717,10 @@ def search(
     json_output: bool = _typer.Option(False, "--json", help="Output results as JSON"),
 ) -> None:
     """Semantic search across the codebase."""
+    from .client import DaemonStartError
+
     project_root = str(require_project_root())
     query_str = " ".join(query)
-
-    if refresh:
-        _run_index_with_progress(project_root)
 
     # Default path filter from CWD
     paths: list[str] | None = None
@@ -723,18 +731,35 @@ def search(
         if default is not None:
             paths = [default]
 
-    resp = _search_with_wait_spinner(
-        project_root=project_root,
-        query=query_str,
-        languages=lang or None,
-        paths=paths,
-        limit=limit,
-        offset=offset,
-    )
+    try:
+        if refresh:
+            index_resp = _run_index_with_progress(project_root)
+            if not index_resp.success:
+                message = f"Indexing failed: {index_resp.message}"
+                if json_output:
+                    _print_search_json(
+                        SearchResponse(success=False, offset=offset, message=message)
+                    )
+                else:
+                    _typer.echo(message, err=True)
+                raise _typer.Exit(code=1)
+
+        resp = _search_with_wait_spinner(
+            project_root=project_root,
+            query=query_str,
+            languages=lang or None,
+            paths=paths,
+            limit=limit,
+            offset=offset,
+        )
+    except DaemonStartError as e:
+        # Without --json, the decorator reports it on stderr.
+        if not json_output:
+            raise
+        resp = SearchResponse(success=False, offset=offset, message=str(e))
+
     if json_output:
-        sys.stdout.buffer.write(_msgspec.json.encode(resp))
-        sys.stdout.buffer.write(b"\n")
-        sys.stdout.buffer.flush()
+        _print_search_json(resp)
     else:
         print_search_results(resp)
     if not resp.success:
