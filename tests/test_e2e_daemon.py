@@ -9,17 +9,29 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import sys
 import tempfile
+import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from conftest import make_test_user_settings
+from typer.testing import CliRunner
 
 from cocoindex_code import client
+from cocoindex_code._daemon_paths import (
+    DAEMON_ALREADY_RUNNING_EXIT_CODE,
+    daemon_lock_path,
+    daemon_pid_path,
+    daemon_runtime_dir,
+)
 from cocoindex_code._version import __version__
+from cocoindex_code.cli import app
 from cocoindex_code.client import start_daemon, stop_daemon
 from cocoindex_code.daemon import daemon_socket_path
 from cocoindex_code.settings import (
@@ -177,6 +189,238 @@ def test_daemon_starts_in_no_settings_mode_without_global_settings() -> None:
             os.environ["COCOINDEX_CODE_DIR"] = old_env
 
 
+# ---------------------------------------------------------------------------
+# One daemon per runtime dir
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def started_daemons(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[subprocess.Popen[bytes]]]:
+    """A fresh, cold daemon dir (no global settings, so no model to load), and
+    the daemon processes the client starts there, which teardown kills if
+    they are still running.
+    """
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", tempfile.mkdtemp(prefix="ccc_start_"))
+    monkeypatch.delenv("COCOINDEX_CODE_DAEMON_SUPERVISED", raising=False)
+    monkeypatch.setattr(client, "_daemon_ensured", False)
+    monkeypatch.setattr(client, "_ensured_daemon_pid", None)
+    monkeypatch.setattr(client, "_consecutive_crash_restarts", 0)
+
+    procs: list[subprocess.Popen[bytes]] = []
+
+    def recording_start_daemon() -> subprocess.Popen[bytes]:
+        proc: subprocess.Popen[bytes] = start_daemon()
+        procs.append(proc)
+        return proc
+
+    monkeypatch.setattr(client, "start_daemon", recording_start_daemon)
+    try:
+        yield procs
+    finally:
+        stop_daemon()
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=10)
+
+
+def _serving_daemon_pid() -> int:
+    """The pid of the daemon that answers on the socket path."""
+    result = client._raw_connect_and_handshake()
+    result.conn.close()
+    return int(result.resp.pid)
+
+
+def test_concurrent_cold_starts_leave_one_daemon(
+    started_daemons: list[subprocess.Popen[bytes]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two clients that find no daemon at the same moment (the background
+    index and the first search of a fresh `ccc mcp` session) both start one.
+    One of the two must exit at once, and both clients reach the other.
+    Before, the later one bound the socket path over the earlier, which kept
+    running unreachable, out of `ccc daemon stop`'s reach, until its idle
+    timeout.
+    """
+    both_starting = threading.Barrier(2, timeout=30)
+    recording_start_daemon: Callable[[], subprocess.Popen[bytes]] = client.start_daemon
+
+    def start_daemon_together() -> subprocess.Popen[bytes]:
+        both_starting.wait()  # neither client found a daemon
+        return recording_start_daemon()
+
+    monkeypatch.setattr(client, "start_daemon", start_daemon_together)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = list(pool.map(lambda _: client.daemon_status(), range(2)))
+    assert [s.version for s in statuses] == [__version__, __version__]
+
+    assert len(started_daemons) == 2
+    if sys.platform == "win32":
+        # Windows has no zombies, so the client leaves the losing process
+        # alone; give it time to exit.
+        deadline = time.monotonic() + 15
+        while all(p.poll() is None for p in started_daemons) and time.monotonic() < deadline:
+            time.sleep(0.1)
+    # On POSIX the client whose daemon lost has already reaped it.
+    exit_codes = [p.returncode for p in started_daemons]
+    assert sorted(exit_codes, key=lambda code: code is None) == [
+        DAEMON_ALREADY_RUNNING_EXIT_CODE,
+        None,
+    ], f"expected one daemon left running and one exited at once, got {exit_codes}"
+    (serving,) = [p for p in started_daemons if p.returncode is None]
+    assert serving.poll() is None
+    assert daemon_pid_path().read_text().strip() == str(_serving_daemon_pid())
+
+
+def test_crashed_daemon_leftovers_do_not_block_the_next_start(
+    started_daemons: list[subprocess.Popen[bytes]],
+) -> None:
+    """A killed daemon leaves its lock file behind, and on POSIX its socket
+    file too. The OS released the lock with the process, so the next client
+    starts a daemon, which takes over the stale socket path.
+    """
+    client.daemon_status()
+    crashed_pid = _serving_daemon_pid()
+    if sys.platform == "win32":
+        # No SIGKILL on Windows; os.kill calls TerminateProcess, as abrupt.
+        os.kill(crashed_pid, signal.SIGTERM)
+    else:
+        os.kill(crashed_pid, signal.SIGKILL)
+    started_daemons[0].wait(timeout=10)
+    assert daemon_lock_path().exists()
+    if sys.platform != "win32":
+        assert os.path.exists(daemon_socket_path()), "the crash left no socket file"
+
+    # The next `ccc` command is a fresh client.
+    client._daemon_ensured = False
+    client.daemon_status()
+
+    assert len(started_daemons) == 2
+    assert started_daemons[1].poll() is None
+    assert _serving_daemon_pid() != crashed_pid
+
+
+# A daemon whose startup hangs once it holds the runtime dir, as when a model
+# download hangs: its settings load writes the daemon's pid to the file named
+# by argv[1], then waits for the file named by argv[2] to appear, and fails.
+_STALLED_DAEMON = """\
+import os
+import sys
+import time
+from pathlib import Path
+
+import cocoindex_code.daemon as dm
+
+stalled, release = Path(sys.argv[1]), Path(sys.argv[2])
+
+
+def load_user_settings():
+    stalled.write_text(str(os.getpid()))
+    while not release.exists():
+        time.sleep(0.05)
+    raise RuntimeError("loading the settings failed")
+
+
+dm.load_user_settings = load_user_settings
+dm.run_daemon()
+"""
+
+
+class _StalledDaemon(NamedTuple):
+    proc: subprocess.Popen[bytes]
+    pid: int  # the daemon's own pid; on Windows, proc is a launcher
+    release: Path  # creating this file makes the daemon's startup fail
+
+
+@pytest.fixture()
+def stalled_daemon(started_daemons: list[subprocess.Popen[bytes]]) -> Iterator[_StalledDaemon]:
+    """A daemon that holds the runtime dir but is stuck loading its settings."""
+    save_user_settings(make_test_user_settings())  # so that it loads them
+    stalled = daemon_runtime_dir() / "stalled"
+    release = daemon_runtime_dir() / "release"
+    proc = subprocess.Popen([sys.executable, "-c", _STALLED_DAEMON, str(stalled), str(release)])
+    try:
+        deadline = time.monotonic() + 30
+        while not (stalled.exists() and stalled.read_text()):
+            assert proc.poll() is None, "the daemon exited before loading its settings"
+            assert time.monotonic() < deadline, "the daemon never got to its settings"
+            time.sleep(0.05)
+        yield _StalledDaemon(proc, int(stalled.read_text()), release)
+    finally:
+        release.touch()  # a daemon still stalled fails and exits
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=10)
+
+
+def test_stop_reaches_a_daemon_that_is_still_starting(stalled_daemon: _StalledDaemon) -> None:
+    """A daemon still loading its settings and model has no socket yet, and
+    every daemon started meanwhile exits in its favor. Its PID file is there
+    from the moment it holds the runtime dir, so `ccc daemon stop` (and with
+    it `ccc daemon restart`) reaches it. Before, stop said "Daemon is not
+    running." and left it running.
+    """
+    pid_path = daemon_pid_path()
+    assert pid_path.is_file(), "a daemon still starting has no PID file"
+    assert pid_path.read_text().strip() == str(stalled_daemon.pid)
+    assert not client.is_daemon_running()
+
+    result = CliRunner().invoke(app, ["daemon", "stop"], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert "Daemon stopped." in result.output
+    stalled_daemon.proc.wait(timeout=10)
+    assert not pid_path.exists()
+
+
+@pytest.mark.parametrize("ending", ["fails", "is killed"])
+def test_client_stops_waiting_once_the_daemon_it_deferred_to_is_gone(
+    started_daemons: list[subprocess.Popen[bytes]],
+    stalled_daemon: _StalledDaemon,
+    ending: str,
+) -> None:
+    """A client whose daemon exited in favor of one still starting waits for
+    that one. Once it is gone without having brought its socket up, the
+    client reports the failed start right away, where before it waited out
+    its 30 s timeout and said the daemon "did not start in time".
+    """
+    errors: list[Exception] = []
+
+    def daemon_status() -> None:
+        try:
+            client.daemon_status()
+        except Exception as e:
+            errors.append(e)
+
+    waiter = threading.Thread(target=daemon_status, daemon=True)
+    waiter.start()
+    deadline = time.monotonic() + 30
+    while not started_daemons or started_daemons[0].poll() is None:
+        assert time.monotonic() < deadline, "the client's own daemon did not exit"
+        time.sleep(0.05)
+    assert started_daemons[0].returncode == DAEMON_ALREADY_RUNNING_EXIT_CODE
+    time.sleep(1)
+    assert waiter.is_alive(), "the client gave up on a daemon that is still starting"
+
+    if ending == "fails":
+        stalled_daemon.release.touch()
+    elif sys.platform == "win32":
+        # No SIGKILL on Windows; os.kill calls TerminateProcess, as abrupt.
+        os.kill(stalled_daemon.pid, signal.SIGTERM)
+    else:
+        os.kill(stalled_daemon.pid, signal.SIGKILL)
+    # Reap it: a zombie would still count as a live process.
+    stalled_daemon.proc.wait(timeout=10)
+    waiter.join(timeout=10)
+
+    assert not waiter.is_alive(), "the client still waits for a daemon that is gone"
+    (error,) = errors
+    assert isinstance(error, client.DaemonStartError)
+    assert "Daemon process exited before it became ready." in str(error)
+
+
 def test_daemon_env_response_includes_host_path_mappings(
     e2e_daemon: tuple[str, Path],
 ) -> None:
@@ -220,7 +464,7 @@ def test_client_restarts_daemon_silently_after_graceful_exit(
         conn.recv_bytes()
     finally:
         conn.close()
-    assert client._wait_for_daemon_exit(timeout=10.0), "daemon did not exit"
+    assert client._wait_for_daemon_exit(timeout=10.0, pid=daemon_pid), "daemon did not exit"
 
     # The graceful exit left a marker with the stopped daemon's pid and reason.
     marker = read_last_exit_marker()

@@ -21,6 +21,7 @@ from typing import NamedTuple
 import msgspec
 
 from ._daemon_paths import (
+    DAEMON_ALREADY_RUNNING_EXIT_CODE,
     SocketIdentity,
     connection_family,
     daemon_log_path,
@@ -184,13 +185,7 @@ def _connect_and_handshake() -> Connection:
         if _daemon_ensured:
             _handle_vanished_daemon()
 
-    if _is_daemon_supervised():
-        # Supervisor is responsible for (re)starting the daemon — just wait
-        # for the socket to reappear.
-        _wait_for_daemon()
-    else:
-        proc = start_daemon()
-        _wait_for_daemon(proc=proc)
+    started = bring_up_daemon()
 
     # Verify the fresh daemon is reachable
     for _attempt in range(10):
@@ -198,6 +193,8 @@ def _connect_and_handshake() -> Connection:
             result = _raw_connect_and_handshake()
             _daemon_ensured = True
             _ensured_daemon_pid = result.resp.pid
+            if started is not None:
+                _reap_unless_daemon(started, result.resp.pid)
             return result.conn
         except (ConnectionRefusedError, OSError):
             time.sleep(0.5)
@@ -552,6 +549,38 @@ def is_daemon_running() -> bool:
     return os.path.exists(daemon_socket_path())
 
 
+def bring_up_daemon() -> subprocess.Popen[bytes] | None:
+    """Start a daemon and wait for its socket. Returns the process started.
+
+    Under an external supervisor only wait, and return None: the supervisor
+    starts the daemon, and a daemon started here as well would race the
+    supervisor's.
+    """
+    if _is_daemon_supervised():
+        _wait_for_daemon()
+        return None
+    proc = start_daemon()
+    _wait_for_daemon(proc=proc)
+    return proc
+
+
+def _reap_unless_daemon(proc: subprocess.Popen[bytes], daemon_pid: int | None) -> None:
+    """Wait for *proc*, a daemon this client started, unless it is the one
+    that answered (pid *daemon_pid*): then it lost the start to that one and is
+    exiting. Unreaped, it would stay a zombie of a long-lived client (the MCP
+    server) until that client starts another process.
+
+    POSIX only: Windows has no zombies, and there *proc* is a launcher
+    (``ccc.exe``, or a venv's ``python.exe``) whose pid is not the daemon's.
+    """
+    if sys.platform == "win32" or daemon_pid in (None, proc.pid):
+        return
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass  # still running after all; leave it to subprocess
+
+
 def start_daemon() -> subprocess.Popen[bytes]:
     """Start the daemon as a background process.
 
@@ -620,20 +649,39 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
-def _wait_for_daemon_exit(timeout: float) -> bool:
-    """Wait up to *timeout* seconds for the daemon to finish cleanup.
+def _read_daemon_pid() -> int | None:
+    """Return the pid in the daemon's PID file, or None when there is none."""
+    try:
+        return int(daemon_pid_path().read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return None
 
-    Returns True when the daemon's PID file is gone (meaning it completed its
-    shutdown sequence).  This is more reliable than checking process liveness
-    because the daemon process may linger as a zombie.
+
+def _pid_file_names(pid: int | None) -> bool:
+    """Whether the daemon's PID file still names *pid* (with None, whether it exists).
+
+    A file naming another process belongs to a replacement daemon, which
+    writes its PID file as soon as it takes the lock the stopped daemon let go of.
     """
-    pid_path = daemon_pid_path()
+    if not daemon_pid_path().exists():
+        return False
+    return pid is None or _read_daemon_pid() in (None, pid)
+
+
+def _wait_for_daemon_exit(timeout: float, pid: int | None) -> bool:
+    """Wait up to *timeout* seconds for the daemon *pid* to finish cleanup.
+
+    Returns True once the PID file no longer names it: the daemon removes the
+    file at the end of its shutdown sequence, or a replacement has taken it
+    over. This is more reliable than checking process liveness because the
+    daemon process may linger as a zombie.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not pid_path.exists():
+        if not _pid_file_names(pid):
             return True
         time.sleep(0.1)
-    return not pid_path.exists()
+    return not _pid_file_names(pid)
 
 
 def stop_daemon() -> None:
@@ -647,13 +695,9 @@ def stop_daemon() -> None:
     _surfaced_warnings.clear()
     pid_path = daemon_pid_path()
 
-    pid: int | None = None
-    try:
-        pid = int(pid_path.read_text().strip())
-        if pid == os.getpid():
-            pid = None
-    except (FileNotFoundError, ValueError):
-        pass
+    pid = _read_daemon_pid()
+    if pid == os.getpid():
+        pid = None
     # The socket file of the daemon being stopped. Cleanup removes only that
     # one, never a replacement daemon's bound there meanwhile (issue #288).
     sock_identity = socket_identity(daemon_socket_path()) if sys.platform != "win32" else None
@@ -673,7 +717,7 @@ def stop_daemon() -> None:
         # because the daemon speaks a different protocol (issue #237).
         pass
 
-    if _wait_for_daemon_exit(timeout=3.0):
+    if _wait_for_daemon_exit(timeout=3.0, pid=pid):
         return
 
     # 2) SIGTERM
@@ -682,7 +726,7 @@ def stop_daemon() -> None:
             os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError):
             pass
-        if _wait_for_daemon_exit(timeout=2.0):
+        if _wait_for_daemon_exit(timeout=2.0, pid=pid):
             return
 
     # 3) SIGKILL (Unix) — on Windows SIGTERM already calls TerminateProcess
@@ -704,12 +748,8 @@ def _cleanup_stale_files(
     """
     unlink_socket_if_owned(daemon_socket_path(), sock_identity)
     if pid is not None:
-        try:
-            stored = pid_path.read_text().strip()
-            if stored == str(pid):
-                pid_path.unlink(missing_ok=True)
-        except (FileNotFoundError, ValueError):
-            pass
+        if _read_daemon_pid() == pid:
+            pid_path.unlink(missing_ok=True)
     else:
         try:
             pid_path.unlink(missing_ok=True)
@@ -727,14 +767,21 @@ def _wait_for_daemon(
     exits before the socket appears, raises ``DaemonStartError`` immediately
     with the daemon log content — no need to wait for the full timeout.
 
-    Socket existence is checked *before* ``proc.poll()`` so that races with a
-    supervisor (e.g. the Docker entrypoint restart loop) don't spuriously raise
-    ``DaemonStartError``: if the supervisor wins the bind and our subprocess
-    exits because the socket is already in use, the socket is still ready — we
-    should return success, not flag a failure.
+    The exception is a process that exits with
+    ``DAEMON_ALREADY_RUNNING_EXIT_CODE``: another daemon, such as one a
+    concurrent client started, holds the runtime dir, so wait for that
+    daemon's socket instead, and raise as soon as the process named in the
+    PID file is gone too. Socket existence is checked *before*
+    ``proc.poll()`` for the same reason: once a daemon's socket is up, it no
+    longer matters how our own process fared.
     """
     deadline = time.monotonic() + timeout
     sock_path = daemon_socket_path()
+    # Whether our process has exited in favor of the daemon holding the
+    # runtime dir, and whether at the last check its PID file named no live
+    # process.
+    deferred = False
+    holder_missing = False
     while time.monotonic() < deadline:
         if sys.platform == "win32":
             try:
@@ -747,23 +794,36 @@ def _wait_for_daemon(
             if os.path.exists(sock_path):
                 return
 
-        # Daemon socket not yet up — if we spawned a subprocess that already
+        # Daemon socket not yet up — if the daemon we wait for has already
         # exited, bail out with its log.
         if proc is not None and proc.poll() is not None:
-            log = _read_daemon_log()
-            msg = "Daemon process exited before it became ready."
-            if log:
-                msg += f"\n\nDaemon log:\n{log}"
-            raise DaemonStartError(msg, log=log)
+            if proc.returncode != DAEMON_ALREADY_RUNNING_EXIT_CODE:
+                raise _daemon_start_error("Daemon process exited before it became ready.")
+            proc = None
+            deferred = True
+            continue
+        if deferred:
+            # The daemon holding the lock writes its PID file right after
+            # taking it. Take it for gone only on two misses in a row: a
+            # single check can fall between those two steps.
+            holder = _read_daemon_pid()
+            holder_alive = holder is not None and _pid_alive(holder)
+            if holder_missing and not holder_alive:
+                raise _daemon_start_error("Daemon process exited before it became ready.")
+            holder_missing = not holder_alive
 
         time.sleep(0.2)
 
     # Timeout — also include log for diagnostics.
+    raise _daemon_start_error("Daemon did not start in time.")
+
+
+def _daemon_start_error(message: str) -> DaemonStartError:
+    """Build the error for a daemon that failed to start, with its log."""
     log = _read_daemon_log()
-    msg = "Daemon did not start in time."
     if log:
-        msg += f"\n\nDaemon log:\n{log}"
-    raise DaemonStartError(msg, log=log)
+        message += f"\n\nDaemon log:\n{log}"
+    return DaemonStartError(message, log=log)
 
 
 def _needs_restart(resp: HandshakeResponse) -> bool:
