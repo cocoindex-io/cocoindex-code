@@ -161,28 +161,6 @@ OMP does **not** execute Claude `hooks/hooks.json` command hooks. The TypeScript
 
 Skill-only (no MCP, no auto-index): install the skill via `npx skills add cocoindex-io/cocoindex-code`, or run `ccc search` / `ccc index` from the shell.
 
-### Compare indexes in one checkout
-
-Set `COCOINDEX_CODE_PROFILE` to use a named profile with its own embedding
-configuration, file filters, databases, and daemon.
-
-```bash
-COCOINDEX_CODE_PROFILE=baseline ccc init
-COCOINDEX_CODE_PROFILE=baseline ccc index
-COCOINDEX_CODE_PROFILE=experiment ccc init
-COCOINDEX_CODE_PROFILE=experiment ccc index
-COCOINDEX_CODE_PROFILE=experiment ccc search "parse configuration"
-```
-
-Each `init` prompts for a model on first use. Edit
-`.cocoindex_code/profiles/profile-<name>/settings.yml` in the checkout to set
-profile-specific file filters. The corresponding global settings live under
-`~/.cocoindex_code/profiles/profile-<name>/global_settings.yml` (or under
-`COCOINDEX_CODE_DIR`). Use the same environment variable for `ccc status`,
-`ccc reset`, or when launching the MCP server. Unset it to use the original
-settings and index. In PowerShell, set it with
-`$env:COCOINDEX_CODE_PROFILE = "experiment"`.
-
 ### MCP Server
 
 <!-- Ownership marker for the official MCP registry. It must match "name" in server.json. Keep the next line. -->
@@ -702,6 +680,31 @@ def my_chunker(path: Path, content: str) -> tuple[str | None, list[Chunk]]:
 - return a `list[Chunk]` with the chunks you want stored in the index
 
 See [`src/cocoindex_code/chunking.py`](./src/cocoindex_code/chunking.py) for the public types and [`tests/example_toml_chunker.py`](./tests/example_toml_chunker.py) for a complete example.
+
+### Compare models and file filters side by side
+
+To compare embedding models on one checkout, give each model its own configuration: `COCOINDEX_CODE_DIR` holds its global settings and daemon, and `COCOINDEX_CODE_DB_PATH_MAPPING` places its index databases. A shell function per configuration keeps them apart:
+
+```bash
+ccc_a() { COCOINDEX_CODE_DIR="$HOME/.ccc-a" COCOINDEX_CODE_DB_PATH_MAPPING="$HOME=$HOME/.ccc-a/db" ccc "$@"; }
+ccc_b() { COCOINDEX_CODE_DIR="$HOME/.ccc-b" COCOINDEX_CODE_DB_PATH_MAPPING="$HOME=$HOME/.ccc-b/db" ccc "$@"; }
+
+ccc_a init && ccc_a index
+ccc_b init && ccc_b index
+ccc_a search "parse configuration"
+ccc_b search "parse configuration"
+```
+
+Each `init` asks for that configuration's model and writes its own `global_settings.yml`, and each configuration runs its own daemon. Both read the project's `.cocoindex_code/settings.yml`, so they index the same files. Run every command through its function: `ccc_b status` shows where B's index is, and `ccc_b reset` deletes only B's databases. The mapping above covers projects under `$HOME`; for a project elsewhere, use a directory above it as the source, such as `/srv/work=$HOME/.ccc-a/db`. Without a matching mapping, both configurations keep their databases in the project's `.cocoindex_code/` and share one index.
+
+To compare file filters, use a second checkout, which has its own settings and index:
+
+```bash
+git worktree add ../repo-filters
+cd ../repo-filters && ccc init
+```
+
+Edit `include_patterns` and `exclude_patterns` in that checkout's `.cocoindex_code/settings.yml`, then run `ccc index` there.
 
 ## Embedding Models
 
