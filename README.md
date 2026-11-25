@@ -703,6 +703,34 @@ def my_chunker(path: Path, content: str) -> tuple[str | None, list[Chunk]]:
 
 See [`src/cocoindex_code/chunking.py`](./src/cocoindex_code/chunking.py) for the public types and [`tests/example_toml_chunker.py`](./tests/example_toml_chunker.py) for a complete example.
 
+### Compare models and file filters side by side
+
+To compare embedding models on one checkout, give each model its own configuration: `COCOINDEX_CODE_DIR` holds its global settings and daemon, and `COCOINDEX_CODE_DB_PATH_MAPPING` places its index databases. A shell function per configuration keeps them apart:
+
+```bash
+ccc_a() { COCOINDEX_CODE_DIR="$HOME/.ccc-a" COCOINDEX_CODE_DB_PATH_MAPPING="$HOME=$HOME/.ccc-a/db" ccc "$@"; }
+ccc_b() { COCOINDEX_CODE_DIR="$HOME/.ccc-b" COCOINDEX_CODE_DB_PATH_MAPPING="$HOME=$HOME/.ccc-b/db" ccc "$@"; }
+
+ccc_a init && ccc_a index
+ccc_b init && ccc_b index
+ccc_a search "parse configuration"
+ccc_b search "parse configuration"
+```
+
+Run these from inside the project: with a custom `COCOINDEX_CODE_DIR`, `ccc index` doesn't refuse to initialize your home directory. The recipe is for a local install: in the Docker image, `ccc` is the `docker exec` wrapper, which forwards only `COCOINDEX_CODE_HOST_CWD`, and the image sets its own `COCOINDEX_CODE_DIR` and database mapping, so both functions would reach the same configuration.
+
+Each `init` asks for that configuration's model and writes its own `global_settings.yml`, and each configuration runs its own daemon. Both read the project's `.cocoindex_code/settings.yml`, so they index the same files. Run every command through its function: `ccc_b status` shows where B's index is, and `ccc_b reset` deletes only B's databases (`ccc_b reset --all` would also delete the shared `settings.yml`). For an MCP server, set both variables in its `env`. The mapping above covers projects under `$HOME`; for a project elsewhere, add an entry for a directory above it with its own target, such as `"$HOME=$HOME/.ccc-a/db,/srv/work=$HOME/.ccc-a/db-srv"` (see [Custom Database Location](#custom-database-location)). The mapping is matched against the project's real path, with symlinks resolved. Without a match, both configurations keep their databases in the project's `.cocoindex_code/`, and each `index` run overwrites the other's index.
+
+To compare file filters, use a second checkout, which has its own settings and index. `ccc init` writes default settings there, so copy the original's settings after it, and both checkouts start from the same chunkers, language overrides and patterns:
+
+```bash
+git worktree add ../repo-filters
+(cd ../repo-filters && ccc init)
+cp .cocoindex_code/settings.yml ../repo-filters/.cocoindex_code/
+```
+
+A worktree has only committed files, so uncommitted work in the original isn't indexed there. Edit `include_patterns` and `exclude_patterns` in that checkout's `.cocoindex_code/settings.yml`, then run `ccc index` there.
+
 ## Embedding Models
 
 With the `[full]` extra installed, `ccc init` defaults to a local SentenceTransformers model ([Snowflake/snowflake-arctic-embed-xs](https://huggingface.co/Snowflake/snowflake-arctic-embed-xs)) — no API key required. To use a different model, edit `~/.cocoindex_code/global_settings.yml`.
