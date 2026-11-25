@@ -99,6 +99,20 @@ class PacedLiteLLMEmbedder(LiteLLMEmbedder):
 
             return response
 
+    def _check_dimension(self, actual: int) -> None:
+        """Fail if the model ignored the configured ``dimensions``.
+
+        LiteLLM drops params a model doesn't support, so without this check the
+        index would silently be built (or queried) at the model's native size.
+        """
+        requested = self._kwargs.get("dimensions")
+        if requested is not None and actual != requested:
+            raise ValueError(
+                f"Model {self._model!r} returned {actual}-dimensional vectors "
+                f"but embedding.dimensions is {requested}; this model does not "
+                "support a configurable output dimension."
+            )
+
     async def _get_dim(self) -> int:
         if self._dim is not None:
             return self._dim
@@ -107,6 +121,7 @@ class PacedLiteLLMEmbedder(LiteLLMEmbedder):
                 return self._dim
             response = await self.run_embedding_request(input=["hello"], **self._kwargs)
             embedding = response.data[0]["embedding"]
+            self._check_dimension(len(embedding))
             self._dim = len(embedding)
             return self._dim
 
@@ -126,4 +141,7 @@ class PacedLiteLLMEmbedder(LiteLLMEmbedder):
         if input_type is not None:
             kwargs["input_type"] = input_type
         response = await self.run_embedding_request(input=texts, **kwargs)
-        return [np.array(item["embedding"], dtype=np.float32) for item in response.data]
+        vectors = [np.array(item["embedding"], dtype=np.float32) for item in response.data]
+        for vec in vectors:
+            self._check_dimension(len(vec))
+        return vectors

@@ -29,6 +29,7 @@ daemon:
 | `embedding.model` | Model identifier — format depends on provider (see examples below) |
 | `embedding.device` | Optional. `cpu`, `cuda`, or `mps`. Auto-detected if omitted. Only relevant for `sentence-transformers`. |
 | `embedding.min_interval_ms` | Optional. Minimum delay between LiteLLM embedding requests in milliseconds. Defaults to `5` for LiteLLM and is ignored by `sentence-transformers`. Set explicitly to override the default. |
+| `embedding.dimensions` | Optional, `litellm` only. Output vector size for models that support it (for example Voyage Matryoshka models: `256`, `512`, `1024`, `2048`). Must be the same for indexing and query, so it is set here rather than in `indexing_params` / `query_params`. Changing it re-embeds the whole index on the next indexing run. |
 | `envs` | Key-value map of environment variables injected into the daemon. Use for API keys not already in the shell environment. |
 | `daemon.idle_timeout_minutes` | Minutes without client activity before the daemon exits. Defaults to `180`; use `0` to disable idle exit. |
 | `daemon.keep_alive_with_mcp` | Whether a live MCP session keeps the daemon and embedding model warm. Defaults to `true`; set to `false` to release them after the normal idle timeout between real requests. |
