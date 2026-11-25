@@ -1,0 +1,127 @@
+"""Threshold-based duplicate detection over an existing code index."""
+
+from __future__ import annotations
+
+from contextlib import closing
+from pathlib import Path
+
+import msgspec
+import numpy as np
+from cocoindex.connectors import sqlite
+
+_BLOCK_SIZE = 256
+_NO_INDEX_MESSAGE = "Index not created yet. Run `ccc index` first."
+
+
+class ChunkLocation(msgspec.Struct, frozen=True):
+    file_path: str
+    language: str
+    start_line: int
+    end_line: int
+
+
+class DuplicateGroup(msgspec.Struct, frozen=True):
+    chunks: list[ChunkLocation]
+
+
+def _overlaps(a: ChunkLocation, b: ChunkLocation) -> bool:
+    """Return whether the chunks share lines of one file.
+
+    The splitter overlaps neighboring chunks, so such pairs match without being copies.
+    """
+    return a.file_path == b.file_path and a.start_line <= b.end_line and b.start_line <= a.end_line
+
+
+def find_duplicate_groups(
+    database: Path,
+    *,
+    threshold: float,
+    min_lines: int,
+    languages: list[str],
+    path: str | None,
+) -> list[DuplicateGroup]:
+    """Read a snapshot and group chunks connected by cosine-similarity matches.
+
+    Chunks that share lines of one file never match each other.
+    """
+    conditions = ["end_line - start_line + 1 >= ?"]
+    params: list[str | int] = [min_lines]
+    if languages:
+        conditions.append(f"language IN ({', '.join('?' for _ in languages)})")
+        params.extend(languages)
+    if path is not None:
+        conditions.append("file_path GLOB ?")
+        params.append(path)
+
+    # Connecting would create a missing file. The connection is read-write although the
+    # scan only reads: a read-only one cannot roll back the journal of an interrupted write.
+    if not database.is_file():
+        raise ValueError(_NO_INDEX_MESSAGE)
+    locations: list[ChunkLocation] = []
+    embeddings = []
+    with closing(sqlite.connect(database, load_vec=True)) as db, db.readonly() as conn:
+        # The daemon creates the file before its first index run creates the table.
+        tables = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'code_chunks_vec'"
+        )
+        if tables.fetchone() is None:
+            raise ValueError(_NO_INDEX_MESSAGE)
+        for file_path, language, start, end, embedding in conn.execute(
+            f"""
+            SELECT file_path, language, start_line, end_line, embedding
+            FROM code_chunks_vec
+            WHERE {" AND ".join(conditions)}
+            ORDER BY file_path, start_line, end_line, id
+            """,
+            params,
+        ):
+            vector = np.frombuffer(embedding, dtype=np.float32).astype(np.float64)
+            norm = np.linalg.norm(vector)
+            if np.isfinite(norm) and norm > 0:
+                locations.append(ChunkLocation(file_path, language, start, end))
+                embeddings.append(vector / norm)
+
+    if len(embeddings) < 2:
+        return []
+    vectors = np.stack(embeddings)
+    del embeddings
+
+    # Union by size with path compression. Each qualifying pair is visited once.
+    parents = list(range(len(vectors)))
+    sizes = [1] * len(vectors)
+
+    def root(node: int) -> int:
+        while parents[node] != node:
+            parents[node] = parents[parents[node]]
+            node = parents[node]
+        return node
+
+    # Roundoff in a dot product of normalized vectors can put an exact match
+    # slightly below 1. Leave every other threshold unchanged.
+    cutoff = 1.0 - 1e-12 if threshold == 1.0 else threshold
+    for left_start in range(0, len(vectors), _BLOCK_SIZE):
+        left = vectors[left_start : left_start + _BLOCK_SIZE]
+        for right_start in range(left_start, len(vectors), _BLOCK_SIZE):
+            right = vectors[right_start : right_start + _BLOCK_SIZE]
+            matches = left @ right.T >= cutoff
+            if left_start == right_start:
+                matches = np.triu(matches, k=1)
+            for left_offset, right_offset in zip(*np.nonzero(matches), strict=True):
+                left_index = left_start + int(left_offset)
+                right_index = right_start + int(right_offset)
+                if _overlaps(locations[left_index], locations[right_index]):
+                    continue
+                a = root(left_index)
+                b = root(right_index)
+                if a != b:
+                    if sizes[a] < sizes[b]:
+                        a, b = b, a
+                    parents[b] = a
+                    sizes[a] += sizes[b]
+
+    groups: dict[int, list[ChunkLocation]] = {}
+    for idx, location in enumerate(locations):
+        leader = root(idx)
+        if sizes[leader] > 1:
+            groups.setdefault(leader, []).append(location)
+    return [DuplicateGroup(chunks) for chunks in groups.values()]

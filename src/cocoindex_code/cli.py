@@ -742,6 +742,49 @@ def search(
 
 
 @app.command()
+def duplicates(
+    threshold: float = _typer.Option(0.95, min=0.0, max=1.0, help="Minimum cosine similarity"),
+    min_lines: int = _typer.Option(5, min=1, help="Minimum lines per chunk"),
+    lang: list[str] = _typer.Option([], "--lang", help="Filter by language"),
+    path: str | None = _typer.Option(None, "--path", help="Filter by file path glob"),
+    json_output: bool = _typer.Option(False, "--json", help="Output groups as JSON"),
+) -> None:
+    """Find groups of similar chunks in the existing index."""
+    import math
+    import sqlite3
+
+    from ._duplicates import find_duplicate_groups
+
+    if not math.isfinite(threshold):
+        raise _typer.BadParameter("must be finite", param_hint="--threshold")
+    project_root = require_project_root()
+    try:
+        groups = find_duplicate_groups(
+            target_sqlite_db_path(project_root),
+            threshold=threshold,
+            min_lines=min_lines,
+            languages=lang,
+            path=path,
+        )
+    except (sqlite3.Error, ValueError) as exc:
+        _typer.echo(f"Duplicate scan failed: {exc}", err=True)
+        raise _typer.Exit(code=1) from exc
+
+    if json_output:
+        sys.stdout.buffer.write(_msgspec.json.encode(groups) + b"\n")
+        sys.stdout.buffer.flush()
+    elif not groups:
+        _typer.echo("No similar chunks found.")
+    else:
+        for index, group in enumerate(groups, 1):
+            _typer.echo(f"Group {index} ({len(group.chunks)} chunks)")
+            for chunk in group.chunks:
+                _echo_search_text(
+                    f"  {chunk.file_path}:{chunk.start_line}-{chunk.end_line} [{chunk.language}]"
+                )
+
+
+@app.command()
 def grep(
     pattern: str = _typer.Argument(
         ...,
@@ -1130,14 +1173,13 @@ def daemon_status() -> None:
 @_catch_daemon_start_error
 def daemon_restart() -> None:
     """Restart the daemon."""
-    from .client import _wait_for_daemon, start_daemon, stop_daemon
+    from .client import bring_up_daemon, stop_daemon
 
     _typer.echo("Stopping daemon...")
     stop_daemon()
 
     _typer.echo("Starting daemon...")
-    proc = start_daemon()
-    _wait_for_daemon(proc=proc)
+    bring_up_daemon()
     _typer.echo("Daemon restarted.")
 
 
@@ -1145,13 +1187,14 @@ def daemon_restart() -> None:
 def daemon_stop() -> None:
     """Stop the daemon."""
     from ._daemon_paths import daemon_pid_path
-    from .client import is_daemon_running, stop_daemon
+    from .client import _pid_file_names, _read_daemon_pid, is_daemon_running, stop_daemon
 
     pid_path = daemon_pid_path()
     if not pid_path.exists() and not is_daemon_running():
         _typer.echo("Daemon is not running.")
         return
 
+    pid = _read_daemon_pid()
     stop_daemon()
 
     # Wait for process to exit (check both pid file and socket)
@@ -1159,11 +1202,11 @@ def daemon_stop() -> None:
 
     deadline = time.monotonic() + 5.0
     while time.monotonic() < deadline:
-        if not pid_path.exists() and not is_daemon_running():
+        if not _pid_file_names(pid) and not is_daemon_running():
             break
         time.sleep(0.1)
 
-    if pid_path.exists() or is_daemon_running():
+    if _pid_file_names(pid) or is_daemon_running():
         _typer.echo("Warning: daemon may not have stopped cleanly.", err=True)
     else:
         _typer.echo("Daemon stopped.")

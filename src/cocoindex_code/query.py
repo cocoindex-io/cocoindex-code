@@ -7,6 +7,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from .schema import QueryResult
 from .shared import EMBEDDER, QUERY_EMBED_PARAMS, SQLITE_DB
 
@@ -19,24 +21,16 @@ def _l2_to_score(distance: float) -> float:
 def _checked(rows: list[tuple[Any, ...]], query_shape: str) -> list[tuple[Any, ...]]:
     """Return *rows*, failing loudly if any of them carries a NULL distance.
 
-    ``code_chunks_vec`` is a vec0 virtual table whose ``distance`` is a *hidden*
-    column: sqlite-vec populates it only under the KNN query plan and yields
-    NULL for it on a plain full scan.  A NULL therefore means the plan we asked
-    for is not the plan we got, which is a bug worth reporting rather than a
-    result worth ranking.  Left unchecked, the NULL flows into ``_l2_to_score``
-    and surfaces as an unrelated-looking ``TypeError: unsupported operand
-    type(s) for *: 'NoneType' and 'NoneType'`` (issue #270).
-
-    Only KNN queries need this guard: ``_full_scan_query`` computes its own
-    ``vec_distance_L2(...)``, which works under any plan and raises (never
-    returns NULL) on bad input.
+    The hidden vec0 distance column is populated only by the KNN plan.
+    A distance is also NULL when either vector has a NaN component: SQLite
+    stores a NaN result as NULL (#270).
+    A missing distance cannot be ranked or converted to a similarity score.
     """
     bad = next((row for row in rows if row[5] is None), None)
     if bad is not None:
         raise RuntimeError(
             f"Vector index returned a row with no distance ({query_shape}, "
-            f"file_path={bad[0]!r}) — the sqlite-vec KNN query plan was not "
-            "used. Please report this at "
+            f"file_path={bad[0]!r}). Please report this at "
             "https://github.com/cocoindex-io/cocoindex-code/issues along with "
             "the output of `ccc doctor`."
         )
@@ -87,32 +81,36 @@ def _full_scan_query(
 ) -> list[tuple[Any, ...]]:
     """Full scan with SQL-level distance computation and filtering."""
     conditions: list[str] = []
-    params: list[Any] = [embedding_bytes]
+    filter_params: list[str] = []
 
     if languages:
         placeholders = ",".join("?" for _ in languages)
         conditions.append(f"language IN ({placeholders})")
-        params.extend(languages)
+        filter_params.extend(languages)
 
     if paths:
         path_clauses = " OR ".join("file_path GLOB ?" for _ in paths)
         conditions.append(f"({path_clauses})")
-        params.extend(paths)
+        filter_params.extend(paths)
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    params.extend([limit, offset])
-
-    return conn.execute(
+    # SQLite stores a NaN result as NULL, so a stored vector with a NaN
+    # component gets a NULL distance, and a plain ORDER BY puts NULLs first.
+    # Sort them last and drop them here, so they never take the place of a real
+    # match (#270). Filtering them out in SQL instead (`WHERE l2 IS NOT NULL`
+    # around a subquery) makes SQLite compute every distance twice.
+    rows = conn.execute(
         f"""
         SELECT file_path, language, content, start_line, end_line,
-               vec_distance_L2(embedding, ?) as distance
+               vec_distance_L2(embedding, ?) AS l2
         FROM code_chunks_vec
         {where}
-        ORDER BY distance
+        ORDER BY l2 NULLS LAST
         LIMIT ? OFFSET ?
         """,
-        params,
+        (embedding_bytes, *filter_params, limit, offset),
     ).fetchall()
+    return [row for row in rows if row[5] is not None]
 
 
 async def query_codebase(
@@ -143,6 +141,11 @@ async def query_codebase(
 
     # Generate query embedding.
     query_embedding = await embedder.embed(query, **query_params)
+    if not np.isfinite(query_embedding).all():
+        raise RuntimeError(
+            "The embedding model returned a query vector with NaN or infinite "
+            "values, so search results cannot be ranked."
+        )
 
     embedding_bytes = query_embedding.astype("float32").tobytes()
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -12,9 +13,11 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from typer.testing import CliRunner
 
 from cocoindex_code import client
 from cocoindex_code._daemon_paths import LastExitMarker
+from cocoindex_code.cli import app
 from cocoindex_code.protocol import HandshakeResponse
 
 
@@ -43,6 +46,36 @@ def test_is_daemon_supervised_reads_env_var(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setenv("COCOINDEX_CODE_DAEMON_SUPERVISED", "0")
     assert client._is_daemon_supervised() is False
+
+
+def test_daemon_restart_leaves_the_start_to_the_supervisor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under a supervisor, `ccc daemon restart` stops the daemon and waits for
+    the supervisor to start the next one. A daemon it started as well would
+    race the supervisor's for the runtime dir.
+    """
+    from typer.testing import CliRunner
+
+    from cocoindex_code.cli import app
+
+    monkeypatch.setenv("COCOINDEX_CODE_DAEMON_SUPERVISED", "1")
+    calls: list[str] = []
+
+    def no_start() -> subprocess.Popen[bytes]:
+        raise AssertionError("`ccc daemon restart` started a daemon under a supervisor")
+
+    def wait_for_daemon(timeout: float = 30.0, proc: subprocess.Popen[bytes] | None = None) -> None:
+        calls.append("wait for the supervisor's daemon" if proc is None else "wait for ours")
+
+    monkeypatch.setattr(client, "stop_daemon", lambda: calls.append("stop"))
+    monkeypatch.setattr(client, "start_daemon", no_start)
+    monkeypatch.setattr(client, "_wait_for_daemon", wait_for_daemon)
+
+    result = CliRunner().invoke(app, ["daemon", "restart"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert calls == ["stop", "wait for the supervisor's daemon"]
 
 
 def test_print_handshake_warnings_dedupes_within_process(
@@ -223,7 +256,7 @@ def test_stop_daemon_escalates_past_undecodable_handshake(
     monkeypatch.setattr(client, "_raw_connect_and_handshake", fake_raw)
     waited = {"n": 0}
 
-    def fake_wait(timeout: float) -> bool:
+    def fake_wait(timeout: float, pid: int | None) -> bool:
         waited["n"] += 1
         return True
 
@@ -260,7 +293,7 @@ def test_stop_daemon_removes_only_the_stopped_daemons_socket(
         def unresponsive() -> client._HandshakeResult:
             raise ConnectionRefusedError("daemon does not answer")
 
-        def never_exits(timeout: float) -> bool:
+        def never_exits(timeout: float, pid: int | None) -> bool:
             stopped.close()  # the daemon dies, leaving its socket file behind
             if replaced:
                 # What a replacement daemon does at startup.
@@ -284,6 +317,61 @@ def test_stop_daemon_removes_only_the_stopped_daemons_socket(
     finally:
         stopped.close()
         replacement.close()
+
+
+def _exited_pid() -> int:
+    """The pid of a process that has already exited, so no signal can reach it."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def test_stop_daemon_returns_once_a_replacement_owns_the_pid_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replacement daemon writes its PID file as soon as it takes the lock,
+    while the stopped daemon may still be cleaning up. The stop takes that as
+    done instead of waiting for the file to go away, and leaves the file alone.
+    """
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", tempfile.mkdtemp(prefix="ccc_stop_"))
+    pid_path = client.daemon_pid_path()
+    pid_path.write_text(str(_exited_pid()))
+    replacement_pid = str(os.getpid())
+
+    def replaced() -> client._HandshakeResult:
+        # The stopped daemon has let go of the lock, and a replacement took it.
+        pid_path.write_text(replacement_pid)
+        raise ConnectionRefusedError("daemon does not answer")
+
+    monkeypatch.setattr(client, "_raw_connect_and_handshake", replaced)
+
+    start = time.monotonic()
+    client.stop_daemon()
+
+    assert time.monotonic() - start < 1.0  # not the 3 s wait for a graceful exit
+    assert pid_path.read_text() == replacement_pid
+
+
+def test_daemon_stop_reports_success_once_a_replacement_owns_the_pid_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`ccc daemon stop` waits for the PID file of the daemon it stopped, not
+    for one that a replacement wrote meanwhile."""
+    monkeypatch.setenv("COCOINDEX_CODE_DIR", tempfile.mkdtemp(prefix="ccc_stop_"))
+    pid_path = client.daemon_pid_path()
+    pid_path.write_text(str(_exited_pid()))
+
+    def stop_and_get_replaced() -> None:
+        pid_path.write_text(str(os.getpid()))
+
+    monkeypatch.setattr(client, "stop_daemon", stop_and_get_replaced)
+
+    start = time.monotonic()
+    result = CliRunner().invoke(app, ["daemon", "stop"], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert "Daemon stopped." in result.output
+    assert time.monotonic() - start < 1.0
 
 
 # ---------------------------------------------------------------------------

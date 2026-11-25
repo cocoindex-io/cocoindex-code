@@ -87,6 +87,33 @@ def test_full_scan_query_combines_language_and_path_filters(conn: sqlite3.Connec
     assert rows[0][5] == pytest.approx(0.0)
 
 
+def test_full_scan_skips_vectors_with_nan(conn: sqlite3.Connection) -> None:
+    """SQLite returns a NaN distance as NULL, and NULL sorts first (#270)."""
+    conn.execute(
+        "INSERT INTO code_chunks_vec"
+        "(id, file_path, language, content, start_line, end_line, embedding)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (4, "src/nan.py", "python", "broken", 1, 5, _vec((float("nan"), 0.0, 0.0, 0.0))),
+    )
+    query = _vec((1.0, 0.0, 0.0, 0.0))
+
+    rows = _full_scan_query(conn, query, limit=10, offset=0, paths=["src/*"])
+    assert [row[0] for row in rows] == ["src/main.py", "src/util.py"]
+    # A page past the last real match holds only the NaN row, which is dropped.
+    assert _full_scan_query(conn, query, limit=1, offset=2, paths=["src/*"]) == []
+
+    page = _full_scan_query(
+        conn,
+        query,
+        limit=1,
+        offset=1,
+        languages=["python", "rust"],
+        paths=["src/*", "no-match/*"],
+    )
+    assert [row[:5] for row in page] == [("src/util.py", "python", "parse csv", 1, 5)]
+    assert page[0][5] == pytest.approx(2**0.5)
+
+
 def test_knn_query_returns_usable_distances(conn: sqlite3.Connection) -> None:
     unfiltered = _knn_query(conn, _vec((1.0, 0.0, 0.0, 0.0)), k=4)
     assert len(unfiltered) == 4
