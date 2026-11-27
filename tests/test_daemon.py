@@ -117,6 +117,29 @@ def _recv_index_response(conn: Connection) -> tuple[list[IndexProgressUpdate], I
         raise AssertionError(f"Unexpected response during indexing: {type(resp).__name__}")
 
 
+async def test_file_walk_respects_project_max_file_size(tmp_path: Path) -> None:
+    """Doctor reports the same capped project files as indexing and grep."""
+    from cocoindex_code.daemon import _check_file_walk
+
+    settings = default_project_settings()
+    settings.include_patterns = ["**/*.py"]
+    settings.exclude_patterns = []
+    settings.max_file_size = 64
+    save_project_settings(tmp_path, settings)
+
+    (tmp_path / "exact.py").write_bytes(b"a" * 64)
+    (tmp_path / "over.py").write_bytes(b"a" * 65)
+
+    capped = await _check_file_walk(str(tmp_path))
+    assert capped.details[:2] == ["Total matched files: 1", "  .py: 1"]
+
+    settings.max_file_size = None
+    save_project_settings(tmp_path, settings)
+
+    unlimited = await _check_file_walk(str(tmp_path))
+    assert unlimited.details[:2] == ["Total matched files: 2", "  .py: 2"]
+
+
 @pytest.fixture(scope="session")
 def daemon_project(daemon_sock: str) -> str:
     """Create and index a project once for the session. Returns project_root str."""
