@@ -60,7 +60,7 @@ dev = [
 
 [project.scripts]
 cocoindex-code = "cocoindex_code:main"
-ccc = "cocoindex_code.cli:app"
+ccc = "cocoindex_code.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/cocoindex-io/cocoindex-code"
